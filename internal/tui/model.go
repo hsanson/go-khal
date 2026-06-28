@@ -12,38 +12,21 @@ import (
 	"github.com/hsanson/go-khal/internal/config"
 )
 
-type ViewMode string
-
-const (
-	ViewDay      ViewMode = "day"
-	ViewWeek     ViewMode = "week"
-	ViewWorkWeek ViewMode = "workweek"
-	ViewMonth    ViewMode = "month"
-	ViewYear     ViewMode = "year"
-)
-
 type Model struct {
 	cfg                *config.Config
 	data               calendar.Dataset
 	styles             Styles
-	mode               ViewMode
 	selected           time.Time
 	width              int
 	height             int
 	calendarVisibility map[string]bool
 	calendarOrder      []string
-	cursor             int
-	focusLeft          bool
+	weekViewportStart  time.Time
+	showCalendar       bool
+	dialogCursor       int
 }
 
 func NewModel(cfg *config.Config, data calendar.Dataset) Model {
-	mode := ViewMode(cfg.DefaultView)
-	switch mode {
-	case ViewDay, ViewWeek, ViewWorkWeek, ViewMonth, ViewYear:
-	default:
-		mode = ViewMonth
-	}
-
 	vis := map[string]bool{}
 	order := make([]string, 0, len(data.Calendars))
 	for _, cal := range data.Calendars {
@@ -53,76 +36,80 @@ func NewModel(cfg *config.Config, data calendar.Dataset) Model {
 	}
 	sort.Strings(order)
 
+	now := time.Now()
+	start := calendar.StartOfWeek(now, cfg.WeekStart())
 	return Model{
 		cfg:                cfg,
 		data:               data,
 		styles:             DefaultStyles(),
-		mode:               mode,
-		selected:           time.Now(),
+		selected:           now,
+		weekViewportStart:  start,
 		calendarVisibility: vis,
 		calendarOrder:      order,
-		focusLeft:          true,
 	}
 }
 
-func (m Model) Init() tea.Cmd {
-	return nil
-}
+func (m Model) Init() tea.Cmd { return nil }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+		m.scrollForSelection()
 	case tea.KeyMsg:
+		if m.showCalendar {
+			return m.updateCalendarDialog(msg)
+		}
 		switch msg.String() {
 		case "q", "ctrl+c":
 			return m, tea.Quit
-		case "tab":
-			m.focusLeft = !m.focusLeft
-		case "up", "k":
-			if m.focusLeft {
-				if m.cursor > 0 {
-					m.cursor--
-				}
-			} else {
-				m.selected = m.selected.AddDate(0, 0, -1)
-			}
-		case "down", "j":
-			if m.focusLeft {
-				if m.cursor < len(m.calendarOrder)-1 {
-					m.cursor++
-				}
-			} else {
-				m.selected = m.selected.AddDate(0, 0, 1)
-			}
-		case " ", "enter":
-			if m.focusLeft && len(m.calendarOrder) > 0 {
-				key := m.calendarOrder[m.cursor]
-				m.calendarVisibility[key] = !m.calendarVisibility[key]
-			}
-		case "d":
-			m.mode = ViewDay
-		case "w":
-			m.mode = ViewWeek
-		case "5":
-			m.mode = ViewWorkWeek
-		case "m":
-			m.mode = ViewMonth
-		case "y":
-			m.mode = ViewYear
-		case "left", "h", "p":
-			m.selected = m.shift(-1)
-		case "right", "l", "n":
-			m.selected = m.shift(1)
-		case "[":
-			m.selected = m.selected.AddDate(0, -1, 0)
-		case "]":
-			m.selected = m.selected.AddDate(0, 1, 0)
-		case "{":
-			m.selected = m.selected.AddDate(-1, 0, 0)
-		case "}":
-			m.selected = m.selected.AddDate(1, 0, 0)
+		case "c":
+			m.showCalendar = true
+			m.dialogCursor = 0
+		case "j", "down":
+			m.selected = m.selected.AddDate(0, 0, 7)
+			m.scrollForSelection()
+		case "k", "up":
+			m.selected = m.selected.AddDate(0, 0, -7)
+			m.scrollForSelection()
+		case "h", "left":
+			m.selected = m.selected.AddDate(0, 0, -1)
+			m.scrollForSelection()
+		case "l", "right":
+			m.selected = m.selected.AddDate(0, 0, 1)
+			m.scrollForSelection()
+		case "p":
+			m.selected = m.selected.AddDate(0, 0, -1)
+			m.scrollForSelection()
+		case "n":
+			m.selected = m.selected.AddDate(0, 0, 1)
+			m.scrollForSelection()
+		case "t":
+			now := time.Now().In(m.selected.Location())
+			m.selected = now
+			m.weekViewportStart = calendar.StartOfWeek(now, m.weekStart())
+		}
+	}
+	return m, nil
+}
+
+func (m Model) updateCalendarDialog(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc", "c":
+		m.showCalendar = false
+	case "up", "k":
+		if m.dialogCursor > 0 {
+			m.dialogCursor--
+		}
+	case "down", "j":
+		if m.dialogCursor < len(m.calendarOrder)-1 {
+			m.dialogCursor++
+		}
+	case " ", "enter":
+		if len(m.calendarOrder) > 0 {
+			key := m.calendarOrder[m.dialogCursor]
+			m.calendarVisibility[key] = !m.calendarVisibility[key]
 		}
 	}
 	return m, nil
@@ -142,134 +129,124 @@ func (m Model) View() string {
 	right := m.renderMainPanel(rightWidth)
 
 	root := lipgloss.JoinHorizontal(lipgloss.Top, left, right)
-	help := m.styles.Subtle.Render("Views: [d] day [w] week [5] workweek [m] month [y] year | Move: [h/l] or [p/n] | Jump month [/] year { } | Toggle calendar: space")
-
-	return m.styles.Container.Render(lipgloss.JoinVertical(lipgloss.Left, root, "", help))
+	help := m.styles.Subtle.Render("Navigate: [h/l] left/right day  [j/k] up/down week-row  [p/n] prev/next day  [t] today  [c] calendars  [q] quit")
+	base := m.styles.Container.Render(lipgloss.JoinVertical(lipgloss.Left, root, "", help))
+	if !m.showCalendar {
+		return base
+	}
+	return lipgloss.JoinVertical(lipgloss.Left, base, "", m.renderCalendarDialog())
 }
 
 func (m Model) renderLeftPanel(width int) string {
-	month := renderMiniMonth(m.selected, filteredEvents(m.data.Events, m.calendarVisibility), width-2, m.styles)
+	weeks := renderWeekViewport(m.weekViewportStart, m.selected, filteredEvents(m.data.Events, m.calendarVisibility), width-2, m.monthListHeightBudget(), m.weekStart(), m.styles)
+	panel := lipgloss.JoinVertical(lipgloss.Left, m.styles.PanelTitle.Render("Months"), "", weeks)
+	return m.styles.Sidebar.Width(width).Height(m.height - 6).Render(panel)
+}
 
-	var calLines []string
-	calLines = append(calLines, m.styles.Title.Render("Calendars"))
+func (m Model) renderMainPanel(width int) string {
+	events := filteredEvents(m.data.Events, m.calendarVisibility)
+	day := dayStart(m.selected)
+	body := renderAgendaFromDay(day, events, width-2, m.height-11, m.cfg.TimeFormat, m.styles)
+	header := m.styles.PanelTitle.Render(fmt.Sprintf("Agenda from %s", m.selected.Format("Mon Jan 2, 2006")))
+	return m.styles.MainPanel.Width(width).Height(m.height - 6).Render(lipgloss.JoinVertical(lipgloss.Left, header, "", body))
+}
+
+func (m Model) renderCalendarDialog() string {
+	lines := []string{m.styles.Title.Render("Calendars"), m.styles.Subtle.Render("j/k move, space toggle, esc close"), ""}
 	for i, key := range m.calendarOrder {
 		cal := m.calendarByKey(key)
 		if cal == nil {
 			continue
 		}
 		prefix := "  "
-		if m.focusLeft && i == m.cursor {
+		if i == m.dialogCursor {
 			prefix = "> "
 		}
-		check := "[ ]"
+		state := "[ ]"
 		if m.calendarVisibility[key] {
-			check = "[x]"
+			state = "[x]"
 		}
 		name := cal.DisplayName
 		if name == "" {
 			name = cal.Name
 		}
-		line := wrappedCalendarLine(prefix, check, name, width-4)
+		line := fmt.Sprintf("%s%s %s", prefix, state, name)
 		if cal.Color != "" {
 			line = styleForColor(m.styles.CalendarItem, cal.Color).Render(line)
 		}
-		calLines = append(calLines, line)
+		lines = append(lines, line)
 	}
-
-	panel := lipgloss.JoinVertical(lipgloss.Left,
-		m.styles.PanelTitle.Render("Selected: "+m.selected.Format("2006-01-02")),
-		"",
-		month,
-		"",
-		strings.Join(calLines, "\n"),
-	)
-
-	return m.styles.Sidebar.Width(width).Height(m.height - 6).Render(panel)
+	return lipgloss.NewStyle().
+		Width(max(40, m.width/3)).
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("117")).
+		Padding(1, 2).
+		Background(lipgloss.Color("236")).
+		Render(strings.Join(lines, "\n"))
 }
 
-func wrappedCalendarLine(prefix, check, name string, width int) string {
-	if width < 8 {
-		width = 8
+func (m *Model) scrollForSelection() {
+	selectedWeek := calendar.StartOfWeek(m.selected, m.weekStart())
+	if m.weekViewportStart.IsZero() {
+		m.weekViewportStart = selectedWeek
+		return
 	}
-	firstPrefix := fmt.Sprintf("%s%s ", prefix, check)
-	continuationPrefix := "   "
-	maxFirst := width - len([]rune(firstPrefix))
-	if maxFirst < 1 {
-		maxFirst = 1
-	}
-	maxNext := width - len([]rune(continuationPrefix))
-	if maxNext < 1 {
-		maxNext = 1
-	}
-
-	runes := []rune(name)
-	if len(runes) <= maxFirst {
-		return firstPrefix + name
-	}
-
-	parts := make([]string, 0, 4)
-	parts = append(parts, firstPrefix+string(runes[:maxFirst]))
-	runes = runes[maxFirst:]
-	for len(runes) > 0 {
-		take := maxNext
-		if len(runes) < take {
-			take = len(runes)
+	for {
+		visibleWeeks := m.visibleWeekCapacity(m.weekViewportStart)
+		if visibleWeeks < 1 {
+			visibleWeeks = 1
 		}
-		parts = append(parts, continuationPrefix+string(runes[:take]))
-		runes = runes[take:]
+		top := m.weekViewportStart
+		bottom := top.AddDate(0, 0, (visibleWeeks-1)*7)
+		if selectedWeek.Before(top) {
+			m.weekViewportStart = selectedWeek
+			continue
+		}
+		if selectedWeek.After(bottom) {
+			m.weekViewportStart = selectedWeek.AddDate(0, 0, -(visibleWeeks-1)*7)
+			continue
+		}
+		break
 	}
-	return strings.Join(parts, "\n")
 }
 
-func (m Model) renderMainPanel(width int) string {
-	events := filteredEvents(m.data.Events, m.calendarVisibility)
-	var body string
-	var title string
-	switch m.mode {
-	case ViewDay:
-		title = "Day"
-		body = renderDayColumns([]time.Time{dayStart(m.selected)}, events, width-2, m.cfg.TimeFormat, m.styles)
-	case ViewWeek:
-		title = "Week"
-		start := calendar.StartOfWeek(m.selected, m.weekStart())
-		days := make([]time.Time, 7)
-		for i := 0; i < 7; i++ {
-			days[i] = start.AddDate(0, 0, i)
-		}
-		body = renderDayColumns(days, events, width-2, m.cfg.TimeFormat, m.styles)
-	case ViewWorkWeek:
-		title = "Work Week"
-		start := calendar.StartOfWeek(m.selected, m.weekStart())
-		days := make([]time.Time, 5)
-		for i := 0; i < 5; i++ {
-			days[i] = start.AddDate(0, 0, i)
-		}
-		body = renderDayColumns(days, events, width-2, m.cfg.TimeFormat, m.styles)
-	case ViewYear:
-		title = "Year"
-		body = renderYearGrid(m.selected.Year(), events, width-2, m.styles)
-	default:
-		title = "Month"
-		body = renderMonthGrid(m.selected, events, width-2, m.styles)
+func (m Model) monthListHeightBudget() int {
+	if m.height <= 0 {
+		return 30
 	}
-
-	header := m.styles.PanelTitle.Render(fmt.Sprintf("%s View - %s", title, m.selected.Format("Mon Jan 2, 2006")))
-	return m.styles.MainPanel.Width(width).Height(m.height - 6).Render(lipgloss.JoinVertical(lipgloss.Left, header, "", body))
+	budget := m.height - 11
+	if budget < 8 {
+		budget = 8
+	}
+	return budget
 }
 
-func (m Model) shift(delta int) time.Time {
-	switch m.mode {
-	case ViewDay:
-		return m.selected.AddDate(0, 0, delta)
-	case ViewWeek, ViewWorkWeek:
-		return m.selected.AddDate(0, 0, 7*delta)
-	case ViewMonth:
-		return m.selected.AddDate(0, delta, 0)
-	case ViewYear:
-		return m.selected.AddDate(delta, 0, 0)
-	default:
-		return m.selected.AddDate(0, 0, delta)
+func (m Model) visibleWeekCapacity(top time.Time) int {
+	budget := m.monthListHeightBudget()
+	if budget < 3 {
+		return 1
 	}
+	count := 0
+	used := 0
+	lastHeaderMonth := time.Time{}
+	for i := 0; i < 104; i++ {
+		week := top.AddDate(0, 0, i*7)
+		headerMonth := monthStart(week.AddDate(0, 0, 3))
+		need := 1
+		if i == 0 || monthCompare(headerMonth, lastHeaderMonth) != 0 {
+			need += 2
+		}
+		if used+need > budget {
+			break
+		}
+		used += need
+		count++
+		lastHeaderMonth = headerMonth
+	}
+	if count < 1 {
+		return 1
+	}
+	return count
 }
 
 func (m Model) calendarByKey(key string) *calendar.Calendar {
@@ -281,9 +258,7 @@ func (m Model) calendarByKey(key string) *calendar.Calendar {
 	return nil
 }
 
-func calendarKey(source, name string) string {
-	return source + "/" + name
-}
+func calendarKey(source, name string) string { return source + "/" + name }
 
 func filteredEvents(events []calendar.Event, vis map[string]bool) []calendar.Event {
 	out := make([]calendar.Event, 0, len(events))
@@ -315,6 +290,22 @@ func (m Model) sidebarWidth() int {
 		return 18
 	}
 	return m.cfg.SidebarWidth
+}
+
+func monthStart(t time.Time) time.Time {
+	return time.Date(t.Year(), t.Month(), 1, 0, 0, 0, 0, t.Location())
+}
+
+func monthCompare(a, b time.Time) int {
+	a = monthStart(a)
+	b = monthStart(b)
+	if a.Year() < b.Year() || (a.Year() == b.Year() && a.Month() < b.Month()) {
+		return -1
+	}
+	if a.Year() == b.Year() && a.Month() == b.Month() {
+		return 0
+	}
+	return 1
 }
 
 func (m Model) weekStart() time.Weekday {
