@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -343,7 +344,12 @@ func (s *Store) componentToEvents(comp *ical.Component, src calendarSource, file
 	summary, _ := comp.Props.Text(ical.PropSummary)
 	desc, _ := comp.Props.Text(ical.PropDescription)
 	location, _ := comp.Props.Text(ical.PropLocation)
-	url, _ := comp.Props.Text(ical.PropURL)
+	urlText, _ := comp.Props.Text(ical.PropURL)
+	if urlText == "" {
+		if u, err := comp.Props.URI(ical.PropURL); err == nil && u != nil {
+			urlText = u.String()
+		}
+	}
 	organizer, _ := comp.Props.Text(ical.PropOrganizer)
 	start, err := comp.Props.DateTime(ical.PropDateTimeStart, src.location)
 	if err != nil {
@@ -372,7 +378,7 @@ func (s *Store) componentToEvents(comp *ical.Component, src calendarSource, file
 		Summary:     emptyDefault(summary, "(untitled event)"),
 		Description: desc,
 		Location:    location,
-		URL:         url,
+		URL:         urlText,
 		Organizer:   organizer,
 		AllDay:      allDay,
 		Recurring:   recurring,
@@ -898,14 +904,15 @@ func (s *Store) CreateEvent(sourceName, calendarName string, e Event) error {
 		comp.Props.SetText(ical.PropDescription, e.Description)
 	}
 	if strings.TrimSpace(e.URL) != "" {
-		comp.Props.SetText(ical.PropURL, e.URL)
+		setEventURL(comp, e.URL)
 	}
-	comp.Props.SetDateTime(ical.PropDateTimeStart, start.In(loc))
-	comp.Props.SetDateTime(ical.PropDateTimeEnd, end.In(loc))
+	setEventTimeProps(comp, start.In(loc), end.In(loc), e.AllDay)
 
 	newCal := ical.NewCalendar()
 	newCal.Props.SetText(ical.PropVersion, "2.0")
 	newCal.Props.SetText(ical.PropProductID, "-//go-khal//EN")
+	newCal.Props.SetText(ical.PropCalendarScale, "GREGORIAN")
+	newCal.Props.SetText(ical.PropMethod, "PUBLISH")
 	newCal.Children = append(newCal.Children, comp)
 
 	filePath := filepath.Join(cal.Path, e.UID+".ics")
@@ -1001,10 +1008,7 @@ func (s *Store) UpdateEvent(uid string, update EventUpdate) error {
 			nextEnd = nextStart.Add(time.Hour)
 		}
 
-		child.Props.Del(ical.PropDateTimeStart)
-		child.Props.Del(ical.PropDateTimeEnd)
-		child.Props.SetDateTime(ical.PropDateTimeStart, nextStart)
-		child.Props.SetDateTime(ical.PropDateTimeEnd, nextEnd)
+		setEventTimeProps(child, nextStart, nextEnd, allDay)
 	}
 
 	out, err := os.Create(ev.FilePath)
@@ -1013,6 +1017,36 @@ func (s *Store) UpdateEvent(uid string, update EventUpdate) error {
 	}
 	defer out.Close()
 	return ical.NewEncoder(out).Encode(cal)
+}
+
+func setEventURL(comp *ical.Component, raw string) {
+	comp.Props.Del(ical.PropURL)
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return
+	}
+	if u, err := url.Parse(trimmed); err == nil {
+		comp.Props.SetURI(ical.PropURL, u)
+		return
+	}
+	comp.Props.SetText(ical.PropURL, trimmed)
+}
+
+func setEventTimeProps(comp *ical.Component, start, end time.Time, allDay bool) {
+	comp.Props.Del(ical.PropDateTimeStart)
+	comp.Props.Del(ical.PropDateTimeEnd)
+	if allDay {
+		startDate := time.Date(start.Year(), start.Month(), start.Day(), 0, 0, 0, 0, start.Location())
+		endDate := time.Date(end.Year(), end.Month(), end.Day(), 0, 0, 0, 0, end.Location())
+		if !endDate.After(startDate) {
+			endDate = startDate.Add(24 * time.Hour)
+		}
+		comp.Props.SetDate(ical.PropDateTimeStart, startDate)
+		comp.Props.SetDate(ical.PropDateTimeEnd, endDate)
+		return
+	}
+	comp.Props.SetDateTime(ical.PropDateTimeStart, start.UTC())
+	comp.Props.SetDateTime(ical.PropDateTimeEnd, end.UTC())
 }
 
 func (s *Store) SetCalendarHidden(sourceName, calendarName string, hidden bool) error {

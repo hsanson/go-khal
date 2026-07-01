@@ -1017,7 +1017,12 @@ func (m *Model) buildEventForm(s *eventFormState) *huh.Form {
 	}
 
 	mainGroup := huh.NewGroup(
-		huh.NewInput().Key("title").Title("Title").Value(&s.summary).Validate(huh.ValidateNotEmpty()),
+		huh.NewInput().Key("title").Title("Title").Value(&s.summary).Validate(func(v string) error {
+			if strings.TrimSpace(v) == "" {
+				return errors.New("title is required")
+			}
+			return nil
+		}),
 		huh.NewSelect[string]().Key("calendar").Title("Calendar").Options(calOptions...).Value(&s.calendarKey).Validate(func(v string) error {
 			if strings.TrimSpace(v) == "" {
 				return errors.New("calendar is required")
@@ -1028,10 +1033,51 @@ func (m *Model) buildEventForm(s *eventFormState) *huh.Form {
 		huh.NewText().Key("description").Title("Description").Value(&s.description).Lines(4),
 		huh.NewInput().Key("url").Title("URL").Value(&s.url),
 		huh.NewConfirm().Key("all-day").Title("All-day").Value(&s.allDay),
-		huh.NewInput().Key("from-date").Title("From date (YYYY-MM-DD)").Value(&s.fromDate),
-		huh.NewInput().Key("from-time").Title("From time (HH:MM)").Description("Ignored when all-day is enabled").Value(&s.fromTime),
-		huh.NewInput().Key("to-date").Title("To date (YYYY-MM-DD)").Value(&s.toDate),
-		huh.NewInput().Key("to-time").Title("To time (HH:MM)").Description("Ignored when all-day is enabled").Value(&s.toTime),
+		huh.NewInput().Key("from-date").Title("From date (YYYY-MM-DD)").Value(&s.fromDate).Validate(validateEventDateInput),
+		huh.NewInput().Key("from-time").Title("From time (HH:MM)").Description("Ignored when all-day is enabled").Value(&s.fromTime).Validate(func(v string) error {
+			if s.allDay {
+				return nil
+			}
+			return validateEventTimeInput(v)
+		}),
+		huh.NewInput().Key("to-date").Title("To date (YYYY-MM-DD)").Value(&s.toDate).Validate(func(v string) error {
+			if err := validateEventDateInput(v); err != nil {
+				return err
+			}
+			fromDate, err := time.Parse("2006-01-02", strings.TrimSpace(s.fromDate))
+			if err != nil {
+				return nil
+			}
+			toDate, _ := time.Parse("2006-01-02", strings.TrimSpace(v))
+			if toDate.Before(fromDate) {
+				return errors.New("end date cannot be before start date")
+			}
+			if s.allDay {
+				return nil
+			}
+			if validateEventTimeInput(s.fromTime) != nil || validateEventTimeInput(s.toTime) != nil {
+				return nil
+			}
+			if !eventRangeIsValid(s.fromDate, s.fromTime, v, s.toTime) {
+				return errors.New("end must be after start")
+			}
+			return nil
+		}),
+		huh.NewInput().Key("to-time").Title("To time (HH:MM)").Description("Ignored when all-day is enabled").Value(&s.toTime).Validate(func(v string) error {
+			if s.allDay {
+				return nil
+			}
+			if err := validateEventTimeInput(v); err != nil {
+				return err
+			}
+			if validateEventDateInput(s.fromDate) != nil || validateEventDateInput(s.toDate) != nil || validateEventTimeInput(s.fromTime) != nil {
+				return nil
+			}
+			if !eventRangeIsValid(s.fromDate, s.fromTime, s.toDate, v) {
+				return errors.New("end must be after start")
+			}
+			return nil
+		}),
 	).Title(modeTitle)
 
 	return huh.NewForm(mainGroup).WithShowHelp(true).WithShowErrors(true)
@@ -1154,6 +1200,48 @@ func parseEventFormTimes(s eventFormState) (time.Time, time.Time, error) {
 		return time.Time{}, time.Time{}, errors.New("end must be after start")
 	}
 	return start, end, nil
+}
+
+func validateEventDateInput(v string) error {
+	if strings.TrimSpace(v) == "" {
+		return errors.New("date is required")
+	}
+	if _, err := time.Parse("2006-01-02", strings.TrimSpace(v)); err != nil {
+		return errors.New("invalid date (expected YYYY-MM-DD)")
+	}
+	return nil
+}
+
+func validateEventTimeInput(v string) error {
+	if strings.TrimSpace(v) == "" {
+		return errors.New("time is required")
+	}
+	if _, err := time.Parse("15:04", strings.TrimSpace(v)); err != nil {
+		return errors.New("invalid time (expected HH:MM)")
+	}
+	return nil
+}
+
+func eventRangeIsValid(fromDate, fromTime, toDate, toTime string) bool {
+	fd, err := time.Parse("2006-01-02", strings.TrimSpace(fromDate))
+	if err != nil {
+		return true
+	}
+	td, err := time.Parse("2006-01-02", strings.TrimSpace(toDate))
+	if err != nil {
+		return true
+	}
+	ft, err := time.Parse("15:04", strings.TrimSpace(fromTime))
+	if err != nil {
+		return true
+	}
+	tt, err := time.Parse("15:04", strings.TrimSpace(toTime))
+	if err != nil {
+		return true
+	}
+	start := time.Date(fd.Year(), fd.Month(), fd.Day(), ft.Hour(), ft.Minute(), 0, 0, time.Local)
+	end := time.Date(td.Year(), td.Month(), td.Day(), tt.Hour(), tt.Minute(), 0, 0, time.Local)
+	return end.After(start)
 }
 
 func (m *Model) isEventFormFocusedFirstField() bool {
