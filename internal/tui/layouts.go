@@ -106,7 +106,12 @@ func renderWeekRow(weekStartDate, selected time.Time, events []calendar.Event, w
 	return lipgloss.NewStyle().Width(width).Render(line)
 }
 
-func renderAgendaFromDay(selected time.Time, events []calendar.Event, width, maxLines int, timeFmt string, styles Styles) string {
+type agendaRender struct {
+	Text       string
+	EventCount int
+}
+
+func renderAgendaFromDay(selected time.Time, events []calendar.Event, width, maxLines int, timeFmt string, styles Styles, eventCursor int, highlight bool) agendaRender {
 	if timeFmt == "" {
 		timeFmt = "15:04"
 	}
@@ -114,24 +119,7 @@ func renderAgendaFromDay(selected time.Time, events []calendar.Event, width, max
 		maxLines = 6
 	}
 
-	startDay := dayStart(selected)
-	filtered := make([]calendar.Event, 0, len(events))
-	for _, ev := range events {
-		if ev.Start.Before(startDay) {
-			continue
-		}
-		filtered = append(filtered, ev)
-	}
-
-	sort.Slice(filtered, func(i, j int) bool {
-		if filtered[i].Start.Equal(filtered[j].Start) {
-			if filtered[i].AllDay != filtered[j].AllDay {
-				return filtered[i].AllDay
-			}
-			return filtered[i].Summary < filtered[j].Summary
-		}
-		return filtered[i].Start.Before(filtered[j].Start)
-	})
+	filtered := agendaEventsFromDay(dayStart(selected), events)
 
 	grouped := map[string][]calendar.Event{}
 	orderedDays := make([]string, 0, 16)
@@ -146,9 +134,10 @@ func renderAgendaFromDay(selected time.Time, events []calendar.Event, width, max
 	}
 
 	if len(orderedDays) == 0 {
-		return styles.Subtle.Width(width).Render("No upcoming events from selected day")
+		return agendaRender{Text: styles.Subtle.Width(width).Render("No upcoming events from selected day"), EventCount: 0}
 	}
 
+	eventIndex := 0
 	lines := make([]string, 0, maxLines)
 	for _, k := range orderedDays {
 		day, _ := time.ParseInLocation("2006-01-02", k, selected.Location())
@@ -173,14 +162,24 @@ func renderAgendaFromDay(selected time.Time, events []calendar.Event, width, max
 				break
 			}
 			line := fmt.Sprintf("  all-day  %s", ev.Summary)
-			lines = append(lines, styleForColor(styles.Event, ev.Color).Render(truncate(line, max(10, width-1))))
+			styled := styleForColor(styles.Event, ev.Color).Render(truncate(line, max(10, width-1)))
+			if highlight && eventIndex == eventCursor {
+				styled = lipgloss.NewStyle().Background(lipgloss.Color("238")).Render(styled)
+			}
+			lines = append(lines, styled)
+			eventIndex++
 		}
 		for _, ev := range timed {
 			if len(lines) >= maxLines {
 				break
 			}
 			line := fmt.Sprintf("  %s-%s  %s", ev.Start.Format(timeFmt), ev.End.Format(timeFmt), ev.Summary)
-			lines = append(lines, styleForColor(styles.Event, ev.Color).Render(truncate(line, max(10, width-1))))
+			styled := styleForColor(styles.Event, ev.Color).Render(truncate(line, max(10, width-1)))
+			if highlight && eventIndex == eventCursor {
+				styled = lipgloss.NewStyle().Background(lipgloss.Color("238")).Render(styled)
+			}
+			lines = append(lines, styled)
+			eventIndex++
 		}
 		if len(lines) < maxLines {
 			lines = append(lines, "")
@@ -190,7 +189,28 @@ func renderAgendaFromDay(selected time.Time, events []calendar.Event, width, max
 	if len(lines) > maxLines {
 		lines = lines[:maxLines]
 	}
-	return lipgloss.NewStyle().Width(width).Render(strings.Join(lines, "\n"))
+	return agendaRender{Text: lipgloss.NewStyle().Width(width).MaxHeight(maxLines).Render(strings.Join(lines, "\n")), EventCount: len(filtered)}
+}
+
+func agendaEventsFromDay(startDay time.Time, events []calendar.Event) []calendar.Event {
+	filtered := make([]calendar.Event, 0, len(events))
+	for _, ev := range events {
+		if ev.Start.Before(startDay) {
+			continue
+		}
+		filtered = append(filtered, ev)
+	}
+
+	sort.Slice(filtered, func(i, j int) bool {
+		if filtered[i].Start.Equal(filtered[j].Start) {
+			if filtered[i].AllDay != filtered[j].AllDay {
+				return filtered[i].AllDay
+			}
+			return filtered[i].Summary < filtered[j].Summary
+		}
+		return filtered[i].Start.Before(filtered[j].Start)
+	})
+	return filtered
 }
 
 func monthBlockHeight(month, selected time.Time, width int, styles Styles) int {
