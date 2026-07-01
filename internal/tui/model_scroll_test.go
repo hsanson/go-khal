@@ -10,7 +10,7 @@ import (
 )
 
 func TestWeekViewportScrollsDown(t *testing.T) {
-	m := NewModel(&config.Config{SidebarWidth: 30}, calendar.Dataset{})
+	m := NewModel(&config.Config{SidebarWidth: 30}, calendar.Dataset{}, nil)
 	m.height = 30
 	initial := m.weekViewportStart
 	initialSelected := m.selected
@@ -30,7 +30,7 @@ func TestWeekViewportScrollsDown(t *testing.T) {
 
 func TestWeekViewportScrollsUp(t *testing.T) {
 	now := time.Now()
-	m := NewModel(&config.Config{SidebarWidth: 30}, calendar.Dataset{})
+	m := NewModel(&config.Config{SidebarWidth: 30}, calendar.Dataset{}, nil)
 	m.height = 30
 	m.selected = now.AddDate(0, 0, 140)
 	m.weekViewportStart = now.AddDate(0, 0, 84)

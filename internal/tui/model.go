@@ -1,18 +1,21 @@
 package tui
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/huh"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/hsanson/go-khal/internal/calendar"
 	"github.com/hsanson/go-khal/internal/config"
 )
 
 type Model struct {
+	store              *calendar.Store
 	cfg                *config.Config
 	data               calendar.Dataset
 	styles             Styles
@@ -32,9 +35,40 @@ type Model struct {
 	eventCursor        int
 	eventListOffset    int
 	detailScroll       int
+	eventForm          *eventFormState
 }
 
-func NewModel(cfg *config.Config, data calendar.Dataset) Model {
+type eventFormState struct {
+	mode        string
+	targetUID   string
+	form        *huh.Form
+	summary     string
+	calendarKey string
+	location    string
+	description string
+	url         string
+	allDay      bool
+	fromDate    string
+	fromTime    string
+	toDate      string
+	toTime      string
+	errMsg      string
+}
+
+var eventFormFieldOrder = []string{
+	"title",
+	"calendar",
+	"location",
+	"description",
+	"url",
+	"all-day",
+	"from-date",
+	"from-time",
+	"to-date",
+	"to-time",
+}
+
+func NewModel(cfg *config.Config, data calendar.Dataset, store *calendar.Store) Model {
 	vis := map[string]bool{}
 	order := make([]string, 0, len(data.Calendars))
 	for _, cal := range data.Calendars {
@@ -56,6 +90,7 @@ func NewModel(cfg *config.Config, data calendar.Dataset) Model {
 	now := time.Now()
 	start := calendar.StartOfWeek(now, cfg.WeekStart())
 	m := Model{
+		store:              store,
 		cfg:                cfg,
 		data:               data,
 		styles:             DefaultStyles(),
@@ -79,6 +114,63 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 		m.scrollForSelection()
 	case tea.KeyMsg:
+		if m.eventForm != nil {
+			switch msg.String() {
+			case "q":
+				return m, tea.Quit
+			case "ctrl+s":
+				if err := m.commitEventForm(); err != nil {
+					m.eventForm.errMsg = err.Error()
+					return m, nil
+				}
+				m.eventForm = nil
+				m.focusDetails = false
+				m.focusMain = true
+				m.ensureEventSelectionValid()
+				return m, nil
+			case "ctrl+c":
+				m.eventForm = nil
+				m.focusDetails = false
+				m.focusMain = true
+				return m, nil
+			case "tab":
+				if m.isEventFormFocusedLastField() {
+					return m, nil
+				}
+				m.eventForm.form.UpdateFieldPositions()
+				return m, m.eventForm.form.NextField()
+			case "shift+tab":
+				if m.isEventFormFocusedFirstField() {
+					return m, nil
+				}
+				m.eventForm.form.UpdateFieldPositions()
+				return m, m.eventForm.form.PrevField()
+			case "esc":
+				m.eventForm = nil
+				m.focusDetails = false
+				m.focusMain = true
+				return m, nil
+			}
+			updated, cmd := m.eventForm.form.Update(msg)
+			if fm, ok := updated.(*huh.Form); ok {
+				m.eventForm.form = fm
+			}
+			m.eventForm.form.UpdateFieldPositions()
+			if m.eventForm.form.GetFocusedField() == nil {
+				cmd = tea.Batch(cmd, m.eventForm.form.Init())
+			}
+			if m.eventForm.form.State == huh.StateAborted {
+				m.eventForm = nil
+				m.focusDetails = false
+				m.focusMain = true
+				return m, nil
+			}
+			if m.eventForm.form.State == huh.StateCompleted {
+				m.eventForm.form.State = huh.StateNormal
+			}
+			return m, cmd
+		}
+
 		if msg.String() == "c" {
 			m.focusCalendarPane = true
 			m.focusMain = false
@@ -89,10 +181,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.focusDetails {
 			switch msg.String() {
+			case "q":
+				return m, tea.Quit
 			case "esc", "h", "enter", " ":
 				m.focusDetails = false
 				m.focusMain = true
 				m.detailScroll = 0
+			case "e":
+				if m.openEventFormEditSelected() {
+					return m, m.eventForm.form.Init()
+				}
 			case "j", "down":
 				m.detailScroll++
 			case "k", "up":
@@ -104,6 +202,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.focusCalendarPane {
 			switch msg.String() {
+			case "q":
+				return m, tea.Quit
 			case "j", "down":
 				m.moveCalendarCursor(1)
 			case "k", "up":
@@ -114,7 +214,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.calendarVisibility[key] = !m.calendarVisibility[key]
 					m.ensureEventSelectionValid()
 				}
-			case "esc", "h", "q":
+			case "esc", "h":
 				m.focusCalendarPane = false
 			}
 			m.ensureCalendarCursorVisible(m.calendarPaneHeight())
@@ -162,18 +262,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.eventListOffset = 0
 				m.scrollForSelection()
 			}
-		case "p":
-			m.selected = m.selected.AddDate(0, 0, -1)
-			m.agendaStart = dayStart(m.selected)
-			m.eventCursor = 0
-			m.eventListOffset = 0
-			m.scrollForSelection()
 		case "n":
-			m.selected = m.selected.AddDate(0, 0, 1)
-			m.agendaStart = dayStart(m.selected)
-			m.eventCursor = 0
-			m.eventListOffset = 0
-			m.scrollForSelection()
+			m.openEventFormNew()
+			return m, m.eventForm.form.Init()
+		case "e":
+			if m.openEventFormEditSelected() {
+				return m, m.eventForm.form.Init()
+			}
 		case "f":
 			m.showFreeMode = !m.showFreeMode
 			m.eventCursor = 0
@@ -228,7 +323,7 @@ func (m Model) View() string {
 	right := m.renderMainPanel(rightWidth)
 
 	root := lipgloss.JoinHorizontal(lipgloss.Top, left, right)
-	help := m.styles.Subtle.Render("Navigate: [h/l] left/right day  [j/k] up/down week-row  [p/n] prev/next day  [t] today  [c] calendars  [q] quit")
+	help := m.styles.Subtle.Render("Navigate: [h/l] left/right day  [j/k] up/down week-row  [n] new event  [e] edit event  [t] today  [c] calendars  [q] quit")
 	if m.focusCalendarPane {
 		help = m.styles.Subtle.Render("Calendars focus: [j/k] select calendar  [space/enter] toggle  [h/esc/q] back")
 	}
@@ -236,6 +331,9 @@ func (m Model) View() string {
 		help = m.styles.Subtle.Render("Details focus: [j/k] scroll details  [enter/space/esc/h] back to events")
 	} else if m.focusMain {
 		help = m.styles.Subtle.Render("Events list focus: [j/k] select  [enter/space] details  [f] toggle show-free  [h] back")
+	}
+	if m.eventForm != nil {
+		help = m.styles.Subtle.Render("Event form: [tab]/[shift+tab] navigate fields, [ctrl+s] save, [ctrl+c/esc] cancel")
 	}
 	base := m.styles.Container.Render(lipgloss.JoinVertical(lipgloss.Left, root, "", help))
 	return base
@@ -263,11 +361,15 @@ func (m Model) renderLeftPanel(width int) string {
 }
 
 func (m Model) renderMainPanel(width int) string {
-	items := m.agendaItems()
 	panelHeight := m.height - 6
 	if panelHeight < 10 {
 		panelHeight = 10
 	}
+	if m.eventForm != nil {
+		return m.renderEventFormMainPanel(width, panelHeight)
+	}
+
+	items := m.agendaItems()
 	available := panelHeight - 4
 	if available < 8 {
 		available = 8
@@ -302,7 +404,40 @@ func (m Model) renderMainPanel(width int) string {
 	return m.styles.MainPanel.Width(width).Height(panelHeight).MaxHeight(panelHeight).Render(content)
 }
 
+func (m Model) renderEventFormMainPanel(width, panelHeight int) string {
+	if m.eventForm == nil {
+		return m.styles.MainPanel.Width(width).Height(panelHeight).MaxHeight(panelHeight).Render("")
+	}
+	header := m.styles.PanelTitle.Render("Event Form")
+	if m.eventForm.mode == "edit" {
+		header = m.styles.PanelTitle.Render("Edit Event")
+	}
+	if f := m.eventForm.form.GetFocusedField(); f != nil {
+		if key := strings.TrimSpace(f.GetKey()); key != "" {
+			header += m.styles.Subtle.Render("  [focused: " + key + "]")
+		}
+	}
+	innerHeight := panelHeight - 2
+	if innerHeight < 6 {
+		innerHeight = 6
+	}
+	formView := m.eventForm.form.WithWidth(width - 2).WithHeight(innerHeight).WithShowHelp(true).WithShowErrors(true).View()
+	if strings.TrimSpace(m.eventForm.errMsg) != "" {
+		formView = lipgloss.JoinVertical(lipgloss.Left, m.styles.Subtle.Render("Error: "+m.eventForm.errMsg), "", formView)
+	}
+	content := lipgloss.JoinVertical(lipgloss.Left, header, "", formView)
+	return m.styles.MainPanel.Width(width).Height(panelHeight).MaxHeight(panelHeight).Render(content)
+}
+
 func (m Model) renderEventDetailsPane(width, height int) string {
+	if m.eventForm != nil {
+		view := m.eventForm.form.WithWidth(width).WithHeight(height).WithShowHelp(true).WithShowErrors(true).View()
+		if strings.TrimSpace(m.eventForm.errMsg) != "" {
+			view = lipgloss.JoinVertical(lipgloss.Left, m.styles.Subtle.Render("Error: "+m.eventForm.errMsg), "", view)
+		}
+		return lipgloss.NewStyle().Width(width).Height(height).MaxHeight(height).Render(view)
+	}
+
 	items := m.agendaItems()
 	if len(items) == 0 || m.eventCursor < 0 || m.eventCursor >= len(items) {
 		return lipgloss.NewStyle().Width(width).Height(height).Render(m.styles.Subtle.Render("No item selected"))
@@ -766,6 +901,281 @@ func (m Model) currentSelectionHasDetails() bool {
 		return false
 	}
 	return it.Event != nil || it.Todo != nil
+}
+
+func (m *Model) openEventFormNew() {
+	defaultKey := ""
+	for _, k := range m.calendarOrder {
+		if !m.calendarVisibility[k] {
+			continue
+		}
+		cal := m.calendarByKey(k)
+		if cal == nil || cal.Source == calendar.SpecialSourceBirthdays {
+			continue
+		}
+		defaultKey = k
+		break
+	}
+	if defaultKey == "" {
+		for _, k := range m.calendarOrder {
+			cal := m.calendarByKey(k)
+			if cal == nil || cal.Source == calendar.SpecialSourceBirthdays {
+				continue
+			}
+			defaultKey = k
+			break
+		}
+	}
+	now := time.Now().In(m.selected.Location()).Truncate(time.Minute)
+	end := now.Add(time.Hour)
+	m.eventForm = m.newEventFormState("create", "", calendar.Event{
+		Summary:  "",
+		Start:    now,
+		End:      end,
+		AllDay:   false,
+		Source:   splitCalendarKey(defaultKey).source,
+		Calendar: splitCalendarKey(defaultKey).name,
+	})
+	m.focusDetails = true
+	m.focusMain = false
+	m.detailScroll = 0
+	m.eventForm.form.UpdateFieldPositions()
+}
+
+func (m *Model) openEventFormEditSelected() bool {
+	items := m.agendaItems()
+	if len(items) == 0 || m.eventCursor < 0 || m.eventCursor >= len(items) {
+		return false
+	}
+	it := items[m.eventCursor]
+	if it.Event == nil || it.IsFree {
+		return false
+	}
+	ev := *it.Event
+	if ev.Source == calendar.SpecialSourceBirthdays {
+		return false
+	}
+	m.eventForm = m.newEventFormState("edit", ev.UID, ev)
+	m.focusDetails = true
+	m.focusMain = false
+	m.detailScroll = 0
+	m.eventForm.form.UpdateFieldPositions()
+	return true
+}
+
+func (m *Model) newEventFormState(mode, targetUID string, ev calendar.Event) *eventFormState {
+	key := calendarKey(ev.Source, ev.Calendar)
+	if key == "/" || key == "" {
+		key = m.firstWritableCalendarKey()
+	}
+	fd := ev.Start.In(m.selected.Location())
+	td := ev.End.In(m.selected.Location())
+	if fd.IsZero() {
+		fd = m.selected
+	}
+	if td.IsZero() || !td.After(fd) {
+		td = fd.Add(time.Hour)
+	}
+	state := &eventFormState{
+		mode:        mode,
+		targetUID:   targetUID,
+		summary:     ev.Summary,
+		calendarKey: key,
+		location:    ev.Location,
+		description: ev.Description,
+		url:         ev.URL,
+		allDay:      ev.AllDay,
+		fromDate:    fd.Format("2006-01-02"),
+		fromTime:    fd.Format("15:04"),
+		toDate:      td.Format("2006-01-02"),
+		toTime:      td.Format("15:04"),
+	}
+	state.form = m.buildEventForm(state)
+	return state
+}
+
+func (m *Model) buildEventForm(s *eventFormState) *huh.Form {
+	calOptions := make([]huh.Option[string], 0, len(m.calendarOrder))
+	for _, key := range m.calendarOrder {
+		cal := m.calendarByKey(key)
+		if cal == nil || cal.Source == calendar.SpecialSourceBirthdays {
+			continue
+		}
+		name := cal.DisplayName
+		if name == "" {
+			name = cal.Name
+		}
+		calOptions = append(calOptions, huh.NewOption(name+" ("+cal.Source+")", key))
+	}
+	if len(calOptions) == 0 {
+		calOptions = append(calOptions, huh.NewOption("No writable calendar", ""))
+	}
+
+	modeTitle := "Create Event"
+	if s.mode == "edit" {
+		modeTitle = "Edit Event"
+	}
+
+	mainGroup := huh.NewGroup(
+		huh.NewInput().Key("title").Title("Title").Value(&s.summary).Validate(huh.ValidateNotEmpty()),
+		huh.NewSelect[string]().Key("calendar").Title("Calendar").Options(calOptions...).Value(&s.calendarKey).Validate(func(v string) error {
+			if strings.TrimSpace(v) == "" {
+				return errors.New("calendar is required")
+			}
+			return nil
+		}),
+		huh.NewInput().Key("location").Title("Location").Value(&s.location),
+		huh.NewText().Key("description").Title("Description").Value(&s.description).Lines(4),
+		huh.NewInput().Key("url").Title("URL").Value(&s.url),
+		huh.NewConfirm().Key("all-day").Title("All-day").Value(&s.allDay),
+		huh.NewInput().Key("from-date").Title("From date (YYYY-MM-DD)").Value(&s.fromDate),
+		huh.NewInput().Key("from-time").Title("From time (HH:MM)").Description("Ignored when all-day is enabled").Value(&s.fromTime),
+		huh.NewInput().Key("to-date").Title("To date (YYYY-MM-DD)").Value(&s.toDate),
+		huh.NewInput().Key("to-time").Title("To time (HH:MM)").Description("Ignored when all-day is enabled").Value(&s.toTime),
+	).Title(modeTitle)
+
+	return huh.NewForm(mainGroup).WithShowHelp(true).WithShowErrors(true)
+}
+
+func (m *Model) commitEventForm() error {
+	if m.eventForm == nil {
+		return nil
+	}
+	s := m.eventForm
+	if m.store == nil {
+		return errors.New("event store is unavailable")
+	}
+
+	cal := splitCalendarKey(s.calendarKey)
+	if strings.TrimSpace(cal.source) == "" || strings.TrimSpace(cal.name) == "" {
+		return errors.New("calendar is required")
+	}
+
+	start, end, err := parseEventFormTimes(*s)
+	if err != nil {
+		return err
+	}
+
+	if s.mode == "edit" {
+		upd := calendar.EventUpdate{
+			Summary:     &s.summary,
+			Description: &s.description,
+			Location:    &s.location,
+			URL:         &s.url,
+			Start:       &start,
+			End:         &end,
+			AllDay:      &s.allDay,
+		}
+		if err := m.store.UpdateEvent(s.targetUID, upd); err != nil {
+			return err
+		}
+	} else {
+		ev := calendar.Event{
+			Summary:     s.summary,
+			Description: s.description,
+			Location:    s.location,
+			URL:         s.url,
+			AllDay:      s.allDay,
+			Start:       start,
+			End:         end,
+		}
+		if err := m.store.CreateEvent(cal.source, cal.name, ev); err != nil {
+			return err
+		}
+	}
+
+	ds, err := m.store.Load()
+	if err != nil {
+		return err
+	}
+	m.data = ds
+	if s.mode == "create" {
+		m.selected = dayStart(start)
+		m.agendaStart = dayStart(start)
+		m.eventCursor = 0
+		m.eventListOffset = 0
+	}
+	return nil
+}
+
+type calendarKeyParts struct {
+	source string
+	name   string
+}
+
+func splitCalendarKey(v string) calendarKeyParts {
+	parts := strings.SplitN(v, "/", 2)
+	if len(parts) != 2 {
+		return calendarKeyParts{}
+	}
+	return calendarKeyParts{source: parts[0], name: parts[1]}
+}
+
+func (m *Model) firstWritableCalendarKey() string {
+	for _, key := range m.calendarOrder {
+		cal := m.calendarByKey(key)
+		if cal == nil || cal.Source == calendar.SpecialSourceBirthdays {
+			continue
+		}
+		return key
+	}
+	return ""
+}
+
+func parseEventFormTimes(s eventFormState) (time.Time, time.Time, error) {
+	startDate, err := time.Parse("2006-01-02", strings.TrimSpace(s.fromDate))
+	if err != nil {
+		return time.Time{}, time.Time{}, errors.New("invalid from date (expected YYYY-MM-DD)")
+	}
+	endDate, err := time.Parse("2006-01-02", strings.TrimSpace(s.toDate))
+	if err != nil {
+		return time.Time{}, time.Time{}, errors.New("invalid to date (expected YYYY-MM-DD)")
+	}
+	if s.allDay {
+		start := time.Date(startDate.Year(), startDate.Month(), startDate.Day(), 0, 0, 0, 0, time.Local)
+		end := time.Date(endDate.Year(), endDate.Month(), endDate.Day(), 0, 0, 0, 0, time.Local)
+		if !end.After(start) {
+			end = start.Add(24 * time.Hour)
+		}
+		return start, end, nil
+	}
+
+	startClock, err := time.Parse("15:04", strings.TrimSpace(s.fromTime))
+	if err != nil {
+		return time.Time{}, time.Time{}, errors.New("invalid from time (expected HH:MM)")
+	}
+	endClock, err := time.Parse("15:04", strings.TrimSpace(s.toTime))
+	if err != nil {
+		return time.Time{}, time.Time{}, errors.New("invalid to time (expected HH:MM)")
+	}
+	start := time.Date(startDate.Year(), startDate.Month(), startDate.Day(), startClock.Hour(), startClock.Minute(), 0, 0, time.Local)
+	end := time.Date(endDate.Year(), endDate.Month(), endDate.Day(), endClock.Hour(), endClock.Minute(), 0, 0, time.Local)
+	if !end.After(start) {
+		return time.Time{}, time.Time{}, errors.New("end must be after start")
+	}
+	return start, end, nil
+}
+
+func (m *Model) isEventFormFocusedFirstField() bool {
+	if m.eventForm == nil || m.eventForm.form == nil || len(eventFormFieldOrder) == 0 {
+		return false
+	}
+	f := m.eventForm.form.GetFocusedField()
+	if f == nil {
+		return false
+	}
+	return f.GetKey() == eventFormFieldOrder[0]
+}
+
+func (m *Model) isEventFormFocusedLastField() bool {
+	if m.eventForm == nil || m.eventForm.form == nil || len(eventFormFieldOrder) == 0 {
+		return false
+	}
+	f := m.eventForm.form.GetFocusedField()
+	if f == nil {
+		return false
+	}
+	return f.GetKey() == eventFormFieldOrder[len(eventFormFieldOrder)-1]
 }
 
 func filteredTodos(todos []calendar.Todo, vis map[string]bool) []calendar.Todo {

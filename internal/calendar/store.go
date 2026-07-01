@@ -343,6 +343,7 @@ func (s *Store) componentToEvents(comp *ical.Component, src calendarSource, file
 	summary, _ := comp.Props.Text(ical.PropSummary)
 	desc, _ := comp.Props.Text(ical.PropDescription)
 	location, _ := comp.Props.Text(ical.PropLocation)
+	url, _ := comp.Props.Text(ical.PropURL)
 	organizer, _ := comp.Props.Text(ical.PropOrganizer)
 	start, err := comp.Props.DateTime(ical.PropDateTimeStart, src.location)
 	if err != nil {
@@ -371,6 +372,7 @@ func (s *Store) componentToEvents(comp *ical.Component, src calendarSource, file
 		Summary:     emptyDefault(summary, "(untitled event)"),
 		Description: desc,
 		Location:    location,
+		URL:         url,
 		Organizer:   organizer,
 		AllDay:      allDay,
 		Recurring:   recurring,
@@ -845,6 +847,172 @@ func (s *Store) FindCalendar(sourceName, calendarName string) (Calendar, error) 
 		}
 	}
 	return Calendar{}, fmt.Errorf("calendar %s/%s not found", sourceName, calendarName)
+}
+
+func (s *Store) FindEvent(uid string) (Event, error) {
+	ds, err := s.Load()
+	if err != nil {
+		return Event{}, err
+	}
+	for _, ev := range ds.Events {
+		if ev.UID == uid {
+			return ev, nil
+		}
+	}
+	return Event{}, fmt.Errorf("event with uid %q not found", uid)
+}
+
+func (s *Store) CreateEvent(sourceName, calendarName string, e Event) error {
+	cal, loc, err := s.findWritableCalendar(sourceName, calendarName)
+	if err != nil {
+		return err
+	}
+
+	if e.UID == "" {
+		e.UID = fmt.Sprintf("event-%d@go-khal", time.Now().UnixNano())
+	}
+	start := e.Start
+	end := e.End
+	if start.IsZero() {
+		start = time.Now().In(loc).Truncate(time.Minute)
+	}
+	if end.IsZero() || !end.After(start) {
+		end = start.Add(time.Hour)
+	}
+	if e.AllDay {
+		start = time.Date(start.Year(), start.Month(), start.Day(), 0, 0, 0, 0, loc)
+		end = time.Date(end.Year(), end.Month(), end.Day(), 0, 0, 0, 0, loc)
+		if !end.After(start) {
+			end = start.Add(24 * time.Hour)
+		}
+	}
+
+	comp := ical.NewComponent(ical.CompEvent)
+	comp.Props.SetText(ical.PropUID, e.UID)
+	comp.Props.SetDateTime(ical.PropDateTimeStamp, time.Now().UTC())
+	comp.Props.SetText(ical.PropSummary, emptyDefault(e.Summary, "(untitled event)"))
+	if strings.TrimSpace(e.Location) != "" {
+		comp.Props.SetText(ical.PropLocation, e.Location)
+	}
+	if strings.TrimSpace(e.Description) != "" {
+		comp.Props.SetText(ical.PropDescription, e.Description)
+	}
+	if strings.TrimSpace(e.URL) != "" {
+		comp.Props.SetText(ical.PropURL, e.URL)
+	}
+	comp.Props.SetDateTime(ical.PropDateTimeStart, start.In(loc))
+	comp.Props.SetDateTime(ical.PropDateTimeEnd, end.In(loc))
+
+	newCal := ical.NewCalendar()
+	newCal.Props.SetText(ical.PropVersion, "2.0")
+	newCal.Props.SetText(ical.PropProductID, "-//go-khal//EN")
+	newCal.Children = append(newCal.Children, comp)
+
+	filePath := filepath.Join(cal.Path, e.UID+".ics")
+	f, err := os.Create(filePath)
+	if err != nil {
+		return fmt.Errorf("create event file: %w", err)
+	}
+	defer f.Close()
+	if err := ical.NewEncoder(f).Encode(newCal); err != nil {
+		return fmt.Errorf("encode event: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) UpdateEvent(uid string, update EventUpdate) error {
+	ev, err := s.FindEvent(uid)
+	if err != nil {
+		return err
+	}
+
+	f, err := os.Open(ev.FilePath)
+	if err != nil {
+		return err
+	}
+	dec := ical.NewDecoder(f)
+	cal, err := dec.Decode()
+	f.Close()
+	if err != nil {
+		return err
+	}
+
+	for _, child := range cal.Children {
+		if child.Name != ical.CompEvent {
+			continue
+		}
+		entryUID, _ := child.Props.Text(ical.PropUID)
+		if entryUID != uid {
+			continue
+		}
+		if update.Summary != nil {
+			child.Props.SetText(ical.PropSummary, emptyDefault(*update.Summary, "(untitled event)"))
+		}
+		if update.Location != nil {
+			child.Props.Del(ical.PropLocation)
+			if strings.TrimSpace(*update.Location) != "" {
+				child.Props.SetText(ical.PropLocation, *update.Location)
+			}
+		}
+		if update.Description != nil {
+			child.Props.Del(ical.PropDescription)
+			if strings.TrimSpace(*update.Description) != "" {
+				child.Props.SetText(ical.PropDescription, *update.Description)
+			}
+		}
+		if update.URL != nil {
+			child.Props.Del(ical.PropURL)
+			if strings.TrimSpace(*update.URL) != "" {
+				child.Props.SetText(ical.PropURL, *update.URL)
+			}
+		}
+
+		currentStart, _ := child.Props.DateTime(ical.PropDateTimeStart, time.Local)
+		currentEnd, _ := child.Props.DateTime(ical.PropDateTimeEnd, time.Local)
+		if currentStart.IsZero() {
+			currentStart = ev.Start
+		}
+		if currentEnd.IsZero() {
+			currentEnd = ev.End
+		}
+		if !currentEnd.After(currentStart) {
+			currentEnd = currentStart.Add(time.Hour)
+		}
+
+		nextStart := currentStart
+		nextEnd := currentEnd
+		if update.Start != nil {
+			nextStart = *update.Start
+		}
+		if update.End != nil {
+			nextEnd = *update.End
+		}
+		allDay := ev.AllDay
+		if update.AllDay != nil {
+			allDay = *update.AllDay
+		}
+		if allDay {
+			nextStart = time.Date(nextStart.Year(), nextStart.Month(), nextStart.Day(), 0, 0, 0, 0, nextStart.Location())
+			nextEnd = time.Date(nextEnd.Year(), nextEnd.Month(), nextEnd.Day(), 0, 0, 0, 0, nextEnd.Location())
+			if !nextEnd.After(nextStart) {
+				nextEnd = nextStart.Add(24 * time.Hour)
+			}
+		} else if !nextEnd.After(nextStart) {
+			nextEnd = nextStart.Add(time.Hour)
+		}
+
+		child.Props.Del(ical.PropDateTimeStart)
+		child.Props.Del(ical.PropDateTimeEnd)
+		child.Props.SetDateTime(ical.PropDateTimeStart, nextStart)
+		child.Props.SetDateTime(ical.PropDateTimeEnd, nextEnd)
+	}
+
+	out, err := os.Create(ev.FilePath)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+	return ical.NewEncoder(out).Encode(cal)
 }
 
 func (s *Store) SetCalendarHidden(sourceName, calendarName string, hidden bool) error {

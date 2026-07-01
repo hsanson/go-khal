@@ -7,6 +7,7 @@ type Event struct {
 	Summary     string
 	Description string
 	Location    string
+	URL         string
 	Organizer   string
 	Start       time.Time
 	End         time.Time
@@ -71,4 +72,14 @@ type TodoUpdate struct {
 	Start       **time.Time
 	Due         **time.Time
 	Percent     *int
+}
+
+type EventUpdate struct {
+	Summary     *string
+	Description *string
+	Location    *string
+	URL         *string
+	Start       *time.Time
+	End         *time.Time
+	AllDay      *bool
 }

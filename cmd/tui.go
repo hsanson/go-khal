@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/hsanson/go-khal/internal/calendar"
 	"github.com/hsanson/go-khal/internal/tui"
 	"github.com/spf13/cobra"
 )
@@ -24,7 +25,7 @@ func runTUI() error {
 	if err != nil {
 		return err
 	}
-	model := tui.NewModel(cfg, ds)
+	model := tui.NewModel(cfg, ds, calendar.NewStore(cfg))
 	if _, err := tea.NewProgram(model, tea.WithAltScreen()).Run(); err != nil {
 		return fmt.Errorf("run tui: %w", err)
 	}
