@@ -11,6 +11,8 @@ type Event struct {
 	Start       time.Time
 	End         time.Time
 	AllDay      bool
+	Recurring   bool
+	HasAlarm    bool
 	Source      string
 	Calendar    string
 	CalendarDir string

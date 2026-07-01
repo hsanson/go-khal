@@ -304,10 +304,8 @@ func (s *Store) loadICSFile(src calendarSource, filePath string) ([]Event, []Tod
 		for _, child := range cal.Children {
 			switch child.Name {
 			case ical.CompEvent:
-				event, ok := componentToEvent(child, src, filePath)
-				if ok {
-					allEvents = append(allEvents, event)
-				}
+				events := s.componentToEvents(child, src, filePath)
+				allEvents = append(allEvents, events...)
 			case ical.CompToDo:
 				todo, ok := componentToTodo(child, src, filePath)
 				if ok {
@@ -320,10 +318,10 @@ func (s *Store) loadICSFile(src calendarSource, filePath string) ([]Event, []Tod
 	return allEvents, allTodos, nil
 }
 
-func componentToEvent(comp *ical.Component, src calendarSource, filePath string) (Event, bool) {
+func (s *Store) componentToEvents(comp *ical.Component, src calendarSource, filePath string) []Event {
 	uid, err := comp.Props.Text(ical.PropUID)
 	if err != nil || uid == "" {
-		return Event{}, false
+		return nil
 	}
 	summary, _ := comp.Props.Text(ical.PropSummary)
 	desc, _ := comp.Props.Text(ical.PropDescription)
@@ -331,24 +329,35 @@ func componentToEvent(comp *ical.Component, src calendarSource, filePath string)
 	organizer, _ := comp.Props.Text(ical.PropOrganizer)
 	start, err := comp.Props.DateTime(ical.PropDateTimeStart, src.location)
 	if err != nil {
-		return Event{}, false
+		return nil
 	}
 	end, err := comp.Props.DateTime(ical.PropDateTimeEnd, src.location)
 	if err != nil {
 		end = start.Add(time.Hour)
 	}
+	duration := end.Sub(start)
+	if duration <= 0 {
+		duration = time.Hour
+	}
 
 	allDay := start.Hour() == 0 && start.Minute() == 0 && end.Sub(start)%24*time.Hour == 0
-
-	return Event{
+	recurring := comp.Props.Get(ical.PropRecurrenceRule) != nil || len(comp.Props.Values(ical.PropRecurrenceDates)) > 0
+	hasAlarm := false
+	for _, child := range comp.Children {
+		if child != nil && child.Name == ical.CompAlarm {
+			hasAlarm = true
+			break
+		}
+	}
+	base := Event{
 		UID:         uid,
 		Summary:     emptyDefault(summary, "(untitled event)"),
 		Description: desc,
 		Location:    location,
 		Organizer:   organizer,
-		Start:       start,
-		End:         end,
 		AllDay:      allDay,
+		Recurring:   recurring,
+		HasAlarm:    hasAlarm,
 		Source:      src.sourceName,
 		Calendar:    src.calendar.Name,
 		CalendarDir: src.calendar.Path,
@@ -356,7 +365,54 @@ func componentToEvent(comp *ical.Component, src calendarSource, filePath string)
 		Color:       src.calendar.Color,
 		Hidden:      src.calendar.Hidden,
 		FilePath:    filePath,
-	}, true
+	}
+
+	if !recurring {
+		base.Start = start
+		base.End = end
+		return []Event{base}
+	}
+
+	set, err := comp.RecurrenceSet(src.location)
+	if err != nil {
+		base.Start = start
+		base.End = end
+		return []Event{base}
+	}
+
+	lookbackMonths := 12
+	lookaheadMonths := 24
+	if s != nil && s.config != nil {
+		lookbackMonths = s.config.RecurrenceLookbackMonths
+		lookaheadMonths = s.config.RecurrenceLookaheadMonths
+		if lookbackMonths <= 0 {
+			lookbackMonths = 12
+		}
+		if lookaheadMonths <= 0 {
+			lookaheadMonths = 24
+		}
+	}
+
+	from := time.Now().In(src.location).AddDate(0, -lookbackMonths, 0)
+	to := time.Now().In(src.location).AddDate(0, lookaheadMonths, 0)
+	if start.Before(from) {
+		from = start.AddDate(0, -1, 0)
+	}
+	occs := set.Between(from, to, true)
+	if len(occs) == 0 {
+		base.Start = start
+		base.End = end
+		return []Event{base}
+	}
+
+	result := make([]Event, 0, len(occs))
+	for _, occ := range occs {
+		e := base
+		e.Start = occ
+		e.End = occ.Add(duration)
+		result = append(result, e)
+	}
+	return result
 }
 
 func componentToTodo(comp *ical.Component, src calendarSource, filePath string) (Todo, bool) {

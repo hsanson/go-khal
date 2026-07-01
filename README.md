@@ -120,7 +120,9 @@ Example:
   "default_view": "agenda",
   "week_starts_on": "monday",
   "time_format": "15:04",
-  "sidebar_width": 30
+  "sidebar_width": 30,
+  "recurrence_lookback_months": 12,
+  "recurrence_lookahead_months": 24
 }
 ```
 

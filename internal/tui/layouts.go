@@ -170,7 +170,17 @@ func renderAgendaFromEvents(filtered []calendar.Event, width, maxLines int, time
 				break
 			}
 			line := ""
-			icon := styleForColor(styles.Event, ev.Color).Render("")
+			glyph := ""
+			if ev.Recurring {
+				glyph = "󰑖"
+			} else if !ev.AllDay {
+				if ev.HasAlarm {
+					glyph = "󰀠"
+				} else {
+					glyph = ""
+				}
+			}
+			icon := styleForColor(styles.Event, ev.Color).Render(glyph)
 			if ev.AllDay {
 				line = fmt.Sprintf("  %s all-day  %s", icon, ev.Summary)
 			} else {

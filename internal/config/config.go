@@ -26,11 +26,13 @@ type CalendarConfig struct {
 }
 
 type Config struct {
-	Sources      []Source `json:"sources"`
-	DefaultView  string   `json:"default_view,omitempty"`
-	WeekStartsOn string   `json:"week_starts_on,omitempty"`
-	TimeFormat   string   `json:"time_format,omitempty"`
-	SidebarWidth int      `json:"sidebar_width,omitempty"`
+	Sources                   []Source `json:"sources"`
+	DefaultView               string   `json:"default_view,omitempty"`
+	WeekStartsOn              string   `json:"week_starts_on,omitempty"`
+	TimeFormat                string   `json:"time_format,omitempty"`
+	SidebarWidth              int      `json:"sidebar_width,omitempty"`
+	RecurrenceLookbackMonths  int      `json:"recurrence_lookback_months,omitempty"`
+	RecurrenceLookaheadMonths int      `json:"recurrence_lookahead_months,omitempty"`
 }
 
 func DefaultPath() string {
@@ -43,10 +45,12 @@ func DefaultPath() string {
 
 func defaultConfig() *Config {
 	return &Config{
-		DefaultView:  "agenda",
-		WeekStartsOn: "monday",
-		TimeFormat:   "15:04",
-		SidebarWidth: 30,
+		DefaultView:               "agenda",
+		WeekStartsOn:              "monday",
+		TimeFormat:                "15:04",
+		SidebarWidth:              30,
+		RecurrenceLookbackMonths:  12,
+		RecurrenceLookaheadMonths: 24,
 	}
 }
 
@@ -74,6 +78,18 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.SidebarWidth <= 0 {
 		cfg.SidebarWidth = 30
+	}
+	if cfg.RecurrenceLookbackMonths <= 0 {
+		cfg.RecurrenceLookbackMonths = 12
+	}
+	if cfg.RecurrenceLookaheadMonths <= 0 {
+		cfg.RecurrenceLookaheadMonths = 24
+	}
+	if cfg.RecurrenceLookbackMonths > 120 {
+		cfg.RecurrenceLookbackMonths = 120
+	}
+	if cfg.RecurrenceLookaheadMonths > 120 {
+		cfg.RecurrenceLookaheadMonths = 120
 	}
 	return &cfg, nil
 }
