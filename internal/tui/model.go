@@ -27,6 +27,7 @@ type Model struct {
 	calendarOffset     int
 	focusMain          bool
 	focusDetails       bool
+	showFreeMode       bool
 	agendaStart        time.Time
 	eventCursor        int
 	eventListOffset    int
@@ -164,6 +165,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.eventCursor = 0
 			m.eventListOffset = 0
 			m.scrollForSelection()
+		case "f":
+			m.showFreeMode = !m.showFreeMode
+			m.eventCursor = 0
+			m.eventListOffset = 0
+			m.ensureEventSelectionValid()
 		case "t":
 			now := time.Now().In(m.selected.Location())
 			m.selected = now
@@ -181,7 +187,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.eventCursor = 0
 				m.eventListOffset = 0
 			} else {
-				events := m.agendaEvents()
+				events := m.currentSelectableEvents()
 				if len(events) > 0 {
 					m.focusDetails = true
 					m.detailScroll = 0
@@ -189,7 +195,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case " ":
 			if m.focusMain {
-				events := m.agendaEvents()
+				events := m.currentSelectableEvents()
 				if len(events) > 0 {
 					m.focusDetails = true
 					m.detailScroll = 0
@@ -222,7 +228,7 @@ func (m Model) View() string {
 	if m.focusDetails {
 		help = m.styles.Subtle.Render("Details focus: [j/k] scroll details  [enter/space/esc/h] back to events")
 	} else if m.focusMain {
-		help = m.styles.Subtle.Render("Events list focus: [j/k] select event  [enter/space] focus details  [h] back to calendar")
+		help = m.styles.Subtle.Render("Events list focus: [j/k] select  [enter/space] details  [f] toggle show-free  [h] back")
 	}
 	base := m.styles.Container.Render(lipgloss.JoinVertical(lipgloss.Left, root, "", help))
 	return base
@@ -272,10 +278,19 @@ func (m Model) renderMainPanel(width int) string {
 		}
 	}
 
-	rendered := renderAgendaFromEvents(events, width-2, topHeight, m.cfg.TimeFormat, m.styles, m.eventCursor, m.eventListOffset, true)
+	var rendered agendaRender
+	if m.showFreeMode {
+		items := m.agendaItems()
+		rendered = renderAgendaFromItems(items, width-2, topHeight, m.cfg.TimeFormat, m.styles, m.eventCursor, m.eventListOffset, true)
+	} else {
+		rendered = renderAgendaFromEvents(events, width-2, topHeight, m.cfg.TimeFormat, m.styles, m.eventCursor, m.eventListOffset, true)
+	}
 	top := lipgloss.NewStyle().Height(topHeight).MaxHeight(topHeight).Render(rendered.Text)
 	detail := m.renderEventDetailsPane(width-2, bottomHeight)
 	header := m.styles.PanelTitle.Render(fmt.Sprintf("Agenda from %s", m.agendaStart.Format("Mon Jan 2, 2006")))
+	if m.showFreeMode {
+		header += m.styles.Subtle.Render(" [SHOW-FREE]")
+	}
 	if m.focusMain {
 		header += m.styles.Subtle.Render(" (focus)")
 	} else if m.focusDetails {
@@ -288,6 +303,21 @@ func (m Model) renderMainPanel(width int) string {
 
 func (m Model) renderEventDetailsPane(width, height int) string {
 	events := m.agendaEvents()
+	if m.showFreeMode {
+		items := m.agendaItems()
+		if len(items) == 0 || m.eventCursor < 0 || m.eventCursor >= len(items) {
+			return lipgloss.NewStyle().Width(width).Height(height).Render(m.styles.Subtle.Render("No item selected"))
+		}
+		it := items[m.eventCursor]
+		if it.IsFree {
+			msg := fmt.Sprintf("Free time: %s - %s", it.Start.Format("2006-01-02 15:04"), it.End.Format("2006-01-02 15:04"))
+			return lipgloss.NewStyle().Width(width).Height(height).Render(m.styles.Subtle.Render(msg))
+		}
+		if it.Event == nil {
+			return lipgloss.NewStyle().Width(width).Height(height).Render(m.styles.Subtle.Render("No event selected"))
+		}
+		return m.renderEventDetailsFor(*it.Event, width, height)
+	}
 	if len(events) == 0 {
 		return lipgloss.NewStyle().Width(width).Height(height).Render(m.styles.Subtle.Render("No event selected"))
 	}
@@ -298,7 +328,10 @@ func (m Model) renderEventDetailsPane(width, height int) string {
 	if idx >= len(events) {
 		idx = len(events) - 1
 	}
-	ev := events[idx]
+	return m.renderEventDetailsFor(events[idx], width, height)
+}
+
+func (m Model) renderEventDetailsFor(ev calendar.Event, width, height int) string {
 	calendarName := ev.DisplayName
 	if calendarName == "" {
 		calendarName = ev.Calendar
@@ -344,6 +377,27 @@ func (m Model) renderEventDetailsPane(width, height int) string {
 }
 
 func (m *Model) moveEventCursor(delta int) {
+	if m.showFreeMode {
+		items := m.agendaItems()
+		if len(items) == 0 {
+			m.eventCursor = 0
+			m.eventListOffset = 0
+			return
+		}
+		m.eventCursor += delta
+		if m.eventCursor < 0 {
+			m.eventCursor = 0
+		}
+		if m.eventCursor >= len(items) {
+			m.eventCursor = len(items) - 1
+		}
+		it := items[m.eventCursor]
+		m.selected = dayStart(it.Day)
+		m.scrollForSelection()
+		m.ensureEventCursorVisible()
+		return
+	}
+
 	events := m.agendaEvents()
 	if len(events) == 0 {
 		m.eventCursor = 0
@@ -599,6 +653,24 @@ func (m Model) calendarPaneHeight() int {
 }
 
 func (m *Model) ensureEventSelectionValid() {
+	if m.showFreeMode {
+		items := m.agendaItems()
+		if len(items) == 0 {
+			m.eventCursor = 0
+			m.eventListOffset = 0
+			return
+		}
+		if m.eventCursor < 0 {
+			m.eventCursor = 0
+		}
+		if m.eventCursor >= len(items) {
+			m.eventCursor = len(items) - 1
+		}
+		m.ensureEventCursorVisible()
+		m.selected = dayStart(items[m.eventCursor].Day)
+		m.scrollForSelection()
+		return
+	}
 	events := m.agendaEvents()
 	if len(events) == 0 {
 		m.eventCursor = 0
@@ -615,6 +687,36 @@ func (m *Model) ensureEventSelectionValid() {
 }
 
 func (m *Model) ensureEventCursorVisible() {
+	if m.showFreeMode {
+		items := m.agendaItems()
+		if len(items) == 0 {
+			m.eventListOffset = 0
+			return
+		}
+		if m.eventListOffset < 0 {
+			m.eventListOffset = 0
+		}
+		if m.eventListOffset >= len(items) {
+			m.eventListOffset = len(items) - 1
+		}
+		if m.eventCursor < m.eventListOffset {
+			m.eventListOffset = m.eventCursor
+		}
+		maxLines := m.eventListLines()
+		rendered := renderAgendaFromItems(items, m.mainInnerWidth(), maxLines, m.cfg.TimeFormat, m.styles, m.eventCursor, m.eventListOffset, true)
+		if rendered.LastVisibleEventIndex >= 0 && m.eventCursor <= rendered.LastVisibleEventIndex {
+			return
+		}
+		m.eventListOffset = m.eventCursor
+		for m.eventListOffset > 0 {
+			r := renderAgendaFromItems(items, m.mainInnerWidth(), maxLines, m.cfg.TimeFormat, m.styles, m.eventCursor, m.eventListOffset-1, true)
+			if r.LastVisibleEventIndex < m.eventCursor {
+				break
+			}
+			m.eventListOffset--
+		}
+		return
+	}
 	events := m.agendaEvents()
 	if len(events) == 0 {
 		m.eventListOffset = 0
@@ -650,6 +752,29 @@ func (m Model) agendaEvents() []calendar.Event {
 		start = dayStart(m.selected)
 	}
 	return agendaEventsFromDay(start, filteredEvents(m.data.Events, m.calendarVisibility))
+}
+
+func (m Model) agendaItems() []AgendaListItem {
+	start := m.agendaStart
+	if start.IsZero() {
+		start = dayStart(m.selected)
+	}
+	return buildAgendaItems(start, filteredEvents(m.data.Events, m.calendarVisibility), 90)
+}
+
+func (m Model) currentSelectableEvents() []calendar.Event {
+	if !m.showFreeMode {
+		return m.agendaEvents()
+	}
+	items := m.agendaItems()
+	if len(items) == 0 || m.eventCursor < 0 || m.eventCursor >= len(items) {
+		return nil
+	}
+	it := items[m.eventCursor]
+	if it.IsFree || it.Event == nil {
+		return nil
+	}
+	return []calendar.Event{*it.Event}
 }
 
 func (m Model) eventListLines() int {

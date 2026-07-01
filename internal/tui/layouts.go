@@ -87,9 +87,145 @@ type agendaRender struct {
 	LastVisibleEventIndex int
 }
 
+type AgendaListItem struct {
+	Day    time.Time
+	IsFree bool
+	Start  time.Time
+	End    time.Time
+	Event  *calendar.Event
+}
+
 func renderAgendaFromDay(selected time.Time, events []calendar.Event, width, maxLines int, timeFmt string, styles Styles, eventCursor int, highlight bool) agendaRender {
 	filtered := agendaEventsFromDay(dayStart(selected), events)
 	return renderAgendaFromEvents(filtered, width, maxLines, timeFmt, styles, eventCursor, 0, highlight)
+}
+
+func renderAgendaFromItems(items []AgendaListItem, width, maxLines int, timeFmt string, styles Styles, cursor int, offset int, highlight bool) agendaRender {
+	if timeFmt == "" {
+		timeFmt = "15:04"
+	}
+	if maxLines < 6 {
+		maxLines = 6
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	if offset > len(items) {
+		offset = len(items)
+	}
+
+	lines := make([]string, 0, maxLines)
+	lastVisible := -1
+	var currentDay string
+	for i := offset; i < len(items); i++ {
+		if len(lines) >= maxLines {
+			break
+		}
+		item := items[i]
+		dayKey := item.Day.Format("2006-01-02")
+		if dayKey != currentDay {
+			needed := 2
+			if currentDay != "" {
+				needed++
+			}
+			if len(lines)+needed > maxLines {
+				break
+			}
+			if currentDay != "" {
+				lines = append(lines, "")
+			}
+			currentDay = dayKey
+			lines = append(lines, styles.DayHeader.Render(item.Day.Format("Mon 2006-01-02")))
+		}
+
+		line := ""
+		if item.IsFree {
+			line = fmt.Sprintf("  %s-%s  (no events)", formatTimeBoundary(item.Start, item.Day, timeFmt), formatTimeBoundary(item.End, item.Day, timeFmt))
+			line = styles.Subtle.Render(truncate(line, max(10, width-1)))
+		} else if item.Event != nil {
+			ev := *item.Event
+			glyph := iconForEvent(ev)
+			icon := styleForColor(styles.Event, ev.Color).Render(glyph)
+			if ev.AllDay {
+				line = fmt.Sprintf("  %s all-day  %s", icon, ev.Summary)
+			} else {
+				line = fmt.Sprintf("  %s %s-%s  %s", icon, ev.Start.Format(timeFmt), ev.End.Format(timeFmt), ev.Summary)
+			}
+			line = styleForColor(styles.Event, ev.Color).Render(truncate(line, max(10, width-1)))
+		}
+
+		if highlight && i == cursor {
+			line = lipgloss.NewStyle().Background(lipgloss.Color("238")).Render(line)
+		}
+		lines = append(lines, line)
+		lastVisible = i
+	}
+
+	if len(lines) == 0 {
+		lines = append(lines, styles.Subtle.Render("No agenda items"))
+	}
+
+	return agendaRender{
+		Text:                  lipgloss.NewStyle().Width(width).MaxHeight(maxLines).Render(strings.Join(lines, "\n")),
+		EventCount:            len(items),
+		LastVisibleEventIndex: lastVisible,
+	}
+}
+
+func buildAgendaItems(startDay time.Time, events []calendar.Event, days int) []AgendaListItem {
+	if days < 1 {
+		days = 1
+	}
+	out := make([]AgendaListItem, 0, days*8)
+	for d := 0; d < days; d++ {
+		day := startDay.AddDate(0, 0, d)
+		dayEnd := day.Add(24 * time.Hour)
+		dayEvents := calendar.EventsOnDay(events, day)
+
+		allDay := make([]calendar.Event, 0)
+		timed := make([]calendar.Event, 0)
+		for _, ev := range dayEvents {
+			if ev.AllDay {
+				allDay = append(allDay, ev)
+			} else {
+				timed = append(timed, ev)
+			}
+		}
+		sort.Slice(timed, func(i, j int) bool {
+			if timed[i].Start.Equal(timed[j].Start) {
+				return timed[i].Summary < timed[j].Summary
+			}
+			return timed[i].Start.Before(timed[j].Start)
+		})
+
+		for i := range allDay {
+			ev := allDay[i]
+			out = append(out, AgendaListItem{Day: day, IsFree: false, Start: ev.Start, End: ev.End, Event: &ev})
+		}
+
+		cursor := day
+		if len(timed) == 0 {
+			if len(allDay) == 0 {
+				out = append(out, AgendaListItem{Day: day, IsFree: true, Start: day, End: dayEnd})
+			}
+			continue
+		}
+
+		for i := range timed {
+			ev := timed[i]
+			if ev.Start.After(cursor) {
+				out = append(out, AgendaListItem{Day: day, IsFree: true, Start: cursor, End: ev.Start})
+			}
+			out = append(out, AgendaListItem{Day: day, IsFree: false, Start: ev.Start, End: ev.End, Event: &ev})
+			if ev.End.After(cursor) {
+				cursor = ev.End
+			}
+		}
+		if cursor.Before(dayEnd) {
+			out = append(out, AgendaListItem{Day: day, IsFree: true, Start: cursor, End: dayEnd})
+		}
+	}
+	return out
 }
 
 func renderAgendaFromEvents(filtered []calendar.Event, width, maxLines int, timeFmt string, styles Styles, eventCursor int, eventOffset int, highlight bool) agendaRender {
@@ -170,16 +306,7 @@ func renderAgendaFromEvents(filtered []calendar.Event, width, maxLines int, time
 				break
 			}
 			line := ""
-			glyph := ""
-			if ev.Recurring {
-				glyph = "󰑖"
-			} else if !ev.AllDay {
-				if ev.HasAlarm {
-					glyph = "󰀠"
-				} else {
-					glyph = ""
-				}
-			}
+			glyph := iconForEvent(ev)
 			icon := styleForColor(styles.Event, ev.Color).Render(glyph)
 			if ev.AllDay {
 				line = fmt.Sprintf("  %s all-day  %s", icon, ev.Summary)
@@ -279,6 +406,29 @@ func normalizeColor(color string) string {
 	}
 
 	return c
+}
+
+func formatTimeBoundary(t time.Time, day time.Time, timeFmt string) string {
+	if t.Equal(day.Add(24 * time.Hour)) {
+		if timeFmt == "3:04PM" || strings.Contains(strings.ToLower(timeFmt), "pm") {
+			return "12:00AM"
+		}
+		return "24:00"
+	}
+	return t.Format(timeFmt)
+}
+
+func iconForEvent(ev calendar.Event) string {
+	if ev.Recurring {
+		return "󰑖"
+	}
+	if ev.AllDay {
+		return ""
+	}
+	if ev.HasAlarm {
+		return "󰀠"
+	}
+	return ""
 }
 
 func truncate(s string, n int) string {
