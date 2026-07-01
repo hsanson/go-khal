@@ -427,17 +427,23 @@ func componentToTodo(comp *ical.Component, src calendarSource, filePath string) 
 
 	var start *time.Time
 	if st, err := comp.Props.DateTime(ical.PropDateTimeStart, src.location); err == nil {
-		start = &st
+		if !st.IsZero() {
+			start = &st
+		}
 	}
 
 	var due *time.Time
 	if dt, err := comp.Props.DateTime(ical.PropDue, src.location); err == nil {
-		due = &dt
+		if !dt.IsZero() {
+			due = &dt
+		}
 	}
 
 	var completed *time.Time
 	if ct, err := comp.Props.DateTime(ical.PropCompleted, src.location); err == nil {
-		completed = &ct
+		if !ct.IsZero() {
+			completed = &ct
+		}
 	}
 
 	percent := 0

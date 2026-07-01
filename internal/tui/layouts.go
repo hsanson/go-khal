@@ -93,6 +93,8 @@ type AgendaListItem struct {
 	Start  time.Time
 	End    time.Time
 	Event  *calendar.Event
+	Todo   *calendar.Todo
+	Mode   string
 }
 
 func renderAgendaFromDay(selected time.Time, events []calendar.Event, width, maxLines int, timeFmt string, styles Styles, eventCursor int, highlight bool) agendaRender {
@@ -152,6 +154,28 @@ func renderAgendaFromItems(items []AgendaListItem, width, maxLines int, timeFmt 
 				line = fmt.Sprintf("  %s %s-%s  %s", icon, ev.Start.Format(timeFmt), ev.End.Format(timeFmt), ev.Summary)
 			}
 			line = styleForColor(styles.Event, ev.Color).Render(truncate(line, max(10, width-1)))
+		} else if item.Todo != nil {
+			todo := *item.Todo
+			todoStyle := styleForColor(styles.Event, todo.Color)
+			if isTodoDone(todo) {
+				todoStyle = styles.Subtle
+			}
+			icon := todoStyle.Render("󰄱")
+			summary := todo.Summary
+			if strings.TrimSpace(summary) == "" {
+				summary = "(untitled todo)"
+			}
+			switch item.Mode {
+			case "todo-range":
+				line = fmt.Sprintf("  %s %s-%s  %s", icon, item.Start.Format(timeFmt), item.End.Format(timeFmt), summary)
+			case "todo-start":
+				line = fmt.Sprintf("  %s %s  %s", icon, item.Start.Format(timeFmt), summary)
+			case "todo-end":
+				line = fmt.Sprintf("  %s -%s  %s", icon, item.End.Format(timeFmt), summary)
+			default:
+				line = fmt.Sprintf("  %s %s", icon, summary)
+			}
+			line = todoStyle.Render(truncate(line, max(10, width-1)))
 		}
 
 		if highlight && i == cursor {
@@ -172,35 +196,69 @@ func renderAgendaFromItems(items []AgendaListItem, width, maxLines int, timeFmt 
 	}
 }
 
-func buildAgendaItems(startDay time.Time, events []calendar.Event, days int) []AgendaListItem {
+func buildAgendaItems(startDay time.Time, events []calendar.Event, todos []calendar.Todo, days int, includeFree bool, includeDoneTodos bool) []AgendaListItem {
 	if days < 1 {
 		days = 1
 	}
 	out := make([]AgendaListItem, 0, days*8)
+	endDay := startDay.AddDate(0, 0, days)
+
+	todosByDay := map[string][]AgendaListItem{}
+	today := dayStart(time.Now().In(startDay.Location()))
+	for i := range todos {
+		t := todos[i]
+		if !includeDoneTodos && isTodoDone(t) {
+			continue
+		}
+		item, ok := agendaItemFromTodo(t, today)
+		if !ok {
+			continue
+		}
+		if item.Day.Before(startDay) || !item.Day.Before(endDay) {
+			continue
+		}
+		k := item.Day.Format("2006-01-02")
+		todosByDay[k] = append(todosByDay[k], item)
+	}
+
 	for d := 0; d < days; d++ {
 		day := startDay.AddDate(0, 0, d)
 		dayEnd := day.Add(24 * time.Hour)
 		dayEvents := calendar.EventsOnDay(events, day)
+		dayTodos := todosByDay[day.Format("2006-01-02")]
 
-		allDay := make([]calendar.Event, 0)
-		timed := make([]calendar.Event, 0)
+		allDay := make([]AgendaListItem, 0)
+		timed := make([]AgendaListItem, 0)
 		for _, ev := range dayEvents {
+			item := AgendaListItem{Day: day, IsFree: false, Start: ev.Start, End: ev.End, Event: &ev, Mode: "event"}
 			if ev.AllDay {
-				allDay = append(allDay, ev)
+				allDay = append(allDay, item)
 			} else {
-				timed = append(timed, ev)
+				timed = append(timed, item)
+			}
+		}
+		for _, td := range dayTodos {
+			if td.Mode == "todo-all-day" {
+				allDay = append(allDay, td)
+			} else {
+				timed = append(timed, td)
 			}
 		}
 		sort.Slice(timed, func(i, j int) bool {
 			if timed[i].Start.Equal(timed[j].Start) {
-				return timed[i].Summary < timed[j].Summary
+				return agendaItemSummary(timed[i]) < agendaItemSummary(timed[j])
 			}
 			return timed[i].Start.Before(timed[j].Start)
 		})
 
-		for i := range allDay {
-			ev := allDay[i]
-			out = append(out, AgendaListItem{Day: day, IsFree: false, Start: ev.Start, End: ev.End, Event: &ev})
+		out = append(out, allDay...)
+
+		if !includeFree {
+			out = append(out, timed...)
+			if len(allDay) == 0 && len(timed) == 0 {
+				out = append(out, AgendaListItem{Day: day, IsFree: true, Start: day, End: dayEnd})
+			}
+			continue
 		}
 
 		cursor := day
@@ -212,13 +270,13 @@ func buildAgendaItems(startDay time.Time, events []calendar.Event, days int) []A
 		}
 
 		for i := range timed {
-			ev := timed[i]
-			if ev.Start.After(cursor) {
-				out = append(out, AgendaListItem{Day: day, IsFree: true, Start: cursor, End: ev.Start})
+			it := timed[i]
+			if it.Start.After(cursor) {
+				out = append(out, AgendaListItem{Day: day, IsFree: true, Start: cursor, End: it.Start})
 			}
-			out = append(out, AgendaListItem{Day: day, IsFree: false, Start: ev.Start, End: ev.End, Event: &ev})
-			if ev.End.After(cursor) {
-				cursor = ev.End
+			out = append(out, it)
+			if it.End.After(cursor) {
+				cursor = it.End
 			}
 		}
 		if cursor.Before(dayEnd) {
@@ -226,6 +284,59 @@ func buildAgendaItems(startDay time.Time, events []calendar.Event, days int) []A
 		}
 	}
 	return out
+}
+
+func agendaItemSummary(it AgendaListItem) string {
+	if it.Event != nil {
+		return it.Event.Summary
+	}
+	if it.Todo != nil {
+		return it.Todo.Summary
+	}
+	return ""
+}
+
+func agendaItemFromTodo(todo calendar.Todo, today time.Time) (AgendaListItem, bool) {
+	it := AgendaListItem{Todo: &todo, Mode: "todo-all-day"}
+	if todo.Start != nil && todo.Due != nil {
+		it.Day = dayStart(*todo.Start)
+		it.Start = *todo.Start
+		it.End = *todo.Due
+		it.Mode = "todo-range"
+		return it, true
+	}
+	if todo.Start != nil {
+		it.Day = dayStart(*todo.Start)
+		it.Start = *todo.Start
+		it.End = todo.Start.Add(time.Hour)
+		it.Mode = "todo-start"
+		return it, true
+	}
+	if todo.Due != nil {
+		it.Day = dayStart(*todo.Due)
+		it.End = *todo.Due
+		it.Start = todo.Due.Add(-time.Hour)
+		it.Mode = "todo-end"
+		return it, true
+	}
+	it.Day = dayStart(today)
+	it.Start = it.Day
+	it.End = it.Day.Add(24 * time.Hour)
+	it.Mode = "todo-all-day"
+	return it, true
+}
+
+func isTodoDone(todo calendar.Todo) bool {
+	if strings.EqualFold(todo.Status, "COMPLETED") {
+		return true
+	}
+	if todo.Completed != nil {
+		return true
+	}
+	if todo.Percent >= 100 {
+		return true
+	}
+	return false
 }
 
 func renderAgendaFromEvents(filtered []calendar.Event, width, maxLines int, timeFmt string, styles Styles, eventCursor int, eventOffset int, highlight bool) agendaRender {
