@@ -22,8 +22,9 @@ type Model struct {
 	calendarVisibility map[string]bool
 	calendarOrder      []string
 	weekViewportStart  time.Time
-	showCalendar       bool
-	dialogCursor       int
+	focusCalendarPane  bool
+	calendarCursor     int
+	calendarOffset     int
 	focusMain          bool
 	focusDetails       bool
 	agendaStart        time.Time
@@ -44,7 +45,7 @@ func NewModel(cfg *config.Config, data calendar.Dataset) Model {
 
 	now := time.Now()
 	start := calendar.StartOfWeek(now, cfg.WeekStart())
-	return Model{
+	m := Model{
 		cfg:                cfg,
 		data:               data,
 		styles:             DefaultStyles(),
@@ -54,6 +55,9 @@ func NewModel(cfg *config.Config, data calendar.Dataset) Model {
 		calendarVisibility: vis,
 		calendarOrder:      order,
 	}
+	m.ensureEventSelectionValid()
+	m.ensureCalendarCursorVisible(m.calendarPaneHeight())
+	return m
 }
 
 func (m Model) Init() tea.Cmd { return nil }
@@ -65,6 +69,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 		m.scrollForSelection()
 	case tea.KeyMsg:
+		if msg.String() == "c" {
+			m.focusCalendarPane = true
+			m.focusMain = false
+			m.focusDetails = false
+			m.ensureCalendarCursorVisible(m.calendarPaneHeight())
+			m.ensureEventSelectionValid()
+			return m, nil
+		}
 		if m.focusDetails {
 			switch msg.String() {
 			case "esc", "h", "enter", " ":
@@ -80,18 +92,27 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
-		if m.showCalendar {
-			updatedModel, cmd := m.updateCalendarDialog(msg)
-			updated := updatedModel.(Model)
-			updated.ensureEventSelectionValid()
-			return updated, cmd
+		if m.focusCalendarPane {
+			switch msg.String() {
+			case "j", "down":
+				m.moveCalendarCursor(1)
+			case "k", "up":
+				m.moveCalendarCursor(-1)
+			case " ", "enter":
+				if len(m.calendarOrder) > 0 {
+					key := m.calendarOrder[m.calendarCursor]
+					m.calendarVisibility[key] = !m.calendarVisibility[key]
+					m.ensureEventSelectionValid()
+				}
+			case "esc", "h", "q":
+				m.focusCalendarPane = false
+			}
+			m.ensureCalendarCursorVisible(m.calendarPaneHeight())
+			return m, nil
 		}
 		switch msg.String() {
 		case "q", "ctrl+c":
 			return m, tea.Quit
-		case "c":
-			m.showCalendar = true
-			m.dialogCursor = 0
 		case "j", "down":
 			if m.focusMain {
 				m.moveEventCursor(1)
@@ -180,27 +201,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m Model) updateCalendarDialog(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "esc", "c":
-		m.showCalendar = false
-	case "up", "k":
-		if m.dialogCursor > 0 {
-			m.dialogCursor--
-		}
-	case "down", "j":
-		if m.dialogCursor < len(m.calendarOrder)-1 {
-			m.dialogCursor++
-		}
-	case " ", "enter":
-		if len(m.calendarOrder) > 0 {
-			key := m.calendarOrder[m.dialogCursor]
-			m.calendarVisibility[key] = !m.calendarVisibility[key]
-		}
-	}
-	return m, nil
-}
-
 func (m Model) View() string {
 	if m.width == 0 {
 		m.width = 140
@@ -216,16 +216,16 @@ func (m Model) View() string {
 
 	root := lipgloss.JoinHorizontal(lipgloss.Top, left, right)
 	help := m.styles.Subtle.Render("Navigate: [h/l] left/right day  [j/k] up/down week-row  [p/n] prev/next day  [t] today  [c] calendars  [q] quit")
+	if m.focusCalendarPane {
+		help = m.styles.Subtle.Render("Calendars focus: [j/k] select calendar  [space/enter] toggle  [h/esc/q] back")
+	}
 	if m.focusDetails {
 		help = m.styles.Subtle.Render("Details focus: [j/k] scroll details  [enter/space/esc/h] back to events")
 	} else if m.focusMain {
 		help = m.styles.Subtle.Render("Events list focus: [j/k] select event  [enter/space] focus details  [h] back to calendar")
 	}
 	base := m.styles.Container.Render(lipgloss.JoinVertical(lipgloss.Left, root, "", help))
-	if !m.showCalendar {
-		return base
-	}
-	return lipgloss.JoinVertical(lipgloss.Left, base, "", m.renderCalendarDialog())
+	return base
 }
 
 func (m Model) renderLeftPanel(width int) string {
@@ -233,8 +233,19 @@ func (m Model) renderLeftPanel(width int) string {
 	if panelHeight < 8 {
 		panelHeight = 8
 	}
-	weeks := renderWeekViewport(m.weekViewportStart, m.selected, filteredEvents(m.data.Events, m.calendarVisibility), width-2, m.monthListHeightBudget(), m.weekStart(), m.styles)
-	panel := lipgloss.JoinVertical(lipgloss.Left, m.styles.PanelTitle.Render("Months"), "", weeks)
+	topHeight := panelHeight * 2 / 3
+	if topHeight < 8 {
+		topHeight = 8
+	}
+	bottomHeight := panelHeight - topHeight - 1
+	if bottomHeight < 4 {
+		bottomHeight = 4
+		topHeight = panelHeight - bottomHeight - 1
+	}
+	weeks := renderWeekViewport(m.weekViewportStart, m.selected, filteredEvents(m.data.Events, m.calendarVisibility), width-2, max(3, topHeight-2), m.weekStart(), m.styles)
+	calPane := m.renderCalendarListPane(width-2, bottomHeight)
+	divider := m.styles.Subtle.Render(strings.Repeat("-", max(8, width-2)))
+	panel := lipgloss.JoinVertical(lipgloss.Left, m.styles.PanelTitle.Render("Calendar"), weeks, divider, calPane)
 	return m.styles.Sidebar.Width(width).Height(panelHeight).MaxHeight(panelHeight).Render(panel)
 }
 
@@ -261,7 +272,7 @@ func (m Model) renderMainPanel(width int) string {
 		}
 	}
 
-	rendered := renderAgendaFromEvents(events, width-2, topHeight, m.cfg.TimeFormat, m.styles, m.eventCursor, m.eventListOffset, m.focusMain || m.focusDetails)
+	rendered := renderAgendaFromEvents(events, width-2, topHeight, m.cfg.TimeFormat, m.styles, m.eventCursor, m.eventListOffset, true)
 	top := lipgloss.NewStyle().Height(topHeight).MaxHeight(topHeight).Render(rendered.Text)
 	detail := m.renderEventDetailsPane(width-2, bottomHeight)
 	header := m.styles.PanelTitle.Render(fmt.Sprintf("Agenda from %s", m.agendaStart.Format("Mon Jan 2, 2006")))
@@ -353,15 +364,34 @@ func (m *Model) moveEventCursor(delta int) {
 	m.ensureEventCursorVisible()
 }
 
-func (m Model) renderCalendarDialog() string {
-	lines := []string{m.styles.Title.Render("Calendars"), m.styles.Subtle.Render("j/k move, space toggle, esc close"), ""}
-	for i, key := range m.calendarOrder {
+func (m Model) renderCalendarListPane(width, height int) string {
+	if height < 3 {
+		height = 3
+	}
+	if len(m.calendarOrder) == 0 {
+		return lipgloss.NewStyle().Width(width).Height(height).Render(m.styles.Subtle.Render("No calendars"))
+	}
+	start := m.calendarOffset
+	if start < 0 {
+		start = 0
+	}
+	if start >= len(m.calendarOrder) {
+		start = len(m.calendarOrder) - 1
+	}
+	visible := max(1, height-1)
+	end := start + visible
+	if end > len(m.calendarOrder) {
+		end = len(m.calendarOrder)
+	}
+	lines := []string{m.styles.PanelTitle.Render("Calendars")}
+	for i := start; i < end; i++ {
+		key := m.calendarOrder[i]
 		cal := m.calendarByKey(key)
 		if cal == nil {
 			continue
 		}
 		prefix := "  "
-		if i == m.dialogCursor {
+		if m.focusCalendarPane && i == m.calendarCursor {
 			prefix = "> "
 		}
 		state := "[ ]"
@@ -372,19 +402,13 @@ func (m Model) renderCalendarDialog() string {
 		if name == "" {
 			name = cal.Name
 		}
-		line := fmt.Sprintf("%s%s %s", prefix, state, name)
+		line := fmt.Sprintf("%s%s %s", prefix, state, truncate(name, max(4, width-8)))
 		if cal.Color != "" {
 			line = styleForColor(m.styles.CalendarItem, cal.Color).Render(line)
 		}
 		lines = append(lines, line)
 	}
-	return lipgloss.NewStyle().
-		Width(max(40, m.width/3)).
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("117")).
-		Padding(1, 2).
-		Background(lipgloss.Color("236")).
-		Render(strings.Join(lines, "\n"))
+	return lipgloss.NewStyle().Width(width).Height(height).MaxHeight(height).Render(strings.Join(lines, "\n"))
 }
 
 func (m *Model) scrollForSelection() {
@@ -416,7 +440,12 @@ func (m Model) monthListHeightBudget() int {
 	if m.height <= 0 {
 		return 30
 	}
-	budget := m.height - 10
+	panelHeight := m.height - 6
+	if panelHeight < 8 {
+		panelHeight = 8
+	}
+	topHeight := panelHeight * 2 / 3
+	budget := topHeight - 2
 	if budget < 8 {
 		budget = 8
 	}
@@ -515,6 +544,58 @@ func (m Model) weekStart() time.Weekday {
 		return time.Monday
 	}
 	return m.cfg.WeekStart()
+}
+
+func (m *Model) moveCalendarCursor(delta int) {
+	if len(m.calendarOrder) == 0 {
+		m.calendarCursor = 0
+		m.calendarOffset = 0
+		return
+	}
+	m.calendarCursor += delta
+	if m.calendarCursor < 0 {
+		m.calendarCursor = 0
+	}
+	if m.calendarCursor >= len(m.calendarOrder) {
+		m.calendarCursor = len(m.calendarOrder) - 1
+	}
+}
+
+func (m *Model) ensureCalendarCursorVisible(height int) {
+	if len(m.calendarOrder) == 0 {
+		m.calendarCursor = 0
+		m.calendarOffset = 0
+		return
+	}
+	if m.calendarCursor < 0 {
+		m.calendarCursor = 0
+	}
+	if m.calendarCursor >= len(m.calendarOrder) {
+		m.calendarCursor = len(m.calendarOrder) - 1
+	}
+	visible := max(1, height-1)
+	if m.calendarOffset < 0 {
+		m.calendarOffset = 0
+	}
+	if m.calendarCursor < m.calendarOffset {
+		m.calendarOffset = m.calendarCursor
+	}
+	if m.calendarCursor >= m.calendarOffset+visible {
+		m.calendarOffset = m.calendarCursor - visible + 1
+	}
+}
+
+func (m Model) calendarPaneHeight() int {
+	panelHeight := m.height - 6
+	if panelHeight < 8 {
+		panelHeight = 8
+	}
+	topHeight := panelHeight * 2 / 3
+	bottom := panelHeight - topHeight - 1
+	if bottom < 4 {
+		bottom = 4
+	}
+	return bottom
 }
 
 func (m *Model) ensureEventSelectionValid() {
