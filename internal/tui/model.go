@@ -394,18 +394,18 @@ func (m Model) renderCalendarListPane(width, height int) string {
 		if m.focusCalendarPane && i == m.calendarCursor {
 			prefix = "> "
 		}
-		state := "[ ]"
+		stateIcon := ""
 		if m.calendarVisibility[key] {
-			state = "[x]"
+			stateIcon = ""
+		}
+		if cal.Color != "" {
+			stateIcon = styleForColor(m.styles.CalendarItem, cal.Color).Render(stateIcon)
 		}
 		name := cal.DisplayName
 		if name == "" {
 			name = cal.Name
 		}
-		line := fmt.Sprintf("%s%s %s", prefix, state, truncate(name, max(4, width-8)))
-		if cal.Color != "" {
-			line = styleForColor(m.styles.CalendarItem, cal.Color).Render(line)
-		}
+		line := fmt.Sprintf("%s%s %s", prefix, stateIcon, truncate(name, max(4, width-8)))
 		lines = append(lines, line)
 	}
 	return lipgloss.NewStyle().Width(width).Height(height).MaxHeight(height).Render(strings.Join(lines, "\n"))

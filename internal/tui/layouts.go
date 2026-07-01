@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -44,6 +45,18 @@ func renderWeekRow(weekStartDate, selected time.Time, events []calendar.Event, w
 	_ = weekStart
 	parts := make([]string, 0, 7)
 	eventColorByDay := map[string]string{}
+	now := time.Now()
+	for _, ev := range events {
+		k := dayStart(ev.Start).Format("2006-01-02")
+		if strings.TrimSpace(ev.Color) == "" {
+			continue
+		}
+		if ev.Start.After(now) || (ev.Start.Before(now) && ev.End.After(now)) {
+			if eventColorByDay[k] == "" {
+				eventColorByDay[k] = ev.Color
+			}
+		}
+	}
 	for _, ev := range events {
 		k := dayStart(ev.Start).Format("2006-01-02")
 		if eventColorByDay[k] == "" && strings.TrimSpace(ev.Color) != "" {
@@ -157,10 +170,11 @@ func renderAgendaFromEvents(filtered []calendar.Event, width, maxLines int, time
 				break
 			}
 			line := ""
+			icon := styleForColor(styles.Event, ev.Color).Render("")
 			if ev.AllDay {
-				line = fmt.Sprintf("  all-day  %s", ev.Summary)
+				line = fmt.Sprintf("  %s all-day  %s", icon, ev.Summary)
 			} else {
-				line = fmt.Sprintf("  %s-%s  %s", ev.Start.Format(timeFmt), ev.End.Format(timeFmt), ev.Summary)
+				line = fmt.Sprintf("  %s %s-%s  %s", icon, ev.Start.Format(timeFmt), ev.End.Format(timeFmt), ev.Summary)
 			}
 			styled := styleForColor(styles.Event, ev.Color).Render(truncate(line, max(10, width-1)))
 			if highlight && eventIndex == eventCursor {
@@ -208,12 +222,53 @@ func agendaEventsFromDay(startDay time.Time, events []calendar.Event) []calendar
 	return filtered
 }
 
-
 func styleForColor(base lipgloss.Style, color string) lipgloss.Style {
-	if strings.TrimSpace(color) == "" {
+	normalized := normalizeColor(color)
+	if normalized == "" {
 		return base
 	}
-	return base.Foreground(lipgloss.Color(color))
+	return base.Foreground(lipgloss.Color(normalized))
+}
+
+func normalizeColor(color string) string {
+	c := strings.TrimSpace(color)
+	c = strings.Trim(c, "\"'")
+	if c == "" {
+		return ""
+	}
+
+	if strings.HasPrefix(c, "#") {
+		if len(c) == 9 {
+			return c[:7]
+		}
+		return c
+	}
+
+	if strings.HasPrefix(strings.ToLower(c), "0x") {
+		h := c[2:]
+		if len(h) >= 6 {
+			return "#" + h[:6]
+		}
+	}
+
+	lc := strings.ToLower(c)
+	if strings.HasPrefix(lc, "rgb(") && strings.HasSuffix(c, ")") {
+		inner := c[4 : len(c)-1]
+		parts := strings.Split(inner, ",")
+		if len(parts) == 3 {
+			vals := [3]int{}
+			for i := 0; i < 3; i++ {
+				n, err := strconv.Atoi(strings.TrimSpace(parts[i]))
+				if err != nil || n < 0 || n > 255 {
+					return ""
+				}
+				vals[i] = n
+			}
+			return fmt.Sprintf("#%02x%02x%02x", vals[0], vals[1], vals[2])
+		}
+	}
+
+	return c
 }
 
 func truncate(s string, n int) string {
