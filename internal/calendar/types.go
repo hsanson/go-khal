@@ -11,6 +11,7 @@ type Event struct {
 	Start       time.Time
 	End         time.Time
 	AllDay      bool
+	Kind        string
 	Recurring   bool
 	HasAlarm    bool
 	Source      string
@@ -21,6 +22,14 @@ type Event struct {
 	Hidden      bool
 	FilePath    string
 }
+
+const (
+	EventKindBirthday    = "birthday"
+	EventKindAnniversary = "anniversary"
+
+	SpecialSourceBirthdays   = "__special__"
+	SpecialCalendarBirthdays = "birthdays-anniversaries"
+)
 
 type Todo struct {
 	UID         string

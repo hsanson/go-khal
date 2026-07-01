@@ -36,6 +36,8 @@ func (s *Store) Load() (Dataset, error) {
 	}
 
 	var out Dataset
+	birthdayEvents := make([]Event, 0, 64)
+	hasAddressBook := false
 	for _, src := range s.config.Sources {
 		if src.Path == "" {
 			continue
@@ -57,8 +59,23 @@ func (s *Store) Load() (Dataset, error) {
 		}
 
 		if src.AddressBook != "" {
-			_ = s.loadAddressBook(src.AddressBook)
+			hasAddressBook = true
+			events, err := s.loadAddressBook(src.AddressBook, src.Name)
+			if err == nil {
+				birthdayEvents = append(birthdayEvents, events...)
+			}
 		}
+	}
+	if hasAddressBook {
+		out.Events = append(out.Events, birthdayEvents...)
+		out.Calendars = append(out.Calendars, Calendar{
+			Source:      SpecialSourceBirthdays,
+			Name:        SpecialCalendarBirthdays,
+			Path:        "virtual://birthdays-anniversaries",
+			DisplayName: "Birthdays & Aniversaries",
+			Color:       "#d49e00",
+			Hidden:      false,
+		})
 	}
 
 	sort.Slice(out.Calendars, func(i, j int) bool {
@@ -472,44 +489,230 @@ func componentToTodo(comp *ical.Component, src calendarSource, filePath string) 
 	}, true
 }
 
-func (s *Store) loadAddressBook(path string) error {
-	entries, err := os.ReadDir(path)
+func (s *Store) loadAddressBook(path string, sourceName string) ([]Event, error) {
+	out := make([]Event, 0, 128)
+	err := filepath.WalkDir(path, func(fullPath string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return nil
+		}
+		if d.IsDir() {
+			return nil
+		}
+		if strings.ToLower(filepath.Ext(d.Name())) != ".vcf" {
+			return nil
+		}
+		events, err := readVCardFile(fullPath, sourceName, s.config)
+		if err != nil {
+			return nil
+		}
+		out = append(out, events...)
+		return nil
+	})
 	if err != nil {
-		return err
+		return nil, err
 	}
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-		if strings.ToLower(filepath.Ext(entry.Name())) != ".vcf" {
-			continue
-		}
-		fullPath := filepath.Join(path, entry.Name())
-		if err := readVCardFile(fullPath); err != nil {
-			continue
-		}
-	}
-	return nil
+	return out, nil
 }
 
-func readVCardFile(path string) error {
+func readVCardFile(path string, sourceName string, cfg *config.Config) ([]Event, error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer f.Close()
 
 	dec := vcard.NewDecoder(f)
+	out := make([]Event, 0, 8)
 	for {
-		_, err := dec.Decode()
+		card, err := dec.Decode()
 		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {
-			return err
+			return nil, err
+		}
+		out = append(out, birthdayEventsFromCard(card, sourceName, path, cfg)...)
+	}
+	return out, nil
+}
+
+func birthdayEventsFromCard(card vcard.Card, sourceName string, filePath string, cfg *config.Config) []Event {
+	name := strings.TrimSpace(card.Value(vcard.FieldFormattedName))
+	if name == "" {
+		if n := card.Name(); n != nil {
+			joined := strings.TrimSpace(strings.Join([]string{n.GivenName, n.AdditionalName, n.FamilyName}, " "))
+			if joined != "" {
+				name = joined
+			}
 		}
 	}
-	return nil
+	if name == "" {
+		name = "Contact"
+	}
+
+	out := make([]Event, 0, 16)
+	for i, v := range card.Values(vcard.FieldBirthday) {
+		out = append(out, recurringAllDayFromDateValue(v, EventKindBirthday, name, sourceName, filePath, i, cfg)...)
+	}
+	annValues := append([]string{}, card.Values(vcard.FieldAnniversary)...)
+	annValues = append(annValues, card.Values("X-ANNIVERSARY")...)
+	for i, v := range annValues {
+		out = append(out, recurringAllDayFromDateValue(v, EventKindAnniversary, name, sourceName, filePath, i, cfg)...)
+	}
+	return out
+}
+
+func recurringAllDayFromDateValue(raw string, kind string, contactName string, sourceName string, filePath string, index int, cfg *config.Config) []Event {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+
+	t, hasYear, ok := parseVCardDate(raw)
+	if !ok {
+		return nil
+	}
+
+	summary := contactName + " Birthday"
+	if kind == EventKindAnniversary {
+		summary = contactName + " Anniversary"
+	}
+
+	uidPrefix := "bday"
+	if kind == EventKindAnniversary {
+		uidPrefix = "anni"
+	}
+	uidBase := fmt.Sprintf("%s:%s:%s:%d:%02d%02d", uidPrefix, sourceName, filePath, index, t.Month(), t.Day())
+	from, to := birthdayWindow(time.Now(), cfg)
+	events := makeBirthdayInstances(uidBase, summary, kind, filePath, t.Month(), t.Day(), hasYear, t.Year(), from, to)
+	return events
+}
+
+func parseVCardDate(v string) (time.Time, bool, bool) {
+	v = strings.TrimSpace(v)
+	if len(v) >= 10 {
+		if t, err := time.Parse("2006-01-02", v[:10]); err == nil {
+			return t, true, true
+		}
+	}
+	if len(v) == 8 {
+		if t, err := time.Parse("20060102", v); err == nil {
+			return t, true, true
+		}
+	}
+	if len(v) == 5 && v[0] == '-' && v[1] == '-' {
+		if t, err := time.Parse("--01-02", v); err == nil {
+			return t, false, true
+		}
+	}
+	if len(v) == 6 && strings.HasPrefix(v, "--") {
+		if t, err := time.Parse("--0102", v); err == nil {
+			return t, false, true
+		}
+	}
+	if len(v) == 4 {
+		if t, err := time.Parse("0102", v); err == nil {
+			return t, false, true
+		}
+	}
+	return time.Time{}, false, false
+}
+
+func birthdayWindow(now time.Time, cfg *config.Config) (time.Time, time.Time) {
+	lookbackMonths := 12
+	lookaheadMonths := 24
+	if cfg != nil {
+		if cfg.RecurrenceLookbackMonths > 0 {
+			lookbackMonths = cfg.RecurrenceLookbackMonths
+		}
+		if cfg.RecurrenceLookaheadMonths > 0 {
+			lookaheadMonths = cfg.RecurrenceLookaheadMonths
+		}
+	}
+	if lookbackMonths > 120 {
+		lookbackMonths = 120
+	}
+	if lookaheadMonths > 120 {
+		lookaheadMonths = 120
+	}
+	from := now.AddDate(0, -lookbackMonths, 0)
+	to := now.AddDate(0, lookaheadMonths, 0)
+	return from, to
+}
+
+func makeBirthdayInstances(uidBase, summary, kind, filePath string, month time.Month, day int, hasYear bool, originalYear int, from, to time.Time) []Event {
+	out := make([]Event, 0, 8)
+	from = time.Date(from.Year(), from.Month(), from.Day(), 0, 0, 0, 0, time.Local)
+	to = time.Date(to.Year(), to.Month(), to.Day(), 0, 0, 0, 0, time.Local)
+
+	for year := from.Year() - 1; year <= to.Year()+1; year++ {
+		start := time.Date(year, month, day, 0, 0, 0, 0, time.Local)
+		if start.Month() != month || start.Day() != day {
+			continue
+		}
+		if start.Before(from) || start.After(to) {
+			continue
+		}
+
+		desc := "Generated from vCard"
+		if hasYear && originalYear > 0 {
+			years := year - originalYear
+			if years >= 0 {
+				desc = fmt.Sprintf("Generated from vCard (%d years)", years)
+			}
+		}
+
+		eventSummary := summary
+		if hasYear && originalYear > 0 {
+			years := year - originalYear
+			if years > 0 {
+				if kind == EventKindBirthday {
+					eventSummary = strings.TrimSuffix(summary, " Birthday") + " " + ordinal(years) + " Birthday"
+				} else if kind == EventKindAnniversary {
+					eventSummary = strings.TrimSuffix(summary, " Anniversary") + " " + ordinal(years) + " Anniversary"
+				}
+			}
+		}
+
+		out = append(out, Event{
+			UID:         fmt.Sprintf("%s:%d", uidBase, year),
+			Summary:     eventSummary,
+			Description: desc,
+			Start:       start,
+			End:         start.Add(24 * time.Hour),
+			AllDay:      true,
+			Kind:        kind,
+			Recurring:   true,
+			Source:      SpecialSourceBirthdays,
+			Calendar:    SpecialCalendarBirthdays,
+			DisplayName: "Birthdays & Aniversaries",
+			Color:       "#d49e00",
+			Hidden:      false,
+			FilePath:    filePath,
+		})
+	}
+
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].Start.Before(out[j].Start)
+	})
+	return out
+}
+
+func ordinal(n int) string {
+	mod10 := n % 10
+	mod100 := n % 100
+	suffix := "th"
+	if mod100 < 11 || mod100 > 13 {
+		switch mod10 {
+		case 1:
+			suffix = "st"
+		case 2:
+			suffix = "nd"
+		case 3:
+			suffix = "rd"
+		}
+	}
+	return fmt.Sprintf("%d%s", n, suffix)
 }
 
 func (s *Store) CreateTodo(sourceName, calendarName string, t Todo) error {

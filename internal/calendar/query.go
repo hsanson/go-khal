@@ -5,7 +5,7 @@ import "time"
 func EventsInRange(events []Event, start, end time.Time) []Event {
 	out := make([]Event, 0, len(events))
 	for _, ev := range events {
-		if ev.End.Before(start) || ev.Start.After(end) {
+		if !ev.End.After(start) || !ev.Start.Before(end) {
 			continue
 		}
 		out = append(out, ev)
@@ -15,7 +15,7 @@ func EventsInRange(events []Event, start, end time.Time) []Event {
 
 func EventsOnDay(events []Event, day time.Time) []Event {
 	dayStart := time.Date(day.Year(), day.Month(), day.Day(), 0, 0, 0, 0, day.Location())
-	dayEnd := dayStart.Add(24*time.Hour - time.Nanosecond)
+	dayEnd := dayStart.Add(24 * time.Hour)
 	return EventsInRange(events, dayStart, dayEnd)
 }
 

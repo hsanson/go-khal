@@ -43,6 +43,15 @@ func NewModel(cfg *config.Config, data calendar.Dataset) Model {
 		order = append(order, k)
 	}
 	sort.Strings(order)
+	birthdayKey := calendarKey(calendar.SpecialSourceBirthdays, calendar.SpecialCalendarBirthdays)
+	for i, k := range order {
+		if k != birthdayKey {
+			continue
+		}
+		copy(order[1:i+1], order[0:i])
+		order[0] = birthdayKey
+		break
+	}
 
 	now := time.Now()
 	start := calendar.StartOfWeek(now, cfg.WeekStart())

@@ -148,7 +148,9 @@ func renderAgendaFromItems(items []AgendaListItem, width, maxLines int, timeFmt 
 			ev := *item.Event
 			glyph := iconForEvent(ev)
 			icon := styleForColor(styles.Event, ev.Color).Render(glyph)
-			if ev.AllDay {
+			if ev.AllDay && (ev.Kind == calendar.EventKindBirthday || ev.Kind == calendar.EventKindAnniversary) {
+				line = fmt.Sprintf("  %s %s", icon, ev.Summary)
+			} else if ev.AllDay {
 				line = fmt.Sprintf("  %s all-day  %s", icon, ev.Summary)
 			} else {
 				line = fmt.Sprintf("  %s %s-%s  %s", icon, ev.Start.Format(timeFmt), ev.End.Format(timeFmt), ev.Summary)
@@ -420,7 +422,11 @@ func renderAgendaFromEvents(filtered []calendar.Event, width, maxLines int, time
 			glyph := iconForEvent(ev)
 			icon := styleForColor(styles.Event, ev.Color).Render(glyph)
 			if ev.AllDay {
-				line = fmt.Sprintf("  %s all-day  %s", icon, ev.Summary)
+				if ev.Kind == calendar.EventKindBirthday || ev.Kind == calendar.EventKindAnniversary {
+					line = fmt.Sprintf("  %s %s", icon, ev.Summary)
+				} else {
+					line = fmt.Sprintf("  %s all-day  %s", icon, ev.Summary)
+				}
 			} else {
 				line = fmt.Sprintf("  %s %s-%s  %s", icon, ev.Start.Format(timeFmt), ev.End.Format(timeFmt), ev.Summary)
 			}
@@ -530,6 +536,12 @@ func formatTimeBoundary(t time.Time, day time.Time, timeFmt string) string {
 }
 
 func iconForEvent(ev calendar.Event) string {
+	if ev.Kind == calendar.EventKindBirthday {
+		return ""
+	}
+	if ev.Kind == calendar.EventKindAnniversary {
+		return ""
+	}
 	if ev.Recurring {
 		return "󰑖"
 	}
