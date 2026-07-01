@@ -68,58 +68,6 @@ func RenderDayTimeline(events []calendar.Event, day time.Time, timeFmt string, s
 	return strings.TrimRight(b.String(), "\n")
 }
 
-func RenderWeekTimeline(events []calendar.Event, weekStart time.Time, timeFmt string, styles Styles) string {
-	var sections []string
-	for i := 0; i < 7; i++ {
-		day := weekStart.AddDate(0, 0, i)
-		sections = append(sections, RenderDayTimeline(events, day, timeFmt, styles))
-	}
-	return strings.Join(sections, "\n\n")
-}
-
-func RenderMonth(events []calendar.Event, month time.Time, styles Styles) string {
-	first := time.Date(month.Year(), month.Month(), 1, 0, 0, 0, 0, month.Location())
-	last := first.AddDate(0, 1, -1)
-
-	counts := map[int]int{}
-	for _, ev := range events {
-		if ev.Start.Year() == month.Year() && ev.Start.Month() == month.Month() {
-			counts[ev.Start.Day()]++
-		}
-	}
-
-	var b strings.Builder
-	b.WriteString(styles.Title.Render(first.Format("January 2006")))
-	b.WriteString("\nMo Tu We Th Fr Sa Su\n")
-
-	offset := (int(first.Weekday()) + 6) % 7
-	for i := 0; i < offset; i++ {
-		b.WriteString("   ")
-	}
-
-	for day := 1; day <= last.Day(); day++ {
-		mark := ""
-		if counts[day] > 0 {
-			mark = "*"
-		}
-		b.WriteString(fmt.Sprintf("%2d%s", day, mark))
-		if (offset+day)%7 == 0 {
-			b.WriteString("\n")
-		} else {
-			b.WriteString(" ")
-		}
-	}
-	return strings.TrimRight(b.String(), "\n")
-}
-
-func RenderYear(events []calendar.Event, year int, styles Styles) string {
-	var months []string
-	for m := time.January; m <= time.December; m++ {
-		months = append(months, RenderMonth(events, time.Date(year, m, 1, 0, 0, 0, 0, time.Local), styles))
-	}
-	return strings.Join(months, "\n\n")
-}
-
 func RenderTodos(todos []calendar.Todo, styles Styles) string {
 	var b strings.Builder
 	b.WriteString(styles.Title.Render("VTODO"))

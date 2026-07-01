@@ -13,6 +13,9 @@ var cfgPath string
 var rootCmd = &cobra.Command{
 	Use:   "go-khal",
 	Short: "Terminal calendar and todo manager for vdirsyncer data",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runTUI()
+	},
 }
 
 func Execute() {
@@ -26,10 +29,6 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&cfgPath, "config", config.DefaultPath(), "path to config file")
 	rootCmd.AddCommand(newTUICommand())
 	rootCmd.AddCommand(newAgendaCommand())
-	rootCmd.AddCommand(newDayCommand())
-	rootCmd.AddCommand(newWeekCommand())
-	rootCmd.AddCommand(newMonthCommand())
-	rootCmd.AddCommand(newYearCommand())
 	rootCmd.AddCommand(newTodoCommand())
 	rootCmd.AddCommand(newConfigCommand())
 }
