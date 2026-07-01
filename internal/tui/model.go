@@ -26,7 +26,9 @@ type Model struct {
 	dialogCursor       int
 	focusMain          bool
 	focusDetails       bool
+	agendaStart        time.Time
 	eventCursor        int
+	eventListOffset    int
 	detailScroll       int
 }
 
@@ -47,6 +49,7 @@ func NewModel(cfg *config.Config, data calendar.Dataset) Model {
 		data:               data,
 		styles:             DefaultStyles(),
 		selected:           now,
+		agendaStart:        dayStart(now),
 		weekViewportStart:  start,
 		calendarVisibility: vis,
 		calendarOrder:      order,
@@ -78,7 +81,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if m.showCalendar {
-			return m.updateCalendarDialog(msg)
+			updatedModel, cmd := m.updateCalendarDialog(msg)
+			updated := updatedModel.(Model)
+			updated.ensureEventSelectionValid()
+			return updated, cmd
 		}
 		switch msg.String() {
 		case "q", "ctrl+c":
@@ -91,6 +97,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.moveEventCursor(1)
 			} else {
 				m.selected = m.selected.AddDate(0, 0, 7)
+				m.agendaStart = dayStart(m.selected)
+				m.eventCursor = 0
+				m.eventListOffset = 0
 				m.scrollForSelection()
 			}
 		case "k", "up":
@@ -98,6 +107,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.moveEventCursor(-1)
 			} else {
 				m.selected = m.selected.AddDate(0, 0, -7)
+				m.agendaStart = dayStart(m.selected)
+				m.eventCursor = 0
+				m.eventListOffset = 0
 				m.scrollForSelection()
 			}
 		case "h", "left":
@@ -106,34 +118,49 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.focusDetails = false
 			} else {
 				m.selected = m.selected.AddDate(0, 0, -1)
+				m.agendaStart = dayStart(m.selected)
+				m.eventCursor = 0
+				m.eventListOffset = 0
 				m.scrollForSelection()
 			}
 		case "l", "right":
 			if !m.focusMain {
 				m.selected = m.selected.AddDate(0, 0, 1)
+				m.agendaStart = dayStart(m.selected)
+				m.eventCursor = 0
+				m.eventListOffset = 0
 				m.scrollForSelection()
 			}
 		case "p":
 			m.selected = m.selected.AddDate(0, 0, -1)
+			m.agendaStart = dayStart(m.selected)
+			m.eventCursor = 0
+			m.eventListOffset = 0
 			m.scrollForSelection()
 		case "n":
 			m.selected = m.selected.AddDate(0, 0, 1)
+			m.agendaStart = dayStart(m.selected)
+			m.eventCursor = 0
+			m.eventListOffset = 0
 			m.scrollForSelection()
 		case "t":
 			now := time.Now().In(m.selected.Location())
 			m.selected = now
+			m.agendaStart = dayStart(now)
 			m.weekViewportStart = calendar.StartOfWeek(now, m.weekStart())
 			m.focusMain = false
 			m.focusDetails = false
 			m.eventCursor = 0
+			m.eventListOffset = 0
 			m.detailScroll = 0
 		case "enter":
 			if !m.focusMain {
 				m.focusMain = true
 				m.focusDetails = false
 				m.eventCursor = 0
+				m.eventListOffset = 0
 			} else {
-				events := agendaEventsFromDay(dayStart(m.selected), filteredEvents(m.data.Events, m.calendarVisibility))
+				events := m.agendaEvents()
 				if len(events) > 0 {
 					m.focusDetails = true
 					m.detailScroll = 0
@@ -141,13 +168,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case " ":
 			if m.focusMain {
-				events := agendaEventsFromDay(dayStart(m.selected), filteredEvents(m.data.Events, m.calendarVisibility))
+				events := m.agendaEvents()
 				if len(events) > 0 {
 					m.focusDetails = true
 					m.detailScroll = 0
 				}
 			}
 		}
+		m.ensureEventSelectionValid()
 	}
 	return m, nil
 }
@@ -211,8 +239,7 @@ func (m Model) renderLeftPanel(width int) string {
 }
 
 func (m Model) renderMainPanel(width int) string {
-	events := filteredEvents(m.data.Events, m.calendarVisibility)
-	day := dayStart(m.selected)
+	events := m.agendaEvents()
 	panelHeight := m.height - 6
 	if panelHeight < 10 {
 		panelHeight = 10
@@ -234,16 +261,10 @@ func (m Model) renderMainPanel(width int) string {
 		}
 	}
 
-	rendered := renderAgendaFromDay(day, events, width-2, topHeight, m.cfg.TimeFormat, m.styles, m.eventCursor, m.focusMain || m.focusDetails)
-	if m.eventCursor >= rendered.EventCount && rendered.EventCount > 0 {
-		m.eventCursor = rendered.EventCount - 1
-	}
-	if rendered.EventCount == 0 {
-		m.eventCursor = 0
-	}
+	rendered := renderAgendaFromEvents(events, width-2, topHeight, m.cfg.TimeFormat, m.styles, m.eventCursor, m.eventListOffset, m.focusMain || m.focusDetails)
 	top := lipgloss.NewStyle().Height(topHeight).MaxHeight(topHeight).Render(rendered.Text)
 	detail := m.renderEventDetailsPane(width-2, bottomHeight)
-	header := m.styles.PanelTitle.Render(fmt.Sprintf("Agenda from %s", m.selected.Format("Mon Jan 2, 2006")))
+	header := m.styles.PanelTitle.Render(fmt.Sprintf("Agenda from %s", m.agendaStart.Format("Mon Jan 2, 2006")))
 	if m.focusMain {
 		header += m.styles.Subtle.Render(" (focus)")
 	} else if m.focusDetails {
@@ -255,7 +276,7 @@ func (m Model) renderMainPanel(width int) string {
 }
 
 func (m Model) renderEventDetailsPane(width, height int) string {
-	events := agendaEventsFromDay(dayStart(m.selected), filteredEvents(m.data.Events, m.calendarVisibility))
+	events := m.agendaEvents()
 	if len(events) == 0 {
 		return lipgloss.NewStyle().Width(width).Height(height).Render(m.styles.Subtle.Render("No event selected"))
 	}
@@ -312,9 +333,10 @@ func (m Model) renderEventDetailsPane(width, height int) string {
 }
 
 func (m *Model) moveEventCursor(delta int) {
-	events := agendaEventsFromDay(dayStart(m.selected), filteredEvents(m.data.Events, m.calendarVisibility))
+	events := m.agendaEvents()
 	if len(events) == 0 {
 		m.eventCursor = 0
+		m.eventListOffset = 0
 		return
 	}
 	m.eventCursor += delta
@@ -324,6 +346,11 @@ func (m *Model) moveEventCursor(delta int) {
 	if m.eventCursor >= len(events) {
 		m.eventCursor = len(events) - 1
 	}
+
+	sel := events[m.eventCursor]
+	m.selected = dayStart(sel.Start)
+	m.scrollForSelection()
+	m.ensureEventCursorVisible()
 }
 
 func (m Model) renderCalendarDialog() string {
@@ -488,6 +515,85 @@ func (m Model) weekStart() time.Weekday {
 		return time.Monday
 	}
 	return m.cfg.WeekStart()
+}
+
+func (m *Model) ensureEventSelectionValid() {
+	events := m.agendaEvents()
+	if len(events) == 0 {
+		m.eventCursor = 0
+		m.eventListOffset = 0
+		return
+	}
+	if m.eventCursor < 0 {
+		m.eventCursor = 0
+	}
+	if m.eventCursor >= len(events) {
+		m.eventCursor = len(events) - 1
+	}
+	m.ensureEventCursorVisible()
+}
+
+func (m *Model) ensureEventCursorVisible() {
+	events := m.agendaEvents()
+	if len(events) == 0 {
+		m.eventListOffset = 0
+		return
+	}
+	if m.eventListOffset < 0 {
+		m.eventListOffset = 0
+	}
+	if m.eventListOffset >= len(events) {
+		m.eventListOffset = len(events) - 1
+	}
+	if m.eventCursor < m.eventListOffset {
+		m.eventListOffset = m.eventCursor
+	}
+	maxLines := m.eventListLines()
+	rendered := renderAgendaFromEvents(events, m.mainInnerWidth(), maxLines, m.cfg.TimeFormat, m.styles, m.eventCursor, m.eventListOffset, true)
+	if rendered.LastVisibleEventIndex >= 0 && m.eventCursor <= rendered.LastVisibleEventIndex {
+		return
+	}
+	m.eventListOffset = m.eventCursor
+	for m.eventListOffset > 0 {
+		r := renderAgendaFromEvents(events, m.mainInnerWidth(), maxLines, m.cfg.TimeFormat, m.styles, m.eventCursor, m.eventListOffset-1, true)
+		if r.LastVisibleEventIndex < m.eventCursor {
+			break
+		}
+		m.eventListOffset--
+	}
+}
+
+func (m Model) agendaEvents() []calendar.Event {
+	start := m.agendaStart
+	if start.IsZero() {
+		start = dayStart(m.selected)
+	}
+	return agendaEventsFromDay(start, filteredEvents(m.data.Events, m.calendarVisibility))
+}
+
+func (m Model) eventListLines() int {
+	panelHeight := m.height - 6
+	if panelHeight < 10 {
+		panelHeight = 10
+	}
+	available := panelHeight - 4
+	if available < 8 {
+		available = 8
+	}
+	topHeight := available * 3 / 5
+	if topHeight < 6 {
+		topHeight = 6
+	}
+	return topHeight
+}
+
+func (m Model) mainInnerWidth() int {
+	leftWidth := m.sidebarWidth()
+	rightWidth := max(50, m.width-leftWidth-5)
+	if rightWidth < 8 {
+		return 8
+	}
+	return rightWidth - 2
 }
 
 func wrapLine(s string, maxLen int) []string {

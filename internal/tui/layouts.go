@@ -107,19 +107,29 @@ func renderWeekRow(weekStartDate, selected time.Time, events []calendar.Event, w
 }
 
 type agendaRender struct {
-	Text       string
-	EventCount int
+	Text                  string
+	EventCount            int
+	LastVisibleEventIndex int
 }
 
 func renderAgendaFromDay(selected time.Time, events []calendar.Event, width, maxLines int, timeFmt string, styles Styles, eventCursor int, highlight bool) agendaRender {
+	filtered := agendaEventsFromDay(dayStart(selected), events)
+	return renderAgendaFromEvents(filtered, width, maxLines, timeFmt, styles, eventCursor, 0, highlight)
+}
+
+func renderAgendaFromEvents(filtered []calendar.Event, width, maxLines int, timeFmt string, styles Styles, eventCursor int, eventOffset int, highlight bool) agendaRender {
 	if timeFmt == "" {
 		timeFmt = "15:04"
 	}
 	if maxLines < 6 {
 		maxLines = 6
 	}
-
-	filtered := agendaEventsFromDay(dayStart(selected), events)
+	if eventOffset < 0 {
+		eventOffset = 0
+	}
+	if eventOffset > len(filtered) {
+		eventOffset = len(filtered)
+	}
 
 	grouped := map[string][]calendar.Event{}
 	orderedDays := make([]string, 0, 16)
@@ -134,18 +144,21 @@ func renderAgendaFromDay(selected time.Time, events []calendar.Event, width, max
 	}
 
 	if len(orderedDays) == 0 {
-		return agendaRender{Text: styles.Subtle.Width(width).Render("No upcoming events from selected day"), EventCount: 0}
+		return agendaRender{Text: styles.Subtle.Width(width).Render("No upcoming events from selected day"), EventCount: 0, LastVisibleEventIndex: -1}
 	}
 
 	eventIndex := 0
+	visibleEventIndex := -1
 	lines := make([]string, 0, maxLines)
+	loc := time.Local
+	if len(filtered) > 0 {
+		loc = filtered[0].Start.Location()
+	}
 	for _, k := range orderedDays {
-		day, _ := time.ParseInLocation("2006-01-02", k, selected.Location())
+		day, _ := time.ParseInLocation("2006-01-02", k, loc)
 		if len(lines) >= maxLines {
 			break
 		}
-		lines = append(lines, styles.DayHeader.Render(day.Format("Mon 2006-01-02")))
-
 		dayEvents := grouped[k]
 		allDay := make([]calendar.Event, 0)
 		timed := make([]calendar.Event, 0)
@@ -156,30 +169,50 @@ func renderAgendaFromDay(selected time.Time, events []calendar.Event, width, max
 				timed = append(timed, ev)
 			}
 		}
+		ordered := make([]calendar.Event, 0, len(dayEvents))
+		ordered = append(ordered, allDay...)
+		ordered = append(ordered, timed...)
 
-		for _, ev := range allDay {
+		dayStartIndex := eventIndex
+		dayEndIndex := dayStartIndex + len(ordered) - 1
+		if dayEndIndex < eventOffset {
+			eventIndex += len(ordered)
+			continue
+		}
+
+		if len(lines)+2 > maxLines {
+			break
+		}
+		lines = append(lines, styles.DayHeader.Render(day.Format("Mon 2006-01-02")))
+		renderedAny := false
+
+		for _, ev := range ordered {
+			if eventIndex < eventOffset {
+				eventIndex++
+				continue
+			}
 			if len(lines) >= maxLines {
 				break
 			}
-			line := fmt.Sprintf("  all-day  %s", ev.Summary)
+			line := ""
+			if ev.AllDay {
+				line = fmt.Sprintf("  all-day  %s", ev.Summary)
+			} else {
+				line = fmt.Sprintf("  %s-%s  %s", ev.Start.Format(timeFmt), ev.End.Format(timeFmt), ev.Summary)
+			}
 			styled := styleForColor(styles.Event, ev.Color).Render(truncate(line, max(10, width-1)))
 			if highlight && eventIndex == eventCursor {
 				styled = lipgloss.NewStyle().Background(lipgloss.Color("238")).Render(styled)
 			}
 			lines = append(lines, styled)
+			renderedAny = true
+			visibleEventIndex = eventIndex
 			eventIndex++
 		}
-		for _, ev := range timed {
-			if len(lines) >= maxLines {
-				break
-			}
-			line := fmt.Sprintf("  %s-%s  %s", ev.Start.Format(timeFmt), ev.End.Format(timeFmt), ev.Summary)
-			styled := styleForColor(styles.Event, ev.Color).Render(truncate(line, max(10, width-1)))
-			if highlight && eventIndex == eventCursor {
-				styled = lipgloss.NewStyle().Background(lipgloss.Color("238")).Render(styled)
-			}
-			lines = append(lines, styled)
-			eventIndex++
+
+		if !renderedAny {
+			lines = lines[:len(lines)-1]
+			break
 		}
 		if len(lines) < maxLines {
 			lines = append(lines, "")
@@ -189,7 +222,7 @@ func renderAgendaFromDay(selected time.Time, events []calendar.Event, width, max
 	if len(lines) > maxLines {
 		lines = lines[:maxLines]
 	}
-	return agendaRender{Text: lipgloss.NewStyle().Width(width).MaxHeight(maxLines).Render(strings.Join(lines, "\n")), EventCount: len(filtered)}
+	return agendaRender{Text: lipgloss.NewStyle().Width(width).MaxHeight(maxLines).Render(strings.Join(lines, "\n")), EventCount: len(filtered), LastVisibleEventIndex: visibleEventIndex}
 }
 
 func agendaEventsFromDay(startDay time.Time, events []calendar.Event) []calendar.Event {
