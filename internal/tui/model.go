@@ -314,7 +314,8 @@ func (m Model) View() string {
 	right := m.renderMainPanel(rightWidth)
 
 	root := lipgloss.JoinHorizontal(lipgloss.Top, left, right)
-	base := m.styles.Container.Render(root)
+	legend := m.styles.Subtle.Render("[q] quit  [?] shortcuts")
+	base := m.styles.Container.Render(lipgloss.JoinVertical(lipgloss.Left, legend, "", root))
 	if m.showHelpOverlay {
 		overlay := m.renderHelpOverlay(max(40, m.width*2/3), max(16, m.height*2/3))
 		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, overlay)
@@ -340,7 +341,7 @@ func (m Model) renderLeftPanel(width int) string {
 	calPane := m.renderCalendarListPane(width-2, bottomHeight)
 	divider := m.styles.Subtle.Render(strings.Repeat("-", max(8, width-2)))
 	panel := lipgloss.JoinVertical(lipgloss.Left, m.styles.PanelTitle.Render("Calendar"), weeks, divider, calPane)
-	return m.styles.Sidebar.Width(width).Height(panelHeight).MaxHeight(panelHeight).Render(panel)
+	return m.styles.Sidebar.Width(width).Height(panelHeight).Render(panel)
 }
 
 func (m Model) renderMainPanel(width int) string {
@@ -384,12 +385,12 @@ func (m Model) renderMainPanel(width int) string {
 	}
 	separator := m.styles.Subtle.Render(strings.Repeat("-", max(10, width-2)))
 	content := lipgloss.JoinVertical(lipgloss.Left, header, "", top, separator, detail)
-	return m.styles.MainPanel.Width(width).Height(panelHeight).MaxHeight(panelHeight).Render(content)
+	return m.styles.MainPanel.Width(width).Height(panelHeight).Render(content)
 }
 
 func (m Model) renderEventFormMainPanel(width, panelHeight int) string {
 	if m.eventForm == nil {
-		return m.styles.MainPanel.Width(width).Height(panelHeight).MaxHeight(panelHeight).Render("")
+		return m.styles.MainPanel.Width(width).Height(panelHeight).Render("")
 	}
 	header := m.styles.PanelTitle.Render("Event Form")
 	if m.eventForm.mode == "edit" {
@@ -409,7 +410,7 @@ func (m Model) renderEventFormMainPanel(width, panelHeight int) string {
 		formView = lipgloss.JoinVertical(lipgloss.Left, m.styles.Subtle.Render("Error: "+m.eventForm.errMsg), "", formView)
 	}
 	content := lipgloss.JoinVertical(lipgloss.Left, header, "", formView)
-	return m.styles.MainPanel.Width(width).Height(panelHeight).MaxHeight(panelHeight).Render(content)
+	return m.styles.MainPanel.Width(width).Height(panelHeight).Render(content)
 }
 
 func (m Model) renderEventDetailsPane(width, height int) string {
