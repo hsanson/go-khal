@@ -36,6 +36,7 @@ type Model struct {
 	eventListOffset    int
 	detailScroll       int
 	eventForm          *eventFormState
+	showHelpOverlay    bool
 }
 
 type eventFormState struct {
@@ -99,6 +100,7 @@ func NewModel(cfg *config.Config, data calendar.Dataset, store *calendar.Store) 
 		weekViewportStart:  start,
 		calendarVisibility: vis,
 		calendarOrder:      order,
+		focusMain:          true,
 	}
 	m.ensureEventSelectionValid()
 	m.ensureCalendarCursorVisible(m.calendarPaneHeight())
@@ -114,10 +116,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 		m.scrollForSelection()
 	case tea.KeyMsg:
+		if msg.String() == "?" {
+			m.showHelpOverlay = !m.showHelpOverlay
+			return m, nil
+		}
+		if m.showHelpOverlay {
+			if msg.String() == "q" || msg.String() == "esc" {
+				m.showHelpOverlay = false
+				return m, nil
+			}
+			return m, nil
+		}
+		if msg.String() == "q" || msg.String() == "ctrl+c" {
+			return m, tea.Quit
+		}
+
 		if m.eventForm != nil {
 			switch msg.String() {
-			case "q":
-				return m, tea.Quit
 			case "ctrl+s":
 				if err := m.commitEventForm(); err != nil {
 					m.eventForm.errMsg = err.Error()
@@ -173,17 +188,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		if msg.String() == "c" {
 			m.focusCalendarPane = true
-			m.focusMain = false
-			m.focusDetails = false
 			m.ensureCalendarCursorVisible(m.calendarPaneHeight())
 			m.ensureEventSelectionValid()
 			return m, nil
 		}
 		if m.focusDetails {
 			switch msg.String() {
-			case "q":
-				return m, tea.Quit
-			case "esc", "h", "enter", " ":
+			case "esc", "enter", " ":
 				m.focusDetails = false
 				m.focusMain = true
 				m.detailScroll = 0
@@ -202,8 +213,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.focusCalendarPane {
 			switch msg.String() {
-			case "q":
-				return m, tea.Quit
 			case "j", "down":
 				m.moveCalendarCursor(1)
 			case "k", "up":
@@ -221,47 +230,44 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		switch msg.String() {
-		case "q", "ctrl+c":
-			return m, tea.Quit
 		case "j", "down":
-			if m.focusMain {
-				m.moveEventCursor(1)
-			} else {
-				m.selected = m.selected.AddDate(0, 0, 7)
-				m.agendaStart = dayStart(m.selected)
-				m.eventCursor = 0
-				m.eventListOffset = 0
-				m.scrollForSelection()
-			}
+			m.moveEventCursor(1)
 		case "k", "up":
-			if m.focusMain {
-				m.moveEventCursor(-1)
-			} else {
-				m.selected = m.selected.AddDate(0, 0, -7)
-				m.agendaStart = dayStart(m.selected)
-				m.eventCursor = 0
-				m.eventListOffset = 0
-				m.scrollForSelection()
+			m.moveEventCursor(-1)
+		case "ctrl+f":
+			m.moveEventCursor(m.eventPageStep())
+		case "ctrl+b":
+			m.moveEventCursor(-m.eventPageStep())
+		case "ctrl+j":
+			m.detailScroll++
+		case "ctrl+k":
+			if m.detailScroll > 0 {
+				m.detailScroll--
 			}
 		case "h", "left":
-			if m.focusMain {
-				m.focusMain = false
-				m.focusDetails = false
-			} else {
-				m.selected = m.selected.AddDate(0, 0, -1)
-				m.agendaStart = dayStart(m.selected)
-				m.eventCursor = 0
-				m.eventListOffset = 0
-				m.scrollForSelection()
-			}
+			m.selected = m.selected.AddDate(0, 0, -1)
+			m.agendaStart = dayStart(m.selected)
+			m.eventCursor = 0
+			m.eventListOffset = 0
+			m.scrollForSelection()
 		case "l", "right":
-			if !m.focusMain {
-				m.selected = m.selected.AddDate(0, 0, 1)
-				m.agendaStart = dayStart(m.selected)
-				m.eventCursor = 0
-				m.eventListOffset = 0
-				m.scrollForSelection()
-			}
+			m.selected = m.selected.AddDate(0, 0, 1)
+			m.agendaStart = dayStart(m.selected)
+			m.eventCursor = 0
+			m.eventListOffset = 0
+			m.scrollForSelection()
+		case "ctrl+h":
+			m.selected = m.selected.AddDate(0, 0, -7)
+			m.agendaStart = dayStart(m.selected)
+			m.eventCursor = 0
+			m.eventListOffset = 0
+			m.scrollForSelection()
+		case "ctrl+l":
+			m.selected = m.selected.AddDate(0, 0, 7)
+			m.agendaStart = dayStart(m.selected)
+			m.eventCursor = 0
+			m.eventListOffset = 0
+			m.scrollForSelection()
 		case "n":
 			m.openEventFormNew()
 			return m, m.eventForm.form.Init()
@@ -285,24 +291,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.eventListOffset = 0
 			m.detailScroll = 0
 		case "enter":
-			if !m.focusMain {
-				m.focusMain = true
-				m.focusDetails = false
-				m.eventCursor = 0
-				m.eventListOffset = 0
-			} else {
-				if m.currentSelectionHasDetails() {
-					m.focusDetails = true
-					m.detailScroll = 0
-				}
-			}
+			m.detailScroll = 0
 		case " ":
-			if m.focusMain {
-				if m.currentSelectionHasDetails() {
-					m.focusDetails = true
-					m.detailScroll = 0
-				}
-			}
+			m.detailScroll = 0
 		}
 		m.ensureEventSelectionValid()
 	}
@@ -323,19 +314,11 @@ func (m Model) View() string {
 	right := m.renderMainPanel(rightWidth)
 
 	root := lipgloss.JoinHorizontal(lipgloss.Top, left, right)
-	help := m.styles.Subtle.Render("Navigate: [h/l] left/right day  [j/k] up/down week-row  [n] new event  [e] edit event  [t] today  [c] calendars  [q] quit")
-	if m.focusCalendarPane {
-		help = m.styles.Subtle.Render("Calendars focus: [j/k] select calendar  [space/enter] toggle  [h/esc/q] back")
+	base := m.styles.Container.Render(root)
+	if m.showHelpOverlay {
+		overlay := m.renderHelpOverlay(max(40, m.width*2/3), max(16, m.height*2/3))
+		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, overlay)
 	}
-	if m.focusDetails {
-		help = m.styles.Subtle.Render("Details focus: [j/k] scroll details  [enter/space/esc/h] back to events")
-	} else if m.focusMain {
-		help = m.styles.Subtle.Render("Events list focus: [j/k] select  [enter/space] details  [f] toggle show-free  [h] back")
-	}
-	if m.eventForm != nil {
-		help = m.styles.Subtle.Render("Event form: [tab]/[shift+tab] navigate fields, [ctrl+s] save, [ctrl+c/esc] cancel")
-	}
-	base := m.styles.Container.Render(lipgloss.JoinVertical(lipgloss.Left, root, "", help))
 	return base
 }
 
@@ -477,7 +460,6 @@ func (m Model) renderEventDetailsFor(ev calendar.Event, width, height int) strin
 			lines = append(lines, wrapLine(raw, max(10, width-4))...)
 		}
 	}
-	lines = append(lines, "", m.styles.Subtle.Render("enter/space focuses details, j/k scroll when focused"))
 	for i := range lines {
 		lines[i] = truncate(lines[i], max(10, width-2))
 	}
@@ -493,9 +475,6 @@ func (m Model) renderEventDetailsFor(ev calendar.Event, width, height int) strin
 		lines = lines[:height]
 	}
 	prefix := "Details"
-	if m.focusDetails {
-		prefix = "Details (focus)"
-	}
 	body := strings.Join(lines, "\n")
 	block := lipgloss.JoinVertical(lipgloss.Left, m.styles.Subtle.Render(prefix), body)
 	return lipgloss.NewStyle().Width(width).Height(height).MaxHeight(height).Render(block)
@@ -542,7 +521,6 @@ func (m Model) renderTodoDetailsFor(todo calendar.Todo, mode string, width, heig
 			lines = append(lines, wrapLine(raw, max(10, width-4))...)
 		}
 	}
-	lines = append(lines, "", m.styles.Subtle.Render("enter/space focuses details, j/k scroll when focused"))
 	for i := range lines {
 		lines[i] = truncate(lines[i], max(10, width-2))
 	}
@@ -558,9 +536,6 @@ func (m Model) renderTodoDetailsFor(todo calendar.Todo, mode string, width, heig
 		lines = lines[:height]
 	}
 	prefix := "Details"
-	if m.focusDetails {
-		prefix = "Details (focus)"
-	}
 	body := strings.Join(lines, "\n")
 	block := lipgloss.JoinVertical(lipgloss.Left, m.styles.Subtle.Render(prefix), body)
 	return lipgloss.NewStyle().Width(width).Height(height).MaxHeight(height).Render(block)
@@ -805,6 +780,38 @@ func (m *Model) ensureCalendarCursorVisible(height int) {
 	if m.calendarCursor >= m.calendarOffset+visible {
 		m.calendarOffset = m.calendarCursor - visible + 1
 	}
+}
+
+func (m Model) renderHelpOverlay(width, height int) string {
+	if width < 36 {
+		width = 36
+	}
+	if height < 12 {
+		height = 12
+	}
+	title := m.styles.Title.Render("Shortcuts")
+	lines := []string{
+		"q, ctrl+c   Quit",
+		"?           Toggle help",
+		"j / k       Next / previous event",
+		"ctrl+f/b    Page down / page up",
+		"h / l       Previous / next day",
+		"ctrl+h/l    Previous / next week",
+		"ctrl+j/k    Scroll description down/up",
+		"f           Toggle show-free mode",
+		"c           Open calendars toggle pane",
+		"n           New event form",
+		"e           Edit selected event",
+		"",
+		"Event form:",
+		"tab/s-tab   Next / previous field",
+		"ctrl+s      Save",
+		"esc         Cancel",
+	}
+	body := strings.Join(lines, "\n")
+	content := lipgloss.JoinVertical(lipgloss.Left, title, "", body)
+	box := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("245")).Padding(1, 2).Width(width).Height(height).Render(content)
+	return box
 }
 
 func (m Model) calendarPaneHeight() int {
@@ -1291,6 +1298,14 @@ func (m Model) eventListLines() int {
 		topHeight = 6
 	}
 	return topHeight
+}
+
+func (m Model) eventPageStep() int {
+	step := m.eventListLines() - 2
+	if step < 1 {
+		return 1
+	}
+	return step
 }
 
 func (m Model) mainInnerWidth() int {
