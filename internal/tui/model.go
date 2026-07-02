@@ -31,6 +31,7 @@ type Model struct {
 	focusMain          bool
 	focusDetails       bool
 	showFreeMode       bool
+	showTasksMode      bool
 	agendaStart        time.Time
 	eventCursor        int
 	eventListOffset    int
@@ -280,6 +281,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.eventCursor = 0
 			m.eventListOffset = 0
 			m.ensureEventSelectionValid()
+		case "m":
+			m.showTasksMode = !m.showTasksMode
+			m.eventCursor = 0
+			m.eventListOffset = 0
+			m.ensureEventSelectionValid()
 		case "t":
 			now := time.Now().In(m.selected.Location())
 			m.selected = now
@@ -375,6 +381,9 @@ func (m Model) renderMainPanel(width int) string {
 	top := lipgloss.NewStyle().Height(topHeight).MaxHeight(topHeight).Render(rendered.Text)
 	detail := m.renderEventDetailsPane(width-2, bottomHeight)
 	header := m.styles.PanelTitle.Render(fmt.Sprintf("Agenda from %s", m.agendaStart.Format("Mon Jan 2, 2006")))
+	if m.showTasksMode {
+		header += m.styles.Subtle.Render(" [TASKS]")
+	}
 	if m.showFreeMode {
 		header += m.styles.Subtle.Render(" [SHOW-FREE]")
 	}
@@ -800,6 +809,7 @@ func (m Model) renderHelpOverlay(width, height int) string {
 		"ctrl+h/l    Previous / next week",
 		"ctrl+j/k    Scroll description down/up",
 		"f           Toggle show-free mode",
+		"m           Toggle tasks-only mode",
 		"c           Open calendars toggle pane",
 		"n           New event form",
 		"e           Edit selected event",
@@ -889,7 +899,7 @@ func (m Model) agendaItems() []AgendaListItem {
 	if start.IsZero() {
 		start = dayStart(m.selected)
 	}
-	return buildAgendaItems(
+	items := buildAgendaItems(
 		start,
 		filteredEvents(m.data.Events, m.calendarVisibility),
 		filteredTodos(m.data.Todos, m.calendarVisibility),
@@ -897,6 +907,17 @@ func (m Model) agendaItems() []AgendaListItem {
 		m.showFreeMode,
 		m.showFreeMode,
 	)
+	if !m.showTasksMode {
+		return items
+	}
+	out := make([]AgendaListItem, 0, len(items))
+	for _, it := range items {
+		if it.IsFree || it.Todo == nil {
+			continue
+		}
+		out = append(out, it)
+	}
+	return out
 }
 
 func (m Model) currentSelectionHasDetails() bool {
