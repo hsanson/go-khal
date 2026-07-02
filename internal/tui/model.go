@@ -387,11 +387,6 @@ func (m Model) renderMainPanel(width int) string {
 	if m.showFreeMode {
 		header += m.styles.Subtle.Render(" [SHOW-FREE]")
 	}
-	if m.focusMain {
-		header += m.styles.Subtle.Render(" (focus)")
-	} else if m.focusDetails {
-		header += m.styles.Subtle.Render(" (details)")
-	}
 	separator := m.styles.Subtle.Render(strings.Repeat("-", max(10, width-2)))
 	content := lipgloss.JoinVertical(lipgloss.Left, header, "", top, separator, detail)
 	return m.styles.MainPanel.Width(width).Height(panelHeight).Render(content)
