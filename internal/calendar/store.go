@@ -448,6 +448,7 @@ func componentToTodo(comp *ical.Component, src calendarSource, filePath string) 
 
 	summary, _ := comp.Props.Text(ical.PropSummary)
 	desc, _ := comp.Props.Text(ical.PropDescription)
+	location, _ := comp.Props.Text(ical.PropLocation)
 	status, _ := comp.Props.Text(ical.PropStatus)
 
 	var start *time.Time
@@ -477,12 +478,20 @@ func componentToTodo(comp *ical.Component, src calendarSource, filePath string) 
 			percent = p
 		}
 	}
+	priority := 0
+	if prop := comp.Props.Get(ical.PropPriority); prop != nil {
+		if p, err := prop.Int(); err == nil {
+			priority = p
+		}
+	}
 
 	return Todo{
 		UID:         uid,
 		Summary:     emptyDefault(summary, "(untitled todo)"),
 		Description: desc,
+		Location:    location,
 		Status:      emptyDefault(status, "NEEDS-ACTION"),
+		Priority:    priority,
 		Start:       start,
 		Due:         due,
 		Completed:   completed,
@@ -740,7 +749,15 @@ func (s *Store) CreateTodo(sourceName, calendarName string, t Todo) error {
 	if t.Description != "" {
 		comp.Props.SetText(ical.PropDescription, t.Description)
 	}
+	if t.Location != "" {
+		comp.Props.SetText(ical.PropLocation, t.Location)
+	}
 	comp.Props.SetText(ical.PropStatus, emptyDefault(t.Status, "NEEDS-ACTION"))
+	if t.Priority > 0 {
+		propPriority := ical.NewProp(ical.PropPriority)
+		propPriority.Value = fmt.Sprintf("%d", t.Priority)
+		comp.Props.Set(propPriority)
+	}
 	if t.Start != nil {
 		comp.Props.SetDateTime(ical.PropDateTimeStart, t.Start.In(loc))
 	}
@@ -799,8 +816,22 @@ func (s *Store) UpdateTodo(uid string, update TodoUpdate) error {
 		if update.Description != nil {
 			child.Props.SetText(ical.PropDescription, *update.Description)
 		}
+		if update.Location != nil {
+			child.Props.Del(ical.PropLocation)
+			if strings.TrimSpace(*update.Location) != "" {
+				child.Props.SetText(ical.PropLocation, *update.Location)
+			}
+		}
 		if update.Status != nil {
 			child.Props.SetText(ical.PropStatus, *update.Status)
+		}
+		if update.Priority != nil {
+			child.Props.Del(ical.PropPriority)
+			if *update.Priority > 0 {
+				prop := ical.NewProp(ical.PropPriority)
+				prop.Value = fmt.Sprintf("%d", *update.Priority)
+				child.Props.Set(prop)
+			}
 		}
 		if update.Start != nil {
 			child.Props.Del(ical.PropDateTimeStart)

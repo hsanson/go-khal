@@ -37,6 +37,7 @@ type Model struct {
 	eventListOffset    int
 	detailScroll       int
 	eventForm          *eventFormState
+	todoForm           *todoFormState
 	showHelpOverlay    bool
 }
 
@@ -57,6 +58,23 @@ type eventFormState struct {
 	errMsg      string
 }
 
+type todoFormState struct {
+	mode          string
+	targetUID     string
+	form          *huh.Form
+	summary       string
+	description   string
+	location      string
+	calendarKey   string
+	startDate     string
+	startTime     string
+	dueDate       string
+	dueTime       string
+	completed     bool
+	priorityLabel string
+	errMsg        string
+}
+
 var eventFormFieldOrder = []string{
 	"title",
 	"calendar",
@@ -68,6 +86,19 @@ var eventFormFieldOrder = []string{
 	"from-time",
 	"to-date",
 	"to-time",
+}
+
+var todoFormFieldOrder = []string{
+	"summary",
+	"description",
+	"location",
+	"calendar",
+	"start-date",
+	"start-time",
+	"due-date",
+	"due-time",
+	"completed",
+	"priority",
 }
 
 func NewModel(cfg *config.Config, data calendar.Dataset, store *calendar.Store) Model {
@@ -128,7 +159,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
-		if msg.String() == "q" || msg.String() == "ctrl+c" {
+		if (msg.String() == "q" || msg.String() == "ctrl+c") && m.eventForm == nil && m.todoForm == nil {
 			return m, tea.Quit
 		}
 
@@ -183,6 +214,55 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			if m.eventForm.form.State == huh.StateCompleted {
 				m.eventForm.form.State = huh.StateNormal
+			}
+			return m, cmd
+		}
+		if m.todoForm != nil {
+			switch msg.String() {
+			case "ctrl+s":
+				if err := m.commitTodoForm(); err != nil {
+					m.todoForm.errMsg = err.Error()
+					return m, nil
+				}
+				m.todoForm = nil
+				m.focusDetails = false
+				m.focusMain = true
+				m.ensureEventSelectionValid()
+				return m, nil
+			case "ctrl+c", "esc":
+				m.todoForm = nil
+				m.focusDetails = false
+				m.focusMain = true
+				return m, nil
+			case "tab":
+				if m.isTodoFormFocusedLastField() {
+					return m, nil
+				}
+				m.todoForm.form.UpdateFieldPositions()
+				return m, m.todoForm.form.NextField()
+			case "shift+tab":
+				if m.isTodoFormFocusedFirstField() {
+					return m, nil
+				}
+				m.todoForm.form.UpdateFieldPositions()
+				return m, m.todoForm.form.PrevField()
+			}
+			updated, cmd := m.todoForm.form.Update(msg)
+			if fm, ok := updated.(*huh.Form); ok {
+				m.todoForm.form = fm
+			}
+			m.todoForm.form.UpdateFieldPositions()
+			if m.todoForm.form.GetFocusedField() == nil {
+				cmd = tea.Batch(cmd, m.todoForm.form.Init())
+			}
+			if m.todoForm.form.State == huh.StateAborted {
+				m.todoForm = nil
+				m.focusDetails = false
+				m.focusMain = true
+				return m, nil
+			}
+			if m.todoForm.form.State == huh.StateCompleted {
+				m.todoForm.form.State = huh.StateNormal
 			}
 			return m, cmd
 		}
@@ -270,11 +350,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.eventListOffset = 0
 			m.scrollForSelection()
 		case "n":
+			if m.showTasksMode {
+				m.openTodoFormNew()
+				return m, m.todoForm.form.Init()
+			}
 			m.openEventFormNew()
 			return m, m.eventForm.form.Init()
 		case "e":
-			if m.openEventFormEditSelected() {
-				return m, m.eventForm.form.Init()
+			if m.openEditFormForSelected() {
+				if m.eventForm != nil {
+					return m, m.eventForm.form.Init()
+				}
+				if m.todoForm != nil {
+					return m, m.todoForm.form.Init()
+				}
 			}
 		case "f":
 			m.showFreeMode = !m.showFreeMode
@@ -358,6 +447,9 @@ func (m Model) renderMainPanel(width int) string {
 	if m.eventForm != nil {
 		return m.renderEventFormMainPanel(width, panelHeight)
 	}
+	if m.todoForm != nil {
+		return m.renderTodoFormMainPanel(width, panelHeight)
+	}
 
 	items := m.agendaItems()
 	available := panelHeight - 4
@@ -417,11 +509,43 @@ func (m Model) renderEventFormMainPanel(width, panelHeight int) string {
 	return m.styles.MainPanel.Width(width).Height(panelHeight).Render(content)
 }
 
+func (m Model) renderTodoFormMainPanel(width, panelHeight int) string {
+	if m.todoForm == nil {
+		return m.styles.MainPanel.Width(width).Height(panelHeight).Render("")
+	}
+	header := m.styles.PanelTitle.Render("Task Form")
+	if m.todoForm.mode == "edit" {
+		header = m.styles.PanelTitle.Render("Edit Task")
+	}
+	if f := m.todoForm.form.GetFocusedField(); f != nil {
+		if key := strings.TrimSpace(f.GetKey()); key != "" {
+			header += m.styles.Subtle.Render("  [focused: " + key + "]")
+		}
+	}
+	innerHeight := panelHeight - 2
+	if innerHeight < 6 {
+		innerHeight = 6
+	}
+	formView := m.todoForm.form.WithWidth(width - 2).WithHeight(innerHeight).WithShowHelp(true).WithShowErrors(true).View()
+	if strings.TrimSpace(m.todoForm.errMsg) != "" {
+		formView = lipgloss.JoinVertical(lipgloss.Left, m.styles.Subtle.Render("Error: "+m.todoForm.errMsg), "", formView)
+	}
+	content := lipgloss.JoinVertical(lipgloss.Left, header, "", formView)
+	return m.styles.MainPanel.Width(width).Height(panelHeight).Render(content)
+}
+
 func (m Model) renderEventDetailsPane(width, height int) string {
 	if m.eventForm != nil {
 		view := m.eventForm.form.WithWidth(width).WithHeight(height).WithShowHelp(true).WithShowErrors(true).View()
 		if strings.TrimSpace(m.eventForm.errMsg) != "" {
 			view = lipgloss.JoinVertical(lipgloss.Left, m.styles.Subtle.Render("Error: "+m.eventForm.errMsg), "", view)
+		}
+		return lipgloss.NewStyle().Width(width).Height(height).MaxHeight(height).Render(view)
+	}
+	if m.todoForm != nil {
+		view := m.todoForm.form.WithWidth(width).WithHeight(height).WithShowHelp(true).WithShowErrors(true).View()
+		if strings.TrimSpace(m.todoForm.errMsg) != "" {
+			view = lipgloss.JoinVertical(lipgloss.Left, m.styles.Subtle.Render("Error: "+m.todoForm.errMsg), "", view)
 		}
 		return lipgloss.NewStyle().Width(width).Height(height).MaxHeight(height).Render(view)
 	}
@@ -519,6 +643,16 @@ func (m Model) renderTodoDetailsFor(todo calendar.Todo, mode string, width, heig
 	}
 	if todo.Percent > 0 {
 		lines = append(lines, fmt.Sprintf("Progress: %d%%", todo.Percent))
+	}
+	if strings.TrimSpace(todo.Location) != "" {
+		lines = append(lines, "Location: "+todo.Location)
+	}
+	if todo.Priority > 0 {
+		priorityLabel := todoPriorityLabel(todo.Priority)
+		if strings.EqualFold(priorityLabel, "high") {
+			priorityLabel = lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Render(priorityLabel)
+		}
+		lines = append(lines, "Priority: "+priorityLabel)
 	}
 	if todo.Description != "" {
 		lines = append(lines, "", "Description:")
@@ -806,8 +940,8 @@ func (m Model) renderHelpOverlay(width, height int) string {
 		"f           Toggle show-free mode",
 		"m           Toggle tasks-only mode",
 		"c           Open calendars toggle pane",
-		"n           New event form",
-		"e           Edit selected event",
+		"n           New item form (event/task)",
+		"e           Edit selected item",
 		"",
 		"Event form:",
 		"tab/s-tab   Next / previous field",
@@ -966,6 +1100,57 @@ func (m *Model) openEventFormNew() {
 	m.eventForm.form.UpdateFieldPositions()
 }
 
+func (m *Model) openTodoFormEditSelected() bool {
+	items := m.agendaItems()
+	if len(items) == 0 || m.eventCursor < 0 || m.eventCursor >= len(items) {
+		return false
+	}
+	it := items[m.eventCursor]
+	if it.Todo == nil || it.IsFree {
+		return false
+	}
+	td := *it.Todo
+	m.todoForm = m.newTodoFormState("edit", td.UID, td)
+	m.focusDetails = true
+	m.focusMain = false
+	m.detailScroll = 0
+	m.todoForm.form.UpdateFieldPositions()
+	return true
+}
+
+func (m *Model) openTodoFormNew() {
+	defaultKey := m.firstWritableCalendarKey()
+	td := calendar.Todo{
+		Summary:  "",
+		Source:   splitCalendarKey(defaultKey).source,
+		Calendar: splitCalendarKey(defaultKey).name,
+		Priority: 5,
+	}
+	m.todoForm = m.newTodoFormState("create", "", td)
+	m.focusDetails = true
+	m.focusMain = false
+	m.detailScroll = 0
+	m.todoForm.form.UpdateFieldPositions()
+}
+
+func (m *Model) openEditFormForSelected() bool {
+	items := m.agendaItems()
+	if len(items) == 0 || m.eventCursor < 0 || m.eventCursor >= len(items) {
+		return false
+	}
+	it := items[m.eventCursor]
+	if it.IsFree {
+		return false
+	}
+	if it.Event != nil {
+		return m.openEventFormEditSelected()
+	}
+	if it.Todo != nil {
+		return m.openTodoFormEditSelected()
+	}
+	return false
+}
+
 func (m *Model) openEventFormEditSelected() bool {
 	items := m.agendaItems()
 	if len(items) == 0 || m.eventCursor < 0 || m.eventCursor >= len(items) {
@@ -985,6 +1170,197 @@ func (m *Model) openEventFormEditSelected() bool {
 	m.detailScroll = 0
 	m.eventForm.form.UpdateFieldPositions()
 	return true
+}
+
+func (m *Model) newTodoFormState(mode, targetUID string, td calendar.Todo) *todoFormState {
+	key := calendarKey(td.Source, td.Calendar)
+	if key == "/" || key == "" {
+		key = m.firstWritableCalendarKey()
+	}
+	startDate := ""
+	startTime := ""
+	if td.Start != nil {
+		start := td.Start.In(m.selected.Location())
+		startDate = start.Format("2006-01-02")
+		startTime = start.Format("15:04")
+	}
+	dueDate := ""
+	dueTime := ""
+	if td.Due != nil {
+		due := td.Due.In(m.selected.Location())
+		dueDate = due.Format("2006-01-02")
+		dueTime = due.Format("15:04")
+	}
+	state := &todoFormState{
+		mode:          mode,
+		targetUID:     targetUID,
+		summary:       td.Summary,
+		description:   td.Description,
+		location:      td.Location,
+		calendarKey:   key,
+		startDate:     startDate,
+		startTime:     startTime,
+		dueDate:       dueDate,
+		dueTime:       dueTime,
+		completed:     isTodoDone(td),
+		priorityLabel: todoPriorityLabel(td.Priority),
+	}
+	if state.priorityLabel == "" {
+		state.priorityLabel = "mid"
+	}
+	state.form = m.buildTodoForm(state)
+	return state
+}
+
+func (m *Model) buildTodoForm(s *todoFormState) *huh.Form {
+	calOptions := make([]huh.Option[string], 0, len(m.calendarOrder))
+	for _, key := range m.calendarOrder {
+		cal := m.calendarByKey(key)
+		if cal == nil || cal.Source == calendar.SpecialSourceBirthdays {
+			continue
+		}
+		name := cal.DisplayName
+		if name == "" {
+			name = cal.Name
+		}
+		calOptions = append(calOptions, huh.NewOption(name+" ("+cal.Source+")", key))
+	}
+	if len(calOptions) == 0 {
+		calOptions = append(calOptions, huh.NewOption("No writable calendar", ""))
+	}
+	priorityOptions := []huh.Option[string]{
+		huh.NewOption("Low", "low"),
+		huh.NewOption("Mid", "mid"),
+		huh.NewOption("High", "high"),
+	}
+	title := "Edit Task"
+	group := huh.NewGroup(
+		huh.NewInput().Key("summary").Title("Summary").Value(&s.summary).Validate(func(v string) error {
+			if strings.TrimSpace(v) == "" {
+				return errors.New("summary is required")
+			}
+			return nil
+		}),
+		huh.NewText().Key("description").Title("Description").Value(&s.description).Lines(4),
+		huh.NewInput().Key("location").Title("Location").Value(&s.location),
+		huh.NewSelect[string]().Key("calendar").Title("Calendar").Options(calOptions...).Value(&s.calendarKey).Validate(func(v string) error {
+			if strings.TrimSpace(v) == "" {
+				return errors.New("calendar is required")
+			}
+			return nil
+		}),
+		huh.NewInput().Key("start-date").Title("Start date (YYYY-MM-DD)").Value(&s.startDate).Validate(func(v string) error {
+			if err := validateOptionalDateInput(v); err != nil {
+				return err
+			}
+			if strings.TrimSpace(v) != "" && strings.TrimSpace(s.startTime) == "" {
+				return errors.New("start time is required when start date is set")
+			}
+			return nil
+		}),
+		huh.NewInput().Key("start-time").Title("Start time (HH:MM)").Value(&s.startTime).Validate(func(v string) error {
+			if err := validateOptionalTimeInput(v); err != nil {
+				return err
+			}
+			if strings.TrimSpace(v) != "" && strings.TrimSpace(s.startDate) == "" {
+				return errors.New("start date is required when start time is set")
+			}
+			return nil
+		}),
+		huh.NewInput().Key("due-date").Title("Due date (YYYY-MM-DD)").Value(&s.dueDate).Validate(func(v string) error {
+			if err := validateOptionalDateInput(v); err != nil {
+				return err
+			}
+			if strings.TrimSpace(v) != "" && strings.TrimSpace(s.dueTime) == "" {
+				return errors.New("due time is required when due date is set")
+			}
+			if !todoRangeIsValid(s.startDate, s.startTime, v, s.dueTime) {
+				return errors.New("due must be after start")
+			}
+			return nil
+		}),
+		huh.NewInput().Key("due-time").Title("Due time (HH:MM)").Value(&s.dueTime).Validate(func(v string) error {
+			if err := validateOptionalTimeInput(v); err != nil {
+				return err
+			}
+			if strings.TrimSpace(v) != "" && strings.TrimSpace(s.dueDate) == "" {
+				return errors.New("due date is required when due time is set")
+			}
+			if !todoRangeIsValid(s.startDate, s.startTime, s.dueDate, v) {
+				return errors.New("due must be after start")
+			}
+			return nil
+		}),
+		huh.NewConfirm().Key("completed").Title("Completed").Value(&s.completed),
+		huh.NewSelect[string]().Key("priority").Title("Priority").Options(priorityOptions...).Value(&s.priorityLabel),
+	).Title(title)
+	return huh.NewForm(group).WithShowErrors(true).WithShowHelp(true)
+}
+
+func (m *Model) commitTodoForm() error {
+	if m.todoForm == nil {
+		return nil
+	}
+	if m.store == nil {
+		return errors.New("todo store is unavailable")
+	}
+	s := m.todoForm
+	cal := splitCalendarKey(s.calendarKey)
+	if strings.TrimSpace(cal.source) == "" || strings.TrimSpace(cal.name) == "" {
+		return errors.New("calendar is required")
+	}
+	startPtr, duePtr, err := parseTodoFormTimesOptional(*s)
+	if err != nil {
+		return err
+	}
+	status := "NEEDS-ACTION"
+	if s.completed {
+		status = "COMPLETED"
+	}
+	priority := todoPriorityFromLabel(s.priorityLabel)
+
+	if s.mode == "edit" {
+		startUpdate := startPtr
+		dueUpdate := duePtr
+		upd := calendar.TodoUpdate{
+			Summary:     &s.summary,
+			Description: &s.description,
+			Location:    &s.location,
+			Status:      &status,
+			Priority:    &priority,
+			Start:       &startUpdate,
+			Due:         &dueUpdate,
+		}
+		if err := m.store.UpdateTodo(s.targetUID, upd); err != nil {
+			return err
+		}
+	} else {
+		td := calendar.Todo{
+			Summary:     s.summary,
+			Description: s.description,
+			Location:    s.location,
+			Status:      status,
+			Priority:    priority,
+			Start:       startPtr,
+			Due:         duePtr,
+		}
+		if err := m.store.CreateTodo(cal.source, cal.name, td); err != nil {
+			return err
+		}
+	}
+
+	ds, err := m.store.Load()
+	if err != nil {
+		return err
+	}
+	m.data = ds
+	if startPtr != nil {
+		m.selected = dayStart(*startPtr)
+		m.agendaStart = dayStart(*startPtr)
+	}
+	m.eventCursor = 0
+	m.eventListOffset = 0
+	return nil
 }
 
 func (m *Model) newEventFormState(mode, targetUID string, ev calendar.Event) *eventFormState {
@@ -1226,6 +1602,26 @@ func parseEventFormTimes(s eventFormState) (time.Time, time.Time, error) {
 	return start, end, nil
 }
 
+func validateOptionalDateInput(v string) error {
+	if strings.TrimSpace(v) == "" {
+		return nil
+	}
+	if _, err := time.Parse("2006-01-02", strings.TrimSpace(v)); err != nil {
+		return errors.New("invalid date (expected YYYY-MM-DD)")
+	}
+	return nil
+}
+
+func validateOptionalTimeInput(v string) error {
+	if strings.TrimSpace(v) == "" {
+		return nil
+	}
+	if _, err := time.Parse("15:04", strings.TrimSpace(v)); err != nil {
+		return errors.New("invalid time (expected HH:MM)")
+	}
+	return nil
+}
+
 func validateEventDateInput(v string) error {
 	if strings.TrimSpace(v) == "" {
 		return errors.New("date is required")
@@ -1266,6 +1662,113 @@ func eventRangeIsValid(fromDate, fromTime, toDate, toTime string) bool {
 	start := time.Date(fd.Year(), fd.Month(), fd.Day(), ft.Hour(), ft.Minute(), 0, 0, time.Local)
 	end := time.Date(td.Year(), td.Month(), td.Day(), tt.Hour(), tt.Minute(), 0, 0, time.Local)
 	return end.After(start)
+}
+
+func parseTodoFormTimesOptional(s todoFormState) (*time.Time, *time.Time, error) {
+	startDateRaw := strings.TrimSpace(s.startDate)
+	startTimeRaw := strings.TrimSpace(s.startTime)
+	dueDateRaw := strings.TrimSpace(s.dueDate)
+	dueTimeRaw := strings.TrimSpace(s.dueTime)
+
+	if startDateRaw == "" && startTimeRaw == "" && dueDateRaw == "" && dueTimeRaw == "" {
+		return nil, nil, nil
+	}
+	if (startDateRaw == "") != (startTimeRaw == "") {
+		return nil, nil, errors.New("start date and time must both be set")
+	}
+	if (dueDateRaw == "") != (dueTimeRaw == "") {
+		return nil, nil, errors.New("due date and time must both be set")
+	}
+
+	var startPtr *time.Time
+	if startDateRaw != "" {
+		startDate, err := time.Parse("2006-01-02", startDateRaw)
+		if err != nil {
+			return nil, nil, errors.New("invalid start date (expected YYYY-MM-DD)")
+		}
+		startClock, err := time.Parse("15:04", startTimeRaw)
+		if err != nil {
+			return nil, nil, errors.New("invalid start time (expected HH:MM)")
+		}
+		start := time.Date(startDate.Year(), startDate.Month(), startDate.Day(), startClock.Hour(), startClock.Minute(), 0, 0, time.Local)
+		startPtr = &start
+	}
+
+	var duePtr *time.Time
+	if dueDateRaw != "" {
+		dueDate, err := time.Parse("2006-01-02", dueDateRaw)
+		if err != nil {
+			return nil, nil, errors.New("invalid due date (expected YYYY-MM-DD)")
+		}
+		dueClock, err := time.Parse("15:04", dueTimeRaw)
+		if err != nil {
+			return nil, nil, errors.New("invalid due time (expected HH:MM)")
+		}
+		due := time.Date(dueDate.Year(), dueDate.Month(), dueDate.Day(), dueClock.Hour(), dueClock.Minute(), 0, 0, time.Local)
+		duePtr = &due
+	}
+
+	if startPtr != nil && duePtr != nil && !duePtr.After(*startPtr) {
+		return nil, nil, errors.New("due must be after start")
+	}
+	return startPtr, duePtr, nil
+}
+
+func todoRangeIsValid(startDate, startTime, dueDate, dueTime string) bool {
+	startDate = strings.TrimSpace(startDate)
+	startTime = strings.TrimSpace(startTime)
+	dueDate = strings.TrimSpace(dueDate)
+	dueTime = strings.TrimSpace(dueTime)
+	if startDate == "" || startTime == "" || dueDate == "" || dueTime == "" {
+		return true
+	}
+	return eventRangeIsValid(startDate, startTime, dueDate, dueTime)
+}
+
+func todoPriorityFromLabel(v string) int {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "high":
+		return 1
+	case "low":
+		return 9
+	default:
+		return 5
+	}
+}
+
+func todoPriorityLabel(v int) string {
+	if v <= 0 {
+		return "mid"
+	}
+	if v <= 3 {
+		return "high"
+	}
+	if v >= 7 {
+		return "low"
+	}
+	return "mid"
+}
+
+func (m *Model) isTodoFormFocusedFirstField() bool {
+	if m.todoForm == nil || m.todoForm.form == nil || len(todoFormFieldOrder) == 0 {
+		return false
+	}
+	f := m.todoForm.form.GetFocusedField()
+	if f == nil {
+		return false
+	}
+	return f.GetKey() == todoFormFieldOrder[0]
+}
+
+func (m *Model) isTodoFormFocusedLastField() bool {
+	if m.todoForm == nil || m.todoForm.form == nil || len(todoFormFieldOrder) == 0 {
+		return false
+	}
+	f := m.todoForm.form.GetFocusedField()
+	if f == nil {
+		return false
+	}
+	return f.GetKey() == todoFormFieldOrder[len(todoFormFieldOrder)-1]
 }
 
 func (m *Model) isEventFormFocusedFirstField() bool {

@@ -36,7 +36,9 @@ type Todo struct {
 	UID         string
 	Summary     string
 	Description string
+	Location    string
 	Status      string
+	Priority    int
 	Start       *time.Time
 	Due         *time.Time
 	Completed   *time.Time
@@ -68,7 +70,9 @@ type Calendar struct {
 type TodoUpdate struct {
 	Summary     *string
 	Description *string
+	Location    *string
 	Status      *string
+	Priority    *int
 	Start       **time.Time
 	Due         **time.Time
 	Percent     *int

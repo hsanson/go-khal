@@ -141,7 +141,9 @@ func newTodoNewCommand() *cobra.Command {
 func newTodoEditCommand() *cobra.Command {
 	var summary string
 	var description string
+	var location string
 	var status string
+	var priority int
 	var startStr string
 	var dueStr string
 	var percent int
@@ -176,8 +178,14 @@ func newTodoEditCommand() *cobra.Command {
 			if description != "" {
 				update.Description = &description
 			}
+			if cmd.Flags().Changed("location") {
+				update.Location = &location
+			}
 			if status != "" {
 				update.Status = &status
+			}
+			if cmd.Flags().Changed("priority") {
+				update.Priority = &priority
 			}
 			if cmd.Flags().Changed("percent") {
 				update.Percent = &percent
@@ -207,7 +215,9 @@ func newTodoEditCommand() *cobra.Command {
 
 	cmd.Flags().StringVar(&summary, "summary", "", "new summary")
 	cmd.Flags().StringVar(&description, "description", "", "new description")
+	cmd.Flags().StringVar(&location, "location", "", "new location")
 	cmd.Flags().StringVar(&status, "status", "", "new status (NEEDS-ACTION/IN-PROCESS/COMPLETED)")
+	cmd.Flags().IntVar(&priority, "priority", 0, "new priority (1 high, 5 mid, 9 low)")
 	cmd.Flags().StringVar(&startStr, "start", "", "new start datetime")
 	cmd.Flags().StringVar(&dueStr, "due", "", "new due datetime")
 	cmd.Flags().IntVar(&percent, "percent", 0, "new percent complete")
