@@ -3,6 +3,12 @@
 `go-khal` is a terminal calendar and task manager inspired by `pimutils/khal`.
 It reads calendars and todos from local vdir directories (for example synced by `vdirsyncer`) and renders an interactive agenda with calendar visibility controls, event details, and task management.
 
+## Status
+
+`go-khal` is still under active development. Use it at your own risk, especially when editing or deleting events and tasks. These operations write directly to local `.ics` files and bugs may result in data loss. Keep backups or use versioned/synced calendar directories before trying write operations.
+
+This project is fully vibe coded using Codex.
+
 ## Features
 
 - Cobra-based CLI with agenda, TUI, config, and todo workflows
