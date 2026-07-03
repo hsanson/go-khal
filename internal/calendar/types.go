@@ -9,6 +9,9 @@ type Event struct {
 	Location    string
 	URL         string
 	Organizer   string
+	Attendees   []Attendee
+	Recurrence  *Recurrence
+	Alarms      []Alarm
 	Start       time.Time
 	End         time.Time
 	AllDay      bool
@@ -22,6 +25,28 @@ type Event struct {
 	Color       string
 	Hidden      bool
 	FilePath    string
+}
+
+type Attendee struct {
+	Name  string
+	Email string
+}
+
+type Recurrence struct {
+	Frequency    string
+	Interval     int
+	Weekdays     []string
+	MonthlyBy    string
+	MonthDay     int
+	MonthWeekday string
+	MonthWeek    int
+	Until        *time.Time
+	Count        int
+}
+
+type Alarm struct {
+	Offset time.Duration
+	Action string
 }
 
 const (
@@ -83,7 +108,23 @@ type EventUpdate struct {
 	Description *string
 	Location    *string
 	URL         *string
+	Attendees   *[]Attendee
+	Recurrence  **Recurrence
+	Alarms      *[]Alarm
 	Start       *time.Time
 	End         *time.Time
 	AllDay      *bool
 }
+
+type Contact struct {
+	Name  string
+	Email string
+}
+
+type DeleteRecurringScope string
+
+const (
+	DeleteRecurringAll        DeleteRecurringScope = "all"
+	DeleteRecurringOccurrence DeleteRecurringScope = "occurrence"
+	DeleteRecurringFuture     DeleteRecurringScope = "future"
+)
