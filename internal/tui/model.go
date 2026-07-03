@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -38,30 +39,61 @@ type Model struct {
 	detailScroll       int
 	eventForm          *eventFormState
 	todoForm           *todoFormState
+	deleteConfirm      *deleteConfirmState
 	showHelpOverlay    bool
 }
 
 type eventFormState struct {
-	mode        string
-	targetUID   string
-	form        *huh.Form
-	summary     string
-	calendarKey string
-	location    string
-	description string
-	url         string
-	allDay      bool
-	fromDate    string
-	fromTime    string
-	toDate      string
-	toTime      string
-	errMsg      string
+	mode           string
+	targetUID      string
+	form           *huh.Form
+	activeKey      string
+	activeForm     *huh.Form
+	backup         *eventFormSnapshot
+	cursor         int
+	summary        string
+	calendarKey    string
+	location       string
+	description    string
+	url            string
+	attendees      string
+	alarms         string
+	recur          bool
+	recurFreq      string
+	recurEvery     string
+	recurWeekdays  []string
+	recurMonthlyBy string
+	recurEnd       string
+	recurUntil     string
+	recurCount     string
+	allDay         bool
+	fromDate       string
+	fromTime       string
+	toDate         string
+	toTime         string
+	errMsg         string
+}
+
+type deleteConfirmState struct {
+	form      *huh.Form
+	itemLabel string
+	kind      string
+	event     *calendar.Event
+	todo      *calendar.Todo
+	recurring bool
+	confirm   bool
+	scope     string
+	errMsg    string
 }
 
 type todoFormState struct {
 	mode          string
 	targetUID     string
 	form          *huh.Form
+	activeKey     string
+	activeForm    *huh.Form
+	backup        *todoFormSnapshot
+	cursor        int
 	summary       string
 	description   string
 	location      string
@@ -75,12 +107,62 @@ type todoFormState struct {
 	errMsg        string
 }
 
+type editorRow struct {
+	key   string
+	label string
+	value string
+}
+
+type eventFormSnapshot struct {
+	summary        string
+	calendarKey    string
+	location       string
+	description    string
+	url            string
+	attendees      string
+	alarms         string
+	recur          bool
+	recurFreq      string
+	recurEvery     string
+	recurWeekdays  []string
+	recurMonthlyBy string
+	recurEnd       string
+	recurUntil     string
+	recurCount     string
+	allDay         bool
+	fromDate       string
+	fromTime       string
+	toDate         string
+	toTime         string
+}
+
+type todoFormSnapshot struct {
+	summary       string
+	description   string
+	location      string
+	calendarKey   string
+	startDate     string
+	startTime     string
+	dueDate       string
+	dueTime       string
+	completed     bool
+	priorityLabel string
+}
+
 var eventFormFieldOrder = []string{
 	"title",
 	"calendar",
 	"location",
 	"description",
 	"url",
+	"attendees",
+	"alarms",
+	"recur",
+	"recur-freq",
+	"recur-every",
+	"recur-end",
+	"recur-until",
+	"recur-count",
 	"all-day",
 	"from-date",
 	"from-time",
@@ -159,112 +241,56 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
-		if (msg.String() == "q" || msg.String() == "ctrl+c") && m.eventForm == nil && m.todoForm == nil {
+		if (msg.String() == "q" || msg.String() == "ctrl+c") && m.eventForm == nil && m.todoForm == nil && m.deleteConfirm == nil {
 			return m, tea.Quit
 		}
 
-		if m.eventForm != nil {
+		if m.deleteConfirm != nil {
 			switch msg.String() {
-			case "ctrl+s":
-				if err := m.commitEventForm(); err != nil {
-					m.eventForm.errMsg = err.Error()
+			case "ctrl+s", "enter":
+				if err := m.commitDeleteConfirm(); err != nil {
+					m.deleteConfirm.errMsg = err.Error()
 					return m, nil
 				}
-				m.eventForm = nil
+				m.deleteConfirm = nil
 				m.focusDetails = false
 				m.focusMain = true
 				m.ensureEventSelectionValid()
 				return m, nil
-			case "ctrl+c":
-				m.eventForm = nil
+			case "ctrl+c", "esc", "q":
+				m.deleteConfirm = nil
 				m.focusDetails = false
 				m.focusMain = true
 				return m, nil
 			case "tab":
-				if m.isEventFormFocusedLastField() {
-					return m, nil
-				}
-				m.eventForm.form.UpdateFieldPositions()
-				return m, m.eventForm.form.NextField()
+				m.deleteConfirm.form.UpdateFieldPositions()
+				return m, m.deleteConfirm.form.NextField()
 			case "shift+tab":
-				if m.isEventFormFocusedFirstField() {
-					return m, nil
-				}
-				m.eventForm.form.UpdateFieldPositions()
-				return m, m.eventForm.form.PrevField()
-			case "esc":
-				m.eventForm = nil
-				m.focusDetails = false
-				m.focusMain = true
-				return m, nil
+				m.deleteConfirm.form.UpdateFieldPositions()
+				return m, m.deleteConfirm.form.PrevField()
 			}
-			updated, cmd := m.eventForm.form.Update(msg)
+			updated, cmd := m.deleteConfirm.form.Update(msg)
 			if fm, ok := updated.(*huh.Form); ok {
-				m.eventForm.form = fm
+				m.deleteConfirm.form = fm
 			}
-			m.eventForm.form.UpdateFieldPositions()
-			if m.eventForm.form.GetFocusedField() == nil {
-				cmd = tea.Batch(cmd, m.eventForm.form.Init())
-			}
-			if m.eventForm.form.State == huh.StateAborted {
-				m.eventForm = nil
+			m.deleteConfirm.form.UpdateFieldPositions()
+			if m.deleteConfirm.form.State == huh.StateAborted {
+				m.deleteConfirm = nil
 				m.focusDetails = false
 				m.focusMain = true
 				return m, nil
 			}
-			if m.eventForm.form.State == huh.StateCompleted {
-				m.eventForm.form.State = huh.StateNormal
+			if m.deleteConfirm.form.State == huh.StateCompleted {
+				m.deleteConfirm.form.State = huh.StateNormal
 			}
 			return m, cmd
 		}
+
+		if m.eventForm != nil {
+			return m.updateEventEditor(msg)
+		}
 		if m.todoForm != nil {
-			switch msg.String() {
-			case "ctrl+s":
-				if err := m.commitTodoForm(); err != nil {
-					m.todoForm.errMsg = err.Error()
-					return m, nil
-				}
-				m.todoForm = nil
-				m.focusDetails = false
-				m.focusMain = true
-				m.ensureEventSelectionValid()
-				return m, nil
-			case "ctrl+c", "esc":
-				m.todoForm = nil
-				m.focusDetails = false
-				m.focusMain = true
-				return m, nil
-			case "tab":
-				if m.isTodoFormFocusedLastField() {
-					return m, nil
-				}
-				m.todoForm.form.UpdateFieldPositions()
-				return m, m.todoForm.form.NextField()
-			case "shift+tab":
-				if m.isTodoFormFocusedFirstField() {
-					return m, nil
-				}
-				m.todoForm.form.UpdateFieldPositions()
-				return m, m.todoForm.form.PrevField()
-			}
-			updated, cmd := m.todoForm.form.Update(msg)
-			if fm, ok := updated.(*huh.Form); ok {
-				m.todoForm.form = fm
-			}
-			m.todoForm.form.UpdateFieldPositions()
-			if m.todoForm.form.GetFocusedField() == nil {
-				cmd = tea.Batch(cmd, m.todoForm.form.Init())
-			}
-			if m.todoForm.form.State == huh.StateAborted {
-				m.todoForm = nil
-				m.focusDetails = false
-				m.focusMain = true
-				return m, nil
-			}
-			if m.todoForm.form.State == huh.StateCompleted {
-				m.todoForm.form.State = huh.StateNormal
-			}
-			return m, cmd
+			return m.updateTodoEditor(msg)
 		}
 
 		if msg.String() == "c" {
@@ -282,6 +308,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "e":
 				if m.openEventFormEditSelected() {
 					return m, m.eventForm.form.Init()
+				}
+			case "ctrl+d":
+				if m.openDeleteConfirmForSelected() {
+					return m, m.deleteConfirm.form.Init()
 				}
 			case "j", "down":
 				m.detailScroll++
@@ -365,6 +395,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, m.todoForm.form.Init()
 				}
 			}
+		case "ctrl+d":
+			if m.openDeleteConfirmForSelected() {
+				return m, m.deleteConfirm.form.Init()
+			}
 		case "f":
 			m.showFreeMode = !m.showFreeMode
 			m.eventCursor = 0
@@ -391,6 +425,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.detailScroll = 0
 		}
 		m.ensureEventSelectionValid()
+	}
+	if m.eventForm != nil && m.eventForm.activeForm != nil {
+		return m, m.updateActiveEventEditorForm(msg)
+	}
+	if m.todoForm != nil && m.todoForm.activeForm != nil {
+		return m, m.updateActiveTodoEditorForm(msg)
 	}
 	return m, nil
 }
@@ -450,6 +490,9 @@ func (m Model) renderMainPanel(width int) string {
 	if m.todoForm != nil {
 		return m.renderTodoFormMainPanel(width, panelHeight)
 	}
+	if m.deleteConfirm != nil {
+		return m.renderDeleteConfirmMainPanel(width, panelHeight)
+	}
 
 	items := m.agendaItems()
 	available := panelHeight - 4
@@ -488,66 +531,1028 @@ func (m Model) renderEventFormMainPanel(width, panelHeight int) string {
 	if m.eventForm == nil {
 		return m.styles.MainPanel.Width(width).Height(panelHeight).Render("")
 	}
-	header := m.styles.PanelTitle.Render("Event Form")
+	header := m.styles.PanelTitle.Render("Event")
 	if m.eventForm.mode == "edit" {
 		header = m.styles.PanelTitle.Render("Edit Event")
 	}
-	if f := m.eventForm.form.GetFocusedField(); f != nil {
-		if key := strings.TrimSpace(f.GetKey()); key != "" {
-			header += m.styles.Subtle.Render("  [focused: " + key + "]")
-		}
-	}
-	innerHeight := panelHeight - 2
-	if innerHeight < 6 {
-		innerHeight = 6
-	}
-	formView := m.eventForm.form.WithWidth(width - 2).WithHeight(innerHeight).WithShowHelp(true).WithShowErrors(true).View()
+	body := m.renderEventEditorList(width-2, panelHeight-4)
 	if strings.TrimSpace(m.eventForm.errMsg) != "" {
-		formView = lipgloss.JoinVertical(lipgloss.Left, m.styles.Subtle.Render("Error: "+m.eventForm.errMsg), "", formView)
+		body = lipgloss.JoinVertical(lipgloss.Left, m.styles.Subtle.Render("Error: "+m.eventForm.errMsg), "", body)
 	}
-	content := lipgloss.JoinVertical(lipgloss.Left, header, "", formView)
-	return m.styles.MainPanel.Width(width).Height(panelHeight).Render(content)
+	content := lipgloss.JoinVertical(lipgloss.Left, header, m.styles.Subtle.Render("[j/k] move  [enter] edit  [ctrl+s] save  [esc] cancel"), "", body)
+	panel := m.styles.MainPanel.Width(width).Height(panelHeight).Render(content)
+	if m.eventForm.activeForm != nil {
+		formHeight := max(7, panelHeight/3)
+		if m.eventForm.activeKey == "description" {
+			formHeight = max(12, (panelHeight*2)/3)
+		}
+		return overlayCentered(panel, m.eventForm.activeForm.WithWidth(min(70, max(30, width-10))).WithHeight(formHeight).WithShowHelp(true).WithShowErrors(true).View(), width, panelHeight)
+	}
+	return panel
 }
 
 func (m Model) renderTodoFormMainPanel(width, panelHeight int) string {
 	if m.todoForm == nil {
 		return m.styles.MainPanel.Width(width).Height(panelHeight).Render("")
 	}
-	header := m.styles.PanelTitle.Render("Task Form")
+	header := m.styles.PanelTitle.Render("Task")
 	if m.todoForm.mode == "edit" {
 		header = m.styles.PanelTitle.Render("Edit Task")
 	}
-	if f := m.todoForm.form.GetFocusedField(); f != nil {
-		if key := strings.TrimSpace(f.GetKey()); key != "" {
-			header += m.styles.Subtle.Render("  [focused: " + key + "]")
-		}
-	}
-	innerHeight := panelHeight - 2
-	if innerHeight < 6 {
-		innerHeight = 6
-	}
-	formView := m.todoForm.form.WithWidth(width - 2).WithHeight(innerHeight).WithShowHelp(true).WithShowErrors(true).View()
+	body := m.renderTodoEditorList(width-2, panelHeight-4)
 	if strings.TrimSpace(m.todoForm.errMsg) != "" {
-		formView = lipgloss.JoinVertical(lipgloss.Left, m.styles.Subtle.Render("Error: "+m.todoForm.errMsg), "", formView)
+		body = lipgloss.JoinVertical(lipgloss.Left, m.styles.Subtle.Render("Error: "+m.todoForm.errMsg), "", body)
+	}
+	content := lipgloss.JoinVertical(lipgloss.Left, header, m.styles.Subtle.Render("[j/k] move  [enter] edit  [ctrl+s] save  [esc] cancel"), "", body)
+	panel := m.styles.MainPanel.Width(width).Height(panelHeight).Render(content)
+	if m.todoForm.activeForm != nil {
+		formHeight := max(7, panelHeight/3)
+		if m.todoForm.activeKey == "description" {
+			formHeight = max(12, (panelHeight*2)/3)
+		}
+		return overlayCentered(panel, m.todoForm.activeForm.WithWidth(min(70, max(30, width-10))).WithHeight(formHeight).WithShowHelp(true).WithShowErrors(true).View(), width, panelHeight)
+	}
+	return panel
+}
+
+func (m Model) renderDeleteConfirmMainPanel(width, panelHeight int) string {
+	if m.deleteConfirm == nil {
+		return m.styles.MainPanel.Width(width).Height(panelHeight).Render("")
+	}
+	header := m.styles.PanelTitle.Render("Confirm Delete")
+	formView := m.deleteConfirm.form.WithWidth(width - 2).WithHeight(panelHeight - 2).WithShowHelp(true).WithShowErrors(true).View()
+	if strings.TrimSpace(m.deleteConfirm.errMsg) != "" {
+		formView = lipgloss.JoinVertical(lipgloss.Left, m.styles.Subtle.Render("Error: "+m.deleteConfirm.errMsg), "", formView)
 	}
 	content := lipgloss.JoinVertical(lipgloss.Left, header, "", formView)
 	return m.styles.MainPanel.Width(width).Height(panelHeight).Render(content)
 }
 
+func overlayCentered(base, modal string, width, height int) string {
+	box := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		Padding(1, 2).
+		Width(min(width-8, max(30, lipgloss.Width(modal)+4))).
+		Render(modal)
+	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, box)
+}
+
+func (m Model) renderEventEditorList(width, height int) string {
+	rows := m.eventEditorRows()
+	if len(rows) == 0 {
+		return ""
+	}
+	cur := nearestSelectableEditorCursor(rows, m.eventForm.cursor)
+	return m.renderEditorRows(rows, cur, width, height)
+}
+
+func (m Model) renderTodoEditorList(width, height int) string {
+	rows := m.todoEditorRows()
+	if len(rows) == 0 {
+		return ""
+	}
+	cur := nearestSelectableEditorCursor(rows, m.todoForm.cursor)
+	return m.renderEditorRows(rows, cur, width, height)
+}
+
+func (m Model) renderEditorRows(rows []editorRow, cur, width, height int) string {
+	lines := make([]string, 0, len(rows))
+	selectedLine := 0
+	for i, row := range rows {
+		if isEditorSeparator(row) && len(lines) > 0 {
+			lines = append(lines, "")
+		}
+		if i == cur {
+			selectedLine = len(lines)
+		}
+		lines = append(lines, strings.Split(m.renderEditorRow(row, i == cur, width), "\n")...)
+	}
+	if len(lines) > height {
+		start := 0
+		if selectedLine >= height {
+			start = selectedLine - height + 1
+		}
+		lines = lines[start:min(len(lines), start+height)]
+	}
+	return lipgloss.NewStyle().Width(width).Height(height).MaxHeight(height).Render(strings.Join(lines, "\n"))
+}
+
+func (m Model) renderEditorRow(row editorRow, selected bool, width int) string {
+	width = max(10, width)
+	if isEditorSeparator(row) {
+		label := " " + row.label + " "
+		ruleWidth := max(0, width-lipgloss.Width(label)-2)
+		return lipgloss.NewStyle().
+			Width(width).
+			Foreground(lipgloss.Color("244")).
+			Bold(true).
+			Render(label + strings.Repeat("─", ruleWidth))
+	}
+
+	prefix := "  "
+	if selected {
+		prefix = " "
+	}
+	if row.key == "attendees-add" || row.key == "alarms-add" {
+		line := prefix + lipgloss.NewStyle().
+			Foreground(lipgloss.Color("230")).
+			Background(lipgloss.Color("62")).
+			Bold(true).
+			Padding(0, 1).
+			Render(editorButtonLabel(row.key))
+		return editorRowStyle(selected, width).Render(line)
+	}
+
+	label := lipgloss.NewStyle().Foreground(lipgloss.Color("117")).Bold(true).Render(row.label)
+	sep := m.styles.Subtle.Render(": ")
+	valueBudget := max(1, width-lipgloss.Width(prefix)-lipgloss.Width(row.label)-2)
+	valueStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
+	displayValue := editorDisplayValue(row)
+	if editorRowWraps(row) {
+		wrapped := wrapEditorValue(displayValue, valueBudget)
+		indent := strings.Repeat(" ", lipgloss.Width(prefix)+lipgloss.Width(row.label)+2)
+		lines := make([]string, 0, len(wrapped))
+		for i, valueLine := range wrapped {
+			value := valueStyle.Render(valueLine)
+			if i == 0 {
+				lines = append(lines, prefix+label+sep+value)
+				continue
+			}
+			lines = append(lines, indent+value)
+		}
+		return editorRowStyle(selected, width).Render(strings.Join(lines, "\n"))
+	}
+	value := valueStyle.Render(truncate(displayValue, valueBudget))
+	return editorRowStyle(selected, width).Render(prefix + label + sep + value)
+}
+
+func (m Model) eventEditorRows() []editorRow {
+	if m.eventForm == nil {
+		return nil
+	}
+	s := m.eventForm
+	rows := []editorRow{
+		editorSeparatorRow("󰉢 Title"),
+		{"title", "Title", emptyDefault(strings.TrimSpace(s.summary), "(untitled event)")},
+		{"calendar", "Calendar", m.calendarDisplayName(s.calendarKey)},
+		editorSeparatorRow("󰋫 Place"),
+		{"location", "Location", emptyDefault(s.location, "-")},
+		{"url", "URL", emptyDefault(s.url, "-")},
+		editorSeparatorRow("󰦨 Description"),
+		{"description", "Description", multilineValue(s.description)},
+		editorSeparatorRow("󰅺 Attendees"),
+		{"attendees", "Attendees", emptyDefault(s.attendees, "-")},
+		{"attendees-add", "", ""},
+		editorSeparatorRow("󰥔 Time"),
+		{"all-day", "All-day", yesNo(s.allDay)},
+	}
+	if !s.allDay {
+		rows = append(rows, editorRow{"when", "When", fmt.Sprintf("%s %s - %s %s", s.fromDate, s.fromTime, s.toDate, s.toTime)})
+	}
+	rows = append(rows,
+		editorSeparatorRow("󰑖 Repeat"),
+		editorRow{"recur", "Repeat", repeatValue(s)},
+	)
+	if s.recur {
+		rows = append(rows, editorRow{"recur-every", "Frequency", emptyDefault(s.recurEvery, "1")})
+		if s.recurFreq == "WEEKLY" {
+			rows = append(rows, editorRow{"recur-weekdays", "Weekday", emptyDefault(strings.Join(s.recurWeekdays, ", "), "-")})
+		}
+		if s.recurFreq == "MONTHLY" {
+			rows = append(rows, editorRow{"recur-monthly-by", "By", emptyDefault(s.recurMonthlyBy, "month day")})
+		}
+		rows = append(rows, editorRow{"recur-end", "Until", repeatEndValue(s)})
+		if s.recurEnd == "until" {
+			rows = append(rows, editorRow{"recur-until", "Repeat until (YYYY-MM-DD)", emptyDefault(s.recurUntil, "-")})
+		}
+		if s.recurEnd == "count" {
+			rows = append(rows, editorRow{"recur-count", "Repeat count", emptyDefault(s.recurCount, "-")})
+		}
+	}
+	rows = append(rows,
+		editorSeparatorRow("󰀠 Notifications"),
+		editorRow{"alarms", "Notifications", emptyDefault(s.alarms, "-")},
+		editorRow{"alarms-add", "", ""},
+	)
+	return rows
+}
+
+func (m Model) todoEditorRows() []editorRow {
+	if m.todoForm == nil {
+		return nil
+	}
+	s := m.todoForm
+	return []editorRow{
+		editorSeparatorRow("󰉢 Title"),
+		{"summary", "Title", emptyDefault(strings.TrimSpace(s.summary), "(untitled task)")},
+		{"calendar", "Calendar", m.calendarDisplayName(s.calendarKey)},
+		editorSeparatorRow("󰋫 Place"),
+		{"location", "Location", emptyDefault(s.location, "-")},
+		editorSeparatorRow("󰦨 Description"),
+		{"description", "Description", multilineValue(s.description)},
+		editorSeparatorRow("󰥔 Schedule"),
+		{"start", "Start", optionalDateTimeValue(s.startDate, s.startTime)},
+		{"due", "Due", optionalDateTimeValue(s.dueDate, s.dueTime)},
+		editorSeparatorRow("󰄬 Status"),
+		{"completed", "Completed", yesNo(s.completed)},
+		{"priority", "Priority", emptyDefault(s.priorityLabel, "mid")},
+	}
+}
+
+func (m *Model) updateEventEditor(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	s := m.eventForm
+	if s.activeForm != nil {
+		switch msg.String() {
+		case "esc", "ctrl+c", "q":
+			s.cancelActive()
+			return m, nil
+		case "enter":
+			if activeFormFiltering(s.activeForm) {
+				return m, m.updateActiveEventEditorForm(msg)
+			}
+			return m, m.submitActiveEventForm()
+		}
+		return m, m.updateActiveEventEditorForm(msg)
+	}
+	switch msg.String() {
+	case "ctrl+s":
+		if err := m.commitEventForm(); err != nil {
+			s.errMsg = err.Error()
+			return m, nil
+		}
+		m.eventForm = nil
+		m.focusDetails = false
+		m.focusMain = true
+		m.ensureEventSelectionValid()
+	case "ctrl+c", "esc", "q":
+		m.eventForm = nil
+		m.focusDetails = false
+		m.focusMain = true
+	case "j", "down", "tab":
+		s.cursor = moveEditorCursor(m.eventEditorRows(), s.cursor, 1)
+	case "k", "up", "shift+tab":
+		s.cursor = moveEditorCursor(m.eventEditorRows(), s.cursor, -1)
+	case "enter":
+		cmd := m.openEventEditorForm()
+		return m, cmd
+	}
+	return m, nil
+}
+
+func (m *Model) updateTodoEditor(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	s := m.todoForm
+	if s.activeForm != nil {
+		switch msg.String() {
+		case "esc", "ctrl+c", "q":
+			s.cancelActive()
+			return m, nil
+		case "enter":
+			if activeFormFiltering(s.activeForm) {
+				return m, m.updateActiveTodoEditorForm(msg)
+			}
+			return m, m.submitActiveTodoForm()
+		}
+		return m, m.updateActiveTodoEditorForm(msg)
+	}
+	switch msg.String() {
+	case "ctrl+s":
+		if err := m.commitTodoForm(); err != nil {
+			s.errMsg = err.Error()
+			return m, nil
+		}
+		m.todoForm = nil
+		m.focusDetails = false
+		m.focusMain = true
+		m.ensureEventSelectionValid()
+	case "ctrl+c", "esc", "q":
+		m.todoForm = nil
+		m.focusDetails = false
+		m.focusMain = true
+	case "j", "down", "tab":
+		s.cursor = moveEditorCursor(m.todoEditorRows(), s.cursor, 1)
+	case "k", "up", "shift+tab":
+		s.cursor = moveEditorCursor(m.todoEditorRows(), s.cursor, -1)
+	case "enter":
+		cmd := m.openTodoEditorForm()
+		return m, cmd
+	}
+	return m, nil
+}
+
+func (m *Model) openEventEditorForm() tea.Cmd {
+	rows := m.eventEditorRows()
+	if len(rows) == 0 {
+		return nil
+	}
+	s := m.eventForm
+	s.cursor = nearestSelectableEditorCursor(rows, s.cursor)
+	key := rows[s.cursor].key
+	if isEditorSeparator(rows[s.cursor]) {
+		return nil
+	}
+	s.activeKey = key
+	s.backup = s.snapshot()
+	s.activeForm = m.buildEventEditorForm(key)
+	if s.activeForm == nil {
+		s.activeKey = ""
+		s.backup = nil
+		return nil
+	}
+	return s.activeForm.Init()
+}
+
+func (m *Model) updateActiveEventEditorForm(msg tea.Msg) tea.Cmd {
+	s := m.eventForm
+	if s == nil || s.activeForm == nil {
+		return nil
+	}
+	updated, cmd := s.activeForm.Update(msg)
+	if fm, ok := updated.(*huh.Form); ok {
+		s.activeForm = fm
+	}
+	if s.activeForm.State == huh.StateAborted {
+		s.cancelActive()
+		return nil
+	}
+	if s.activeForm.State == huh.StateCompleted {
+		if err := m.applyEventEditorForm(); err != nil {
+			s.errMsg = err.Error()
+		} else {
+			s.errMsg = ""
+		}
+		s.activeForm = nil
+		s.activeKey = ""
+		s.backup = nil
+		return nil
+	}
+	return cmd
+}
+
+func (m *Model) submitActiveEventForm() tea.Cmd {
+	s := m.eventForm
+	if s == nil || s.activeForm == nil {
+		return nil
+	}
+	cmd := s.activeForm.NextGroup()
+	if s.activeForm.State != huh.StateCompleted {
+		return cmd
+	}
+	if err := m.applyEventEditorForm(); err != nil {
+		s.errMsg = err.Error()
+		s.activeForm.State = huh.StateNormal
+		return cmd
+	}
+	s.errMsg = ""
+	s.activeForm = nil
+	s.activeKey = ""
+	s.backup = nil
+	return cmd
+}
+
+func (m *Model) buildEventEditorForm(key string) *huh.Form {
+	s := m.eventForm
+	switch key {
+	case "title":
+		return singleInputForm("Title", "value", &s.summary, func(v string) error {
+			if strings.TrimSpace(v) == "" {
+				return errors.New("title is required")
+			}
+			return nil
+		})
+	case "location":
+		return singleInputForm("Location", "value", &s.location, nil)
+	case "description":
+		return huh.NewForm(huh.NewGroup(huh.NewText().Key("value").Title("Description").Value(&s.description).Lines(12))).WithShowHelp(true).WithShowErrors(true)
+	case "url":
+		return singleInputForm("URL", "value", &s.url, nil)
+	case "calendar":
+		return huh.NewForm(huh.NewGroup(huh.NewSelect[string]().Key("value").Title("Calendar").Options(m.calendarOptions()...).Value(&s.calendarKey))).WithShowHelp(true).WithShowErrors(true)
+	case "attendees":
+		values := splitListInput(s.attendees)
+		return huh.NewForm(huh.NewGroup(huh.NewMultiSelect[string]().Key("value").Title("Attendees").Options(selectedOptions(values)...).Value(&values).WithKeyMap(attendeeMultiSelectKeyMap()))).WithShowHelp(true).WithShowErrors(true)
+	case "attendees-add":
+		values := []string{}
+		return huh.NewForm(huh.NewGroup(huh.NewMultiSelect[string]().Key("value").Title("Add attendees").Options(m.attendeeOptions()...).Filterable(true).Value(&values).WithKeyMap(attendeeMultiSelectKeyMap()))).WithShowHelp(true).WithShowErrors(true)
+	case "alarms":
+		values := splitListInput(s.alarms)
+		return huh.NewForm(huh.NewGroup(huh.NewMultiSelect[string]().Key("value").Title("Notifications").Options(selectedOptions(values)...).Filterable(false).Value(&values))).WithShowHelp(true).WithShowErrors(true)
+	case "alarms-add":
+		value := ""
+		return huh.NewForm(huh.NewGroup(huh.NewInput().
+			Key("value").
+			Title("Add notification").
+			Description("Examples: 10m before, 2h before, 10d before, 1d after").
+			Value(&value).
+			Validate(validateAlarmsInput),
+		)).WithShowHelp(true).WithShowErrors(true)
+	case "recur":
+		value := repeatValue(s)
+		return huh.NewForm(huh.NewGroup(huh.NewSelect[string]().Key("value").Title("Repeat").Options(
+			huh.NewOption("None", "none"),
+			huh.NewOption("Daily", "daily"),
+			huh.NewOption("Weekly", "weekly"),
+			huh.NewOption("Monthly", "monthly"),
+			huh.NewOption("Yearly", "yearly"),
+		).Value(&value))).WithShowHelp(true).WithShowErrors(true)
+	case "recur-every":
+		return singleInputForm("Frequency", "value", &s.recurEvery, validatePositiveInput)
+	case "recur-weekdays":
+		values := append([]string{}, s.recurWeekdays...)
+		return huh.NewForm(huh.NewGroup(huh.NewMultiSelect[string]().Key("value").Title("Weekday").Options(weekdayOptions(values)...).Value(&values))).WithShowHelp(true).WithShowErrors(true)
+	case "recur-monthly-by":
+		value := s.recurMonthlyBy
+		if value == "" {
+			value = "month day"
+		}
+		return huh.NewForm(huh.NewGroup(huh.NewSelect[string]().Key("value").Title("By").Options(
+			huh.NewOption("On every month day", "month day"),
+			huh.NewOption("On every weekday ordinal", "weekday ordinal"),
+		).Value(&value))).WithShowHelp(true).WithShowErrors(true)
+	case "recur-end":
+		value := s.recurEnd
+		return huh.NewForm(huh.NewGroup(huh.NewSelect[string]().Key("value").Title("Until").Options(
+			huh.NewOption("Forever", "forever"),
+			huh.NewOption("Until date", "until"),
+			huh.NewOption("Fixed count", "count"),
+		).Value(&value))).WithShowHelp(true).WithShowErrors(true)
+	case "recur-until":
+		return singleInputForm("Repeat until (YYYY-MM-DD)", "value", &s.recurUntil, validateEventDateInput)
+	case "recur-count":
+		return singleInputForm("Repeat count", "value", &s.recurCount, validatePositiveInput)
+	case "all-day":
+		return huh.NewForm(huh.NewGroup(huh.NewConfirm().Key("value").Title("All-day").Value(&s.allDay))).WithShowHelp(true).WithShowErrors(true)
+	case "when":
+		return huh.NewForm(huh.NewGroup(
+			huh.NewInput().Key("from-date").Title("Start date").Value(&s.fromDate).Validate(validateEventDateInput),
+			huh.NewInput().Key("from-time").Title("Start time").Value(&s.fromTime).Validate(validateEventTimeInput),
+			huh.NewInput().Key("to-date").Title("End date").Value(&s.toDate).Validate(validateEventDateInput),
+			huh.NewInput().Key("to-time").Title("End time").Value(&s.toTime).Validate(validateEventTimeInput),
+		)).WithShowHelp(true).WithShowErrors(true)
+	}
+	return nil
+}
+
+func (m *Model) applyEventEditorForm() error {
+	s := m.eventForm
+	f := s.activeForm
+	value := activeFormValue(f)
+	switch s.activeKey {
+	case "attendees":
+		s.attendees = strings.Join(anyStringSlice(value), "; ")
+	case "attendees-add":
+		s.attendees = mergeListInput(s.attendees, anyStringSlice(value))
+	case "alarms":
+		s.alarms = strings.Join(anyStringSlice(value), "; ")
+	case "alarms-add":
+		added := strings.TrimSpace(anyString(value))
+		if added != "" {
+			if err := validateAlarmsInput(added); err != nil {
+				return err
+			}
+			s.alarms = mergeListInput(s.alarms, []string{added})
+		}
+	case "recur":
+		repeat := anyString(value)
+		s.recur = repeat != "none"
+		if s.recur {
+			s.recurFreq = strings.ToUpper(repeat)
+		}
+	case "recur-weekdays":
+		s.recurWeekdays = anyStringSlice(value)
+	case "recur-monthly-by":
+		s.recurMonthlyBy = anyString(value)
+	case "recur-end":
+		s.recurEnd = anyString(value)
+	case "all-day":
+		if v, ok := value.(bool); ok {
+			s.allDay = v
+		}
+	}
+	if s.activeKey == "when" {
+		if _, _, err := parseEventFormTimes(*s); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (m *Model) openTodoEditorForm() tea.Cmd {
+	rows := m.todoEditorRows()
+	if len(rows) == 0 {
+		return nil
+	}
+	s := m.todoForm
+	s.cursor = nearestSelectableEditorCursor(rows, s.cursor)
+	key := rows[s.cursor].key
+	if isEditorSeparator(rows[s.cursor]) {
+		return nil
+	}
+	s.activeKey = key
+	s.backup = s.snapshot()
+	s.activeForm = m.buildTodoEditorForm(key)
+	if s.activeForm == nil {
+		s.activeKey = ""
+		s.backup = nil
+		return nil
+	}
+	return s.activeForm.Init()
+}
+
+func (m *Model) updateActiveTodoEditorForm(msg tea.Msg) tea.Cmd {
+	s := m.todoForm
+	if s == nil || s.activeForm == nil {
+		return nil
+	}
+	updated, cmd := s.activeForm.Update(msg)
+	if fm, ok := updated.(*huh.Form); ok {
+		s.activeForm = fm
+	}
+	if s.activeForm.State == huh.StateAborted {
+		s.cancelActive()
+		return nil
+	}
+	if s.activeForm.State == huh.StateCompleted {
+		if err := m.applyTodoEditorForm(); err != nil {
+			s.errMsg = err.Error()
+		} else {
+			s.errMsg = ""
+		}
+		s.activeForm = nil
+		s.activeKey = ""
+		s.backup = nil
+		return nil
+	}
+	return cmd
+}
+
+func (m *Model) submitActiveTodoForm() tea.Cmd {
+	s := m.todoForm
+	if s == nil || s.activeForm == nil {
+		return nil
+	}
+	cmd := s.activeForm.NextGroup()
+	if s.activeForm.State != huh.StateCompleted {
+		return cmd
+	}
+	if err := m.applyTodoEditorForm(); err != nil {
+		s.errMsg = err.Error()
+		s.activeForm.State = huh.StateNormal
+		return cmd
+	}
+	s.errMsg = ""
+	s.activeForm = nil
+	s.activeKey = ""
+	s.backup = nil
+	return cmd
+}
+
+func (m *Model) buildTodoEditorForm(key string) *huh.Form {
+	s := m.todoForm
+	switch key {
+	case "summary":
+		return singleInputForm("Title", "value", &s.summary, func(v string) error {
+			if strings.TrimSpace(v) == "" {
+				return errors.New("title is required")
+			}
+			return nil
+		})
+	case "description":
+		return huh.NewForm(huh.NewGroup(huh.NewText().Key("value").Title("Description").Value(&s.description).Lines(12))).WithShowHelp(true).WithShowErrors(true)
+	case "location":
+		return singleInputForm("Location", "value", &s.location, nil)
+	case "calendar":
+		return huh.NewForm(huh.NewGroup(huh.NewSelect[string]().Key("value").Title("Calendar").Options(m.calendarOptions()...).Value(&s.calendarKey))).WithShowHelp(true).WithShowErrors(true)
+	case "start":
+		return huh.NewForm(huh.NewGroup(
+			huh.NewInput().Key("start-date").Title("Start date").Value(&s.startDate).Validate(validateOptionalDateInput),
+			huh.NewInput().Key("start-time").Title("Start time").Value(&s.startTime).Validate(validateOptionalTimeInput),
+		)).WithShowHelp(true).WithShowErrors(true)
+	case "due":
+		return huh.NewForm(huh.NewGroup(
+			huh.NewInput().Key("due-date").Title("Due date").Value(&s.dueDate).Validate(validateOptionalDateInput),
+			huh.NewInput().Key("due-time").Title("Due time").Value(&s.dueTime).Validate(validateOptionalTimeInput),
+		)).WithShowHelp(true).WithShowErrors(true)
+	case "completed":
+		return huh.NewForm(huh.NewGroup(huh.NewConfirm().Key("value").Title("Completed").Value(&s.completed))).WithShowHelp(true).WithShowErrors(true)
+	case "priority":
+		return huh.NewForm(huh.NewGroup(huh.NewSelect[string]().Key("value").Title("Priority").Options(
+			huh.NewOption("Low", "low"),
+			huh.NewOption("Mid", "mid"),
+			huh.NewOption("High", "high"),
+		).Value(&s.priorityLabel))).WithShowHelp(true).WithShowErrors(true)
+	}
+	return nil
+}
+
+func (m *Model) applyTodoEditorForm() error {
+	if m.todoForm.activeKey == "start" || m.todoForm.activeKey == "due" {
+		_, _, err := parseTodoFormTimesOptional(*m.todoForm)
+		return err
+	}
+	return nil
+}
+
+func singleInputForm(title, key string, value *string, validate func(string) error) *huh.Form {
+	input := huh.NewInput().Key(key).Title(title).Value(value)
+	if validate != nil {
+		input.Validate(validate)
+	}
+	return huh.NewForm(huh.NewGroup(input)).WithShowHelp(true).WithShowErrors(true)
+}
+
+func (m Model) calendarOptions() []huh.Option[string] {
+	out := make([]huh.Option[string], 0, len(m.calendarOrder))
+	for _, key := range m.calendarOrder {
+		cal := m.calendarByKey(key)
+		if cal == nil || cal.Source == calendar.SpecialSourceBirthdays {
+			continue
+		}
+		name := cal.DisplayName
+		if name == "" {
+			name = cal.Name
+		}
+		out = append(out, huh.NewOption(name+" ("+cal.Source+")", key))
+	}
+	if len(out) == 0 {
+		out = append(out, huh.NewOption("No writable calendar", ""))
+	}
+	return out
+}
+
+func (m Model) attendeeOptions() []huh.Option[string] {
+	suggestions := m.attendeeSuggestions()
+	out := make([]huh.Option[string], 0, len(suggestions))
+	for _, suggestion := range suggestions {
+		out = append(out, huh.NewOption(suggestion, suggestion))
+	}
+	if len(out) == 0 {
+		out = append(out, huh.NewOption("No contacts found", ""))
+	}
+	return out
+}
+
+func selectedOptions(values []string) []huh.Option[string] {
+	out := make([]huh.Option[string], 0, len(values))
+	for _, value := range values {
+		out = append(out, huh.NewOption(value, value).Selected(true))
+	}
+	if len(out) == 0 {
+		out = append(out, huh.NewOption("None", ""))
+	}
+	return out
+}
+
+func weekdayOptions(selected []string) []huh.Option[string] {
+	selectedMap := map[string]bool{}
+	for _, v := range selected {
+		selectedMap[v] = true
+	}
+	days := []string{"Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"}
+	out := make([]huh.Option[string], 0, len(days))
+	for _, day := range days {
+		out = append(out, huh.NewOption(day, day).Selected(selectedMap[day]))
+	}
+	return out
+}
+
+func (s *eventFormState) snapshot() *eventFormSnapshot {
+	if s == nil {
+		return nil
+	}
+	return &eventFormSnapshot{
+		summary:        s.summary,
+		calendarKey:    s.calendarKey,
+		location:       s.location,
+		description:    s.description,
+		url:            s.url,
+		attendees:      s.attendees,
+		alarms:         s.alarms,
+		recur:          s.recur,
+		recurFreq:      s.recurFreq,
+		recurEvery:     s.recurEvery,
+		recurWeekdays:  append([]string{}, s.recurWeekdays...),
+		recurMonthlyBy: s.recurMonthlyBy,
+		recurEnd:       s.recurEnd,
+		recurUntil:     s.recurUntil,
+		recurCount:     s.recurCount,
+		allDay:         s.allDay,
+		fromDate:       s.fromDate,
+		fromTime:       s.fromTime,
+		toDate:         s.toDate,
+		toTime:         s.toTime,
+	}
+}
+
+func (s *eventFormState) cancelActive() {
+	if s == nil {
+		return
+	}
+	if b := s.backup; b != nil {
+		s.summary = b.summary
+		s.calendarKey = b.calendarKey
+		s.location = b.location
+		s.description = b.description
+		s.url = b.url
+		s.attendees = b.attendees
+		s.alarms = b.alarms
+		s.recur = b.recur
+		s.recurFreq = b.recurFreq
+		s.recurEvery = b.recurEvery
+		s.recurWeekdays = append([]string{}, b.recurWeekdays...)
+		s.recurMonthlyBy = b.recurMonthlyBy
+		s.recurEnd = b.recurEnd
+		s.recurUntil = b.recurUntil
+		s.recurCount = b.recurCount
+		s.allDay = b.allDay
+		s.fromDate = b.fromDate
+		s.fromTime = b.fromTime
+		s.toDate = b.toDate
+		s.toTime = b.toTime
+	}
+	s.activeForm = nil
+	s.activeKey = ""
+	s.backup = nil
+}
+
+func (s *todoFormState) snapshot() *todoFormSnapshot {
+	if s == nil {
+		return nil
+	}
+	return &todoFormSnapshot{
+		summary:       s.summary,
+		description:   s.description,
+		location:      s.location,
+		calendarKey:   s.calendarKey,
+		startDate:     s.startDate,
+		startTime:     s.startTime,
+		dueDate:       s.dueDate,
+		dueTime:       s.dueTime,
+		completed:     s.completed,
+		priorityLabel: s.priorityLabel,
+	}
+}
+
+func (s *todoFormState) cancelActive() {
+	if s == nil {
+		return
+	}
+	if b := s.backup; b != nil {
+		s.summary = b.summary
+		s.description = b.description
+		s.location = b.location
+		s.calendarKey = b.calendarKey
+		s.startDate = b.startDate
+		s.startTime = b.startTime
+		s.dueDate = b.dueDate
+		s.dueTime = b.dueTime
+		s.completed = b.completed
+		s.priorityLabel = b.priorityLabel
+	}
+	s.activeForm = nil
+	s.activeKey = ""
+	s.backup = nil
+}
+
+func (m Model) calendarDisplayName(key string) string {
+	cal := m.calendarByKey(key)
+	if cal == nil {
+		return "-"
+	}
+	name := cal.DisplayName
+	if name == "" {
+		name = cal.Name
+	}
+	if cal.Source != "" {
+		return name + " (" + cal.Source + ")"
+	}
+	return name
+}
+
+func repeatValue(s *eventFormState) string {
+	if s == nil || !s.recur {
+		return "none"
+	}
+	switch strings.ToUpper(s.recurFreq) {
+	case "DAILY":
+		return "daily"
+	case "WEEKLY":
+		return "weekly"
+	case "MONTHLY":
+		return "monthly"
+	case "YEARLY":
+		return "yearly"
+	default:
+		return "daily"
+	}
+}
+
+func repeatEndValue(s *eventFormState) string {
+	if s == nil {
+		return "forever"
+	}
+	switch s.recurEnd {
+	case "until":
+		return "until date"
+	case "count":
+		return "fixed count"
+	default:
+		return "forever"
+	}
+}
+
+func validatePositiveInput(v string) error {
+	n, err := parsePositiveIntDefault(v, 0)
+	if err != nil || n <= 0 {
+		return errors.New("value must be a positive number")
+	}
+	return nil
+}
+
+func anyStringSlice(v any) []string {
+	switch typed := v.(type) {
+	case []string:
+		return typed
+	case *[]string:
+		if typed == nil {
+			return nil
+		}
+		return *typed
+	default:
+		return nil
+	}
+}
+
+func anyString(v any) string {
+	if s, ok := v.(string); ok {
+		return s
+	}
+	return ""
+}
+
+func activeFormValue(form *huh.Form) any {
+	if form == nil {
+		return nil
+	}
+	field := form.GetFocusedField()
+	if field == nil {
+		return nil
+	}
+	return field.GetValue()
+}
+
+func activeFormFiltering(form *huh.Form) bool {
+	if form == nil {
+		return false
+	}
+	field := form.GetFocusedField()
+	if field == nil {
+		return false
+	}
+	filtering, ok := field.(interface{ GetFiltering() bool })
+	return ok && filtering.GetFiltering()
+}
+
+func editorSeparatorRow(label string) editorRow {
+	return editorRow{key: "__separator:" + label, label: label}
+}
+
+func isEditorSeparator(row editorRow) bool {
+	return strings.HasPrefix(row.key, "__separator:")
+}
+
+func editorRowWraps(row editorRow) bool {
+	return row.key == "description" || row.key == "attendees"
+}
+
+func editorDisplayValue(row editorRow) string {
+	if row.key == "attendees" {
+		return strings.ReplaceAll(row.value, "; ", "\n")
+	}
+	return row.value
+}
+
+func wrapEditorValue(value string, width int) []string {
+	width = max(1, width)
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return []string{"-"}
+	}
+	out := make([]string, 0)
+	for _, paragraph := range strings.Split(value, "\n") {
+		paragraph = strings.TrimSpace(paragraph)
+		if paragraph == "" {
+			out = append(out, "")
+			continue
+		}
+		runes := []rune(paragraph)
+		for len(runes) > width {
+			cut := width
+			for i := width; i > 0; i-- {
+				if runes[i-1] == ' ' || runes[i-1] == '\t' {
+					cut = i - 1
+					break
+				}
+			}
+			if cut <= 0 {
+				cut = width
+			}
+			out = append(out, strings.TrimSpace(string(runes[:cut])))
+			runes = []rune(strings.TrimSpace(string(runes[cut:])))
+		}
+		out = append(out, string(runes))
+	}
+	return out
+}
+
+func nearestSelectableEditorCursor(rows []editorRow, cursor int) int {
+	if len(rows) == 0 {
+		return 0
+	}
+	cursor = clamp(cursor, 0, len(rows)-1)
+	if !isEditorSeparator(rows[cursor]) {
+		return cursor
+	}
+	for i := cursor + 1; i < len(rows); i++ {
+		if !isEditorSeparator(rows[i]) {
+			return i
+		}
+	}
+	for i := cursor - 1; i >= 0; i-- {
+		if !isEditorSeparator(rows[i]) {
+			return i
+		}
+	}
+	return cursor
+}
+
+func moveEditorCursor(rows []editorRow, cursor, delta int) int {
+	if len(rows) == 0 || delta == 0 {
+		return 0
+	}
+	cursor = nearestSelectableEditorCursor(rows, cursor)
+	for next := cursor + delta; next >= 0 && next < len(rows); next += delta {
+		if !isEditorSeparator(rows[next]) {
+			return next
+		}
+	}
+	return cursor
+}
+
+func editorButtonLabel(key string) string {
+	switch key {
+	case "attendees-add":
+		return "󰐕 Add attendee"
+	case "alarms-add":
+		return "󰐕 Add notification"
+	default:
+		return "󰐕 Add"
+	}
+}
+
+func editorRowStyle(selected bool, width int) lipgloss.Style {
+	style := lipgloss.NewStyle().Width(width)
+	if selected {
+		style = style.Background(lipgloss.Color("238")).Foreground(lipgloss.Color("230")).Bold(true)
+	}
+	return style
+}
+
+func attendeeMultiSelectKeyMap() *huh.KeyMap {
+	keymap := huh.NewDefaultKeyMap()
+	keymap.MultiSelect.SelectAll.Unbind()
+	keymap.MultiSelect.SelectNone.Unbind()
+	keymap.MultiSelect.SetFilter.SetKeys("enter")
+	keymap.MultiSelect.SetFilter.SetHelp("enter", "set filter")
+	return keymap
+}
+
+func mergeListInput(existing string, added []string) string {
+	seen := map[string]bool{}
+	out := make([]string, 0)
+	for _, v := range splitListInput(existing) {
+		if v == "" || seen[v] {
+			continue
+		}
+		seen[v] = true
+		out = append(out, v)
+	}
+	for _, v := range added {
+		v = strings.TrimSpace(v)
+		if v == "" || seen[v] {
+			continue
+		}
+		seen[v] = true
+		out = append(out, v)
+	}
+	return strings.Join(out, "; ")
+}
+
 func (m Model) renderEventDetailsPane(width, height int) string {
 	if m.eventForm != nil {
-		view := m.eventForm.form.WithWidth(width).WithHeight(height).WithShowHelp(true).WithShowErrors(true).View()
-		if strings.TrimSpace(m.eventForm.errMsg) != "" {
-			view = lipgloss.JoinVertical(lipgloss.Left, m.styles.Subtle.Render("Error: "+m.eventForm.errMsg), "", view)
-		}
-		return lipgloss.NewStyle().Width(width).Height(height).MaxHeight(height).Render(view)
+		return lipgloss.NewStyle().Width(width).Height(height).MaxHeight(height).Render(m.renderEventEditorList(width, height))
 	}
 	if m.todoForm != nil {
-		view := m.todoForm.form.WithWidth(width).WithHeight(height).WithShowHelp(true).WithShowErrors(true).View()
-		if strings.TrimSpace(m.todoForm.errMsg) != "" {
-			view = lipgloss.JoinVertical(lipgloss.Left, m.styles.Subtle.Render("Error: "+m.todoForm.errMsg), "", view)
-		}
-		return lipgloss.NewStyle().Width(width).Height(height).MaxHeight(height).Render(view)
+		return lipgloss.NewStyle().Width(width).Height(height).MaxHeight(height).Render(m.renderTodoEditorList(width, height))
 	}
 
 	items := m.agendaItems()
@@ -582,6 +1587,17 @@ func (m Model) renderEventDetailsFor(ev calendar.Event, width, height int) strin
 	}
 	if ev.Location != "" {
 		lines = append(lines, "Location: "+ev.Location)
+	}
+	if len(ev.Attendees) > 0 {
+		lines = append(lines, "Attendees: "+formatAttendees(ev.Attendees))
+	}
+	if ev.Recurrence != nil {
+		lines = append(lines, "Repeats: "+formatRecurrence(ev.Recurrence))
+	} else if ev.Recurring {
+		lines = append(lines, "Repeats: yes")
+	}
+	if len(ev.Alarms) > 0 {
+		lines = append(lines, "Notifications: "+formatAlarms(ev.Alarms))
 	}
 	if ev.Description != "" {
 		lines = append(lines, "", "Description:")
@@ -687,17 +1703,56 @@ func (m *Model) moveEventCursor(delta int) {
 		m.eventListOffset = 0
 		return
 	}
-	m.eventCursor += delta
-	if m.eventCursor < 0 {
-		m.eventCursor = 0
+	target := m.eventCursor + delta
+	if target < 0 {
+		needed := -target
+		prepended := m.moveAgendaWindowBackward(needed)
+		items = m.agendaItems()
+		if len(items) == 0 {
+			m.eventCursor = 0
+			m.eventListOffset = 0
+			return
+		}
+		target = prepended - needed
+		if target < 0 {
+			target = 0
+		}
 	}
-	if m.eventCursor >= len(items) {
-		m.eventCursor = len(items) - 1
+	if target >= len(items) {
+		target = len(items) - 1
 	}
+	m.eventCursor = target
 
 	m.selected = dayStart(items[m.eventCursor].Day)
 	m.scrollForSelection()
 	m.ensureEventCursorVisible()
+}
+
+func (m *Model) moveAgendaWindowBackward(needed int) int {
+	if needed <= 0 {
+		return 0
+	}
+	originalStart := m.agendaStart
+	if originalStart.IsZero() {
+		originalStart = dayStart(m.selected)
+	}
+	start := originalStart
+	prepended := 0
+	for prepended < needed {
+		start = start.AddDate(0, 0, -1)
+		m.agendaStart = start
+		items := m.agendaItems()
+		prepended = 0
+		for _, item := range items {
+			if !item.Day.Before(originalStart) {
+				break
+			}
+			prepended++
+		}
+	}
+	m.eventCursor += prepended
+	m.eventListOffset += prepended
+	return prepended
 }
 
 func (m Model) renderCalendarListPane(width, height int) string {
@@ -847,6 +1902,65 @@ func max(a, b int) int {
 		return a
 	}
 	return b
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func clamp(v, lo, hi int) int {
+	if hi < lo {
+		return lo
+	}
+	if v < lo {
+		return lo
+	}
+	if v > hi {
+		return hi
+	}
+	return v
+}
+
+func emptyDefault(v, fallback string) string {
+	if strings.TrimSpace(v) == "" {
+		return fallback
+	}
+	return v
+}
+
+func yesNo(v bool) string {
+	if v {
+		return "yes"
+	}
+	return "no"
+}
+
+func singleLineValue(v string) string {
+	v = strings.TrimSpace(strings.ReplaceAll(v, "\n", " "))
+	if v == "" {
+		return "-"
+	}
+	return v
+}
+
+func multilineValue(v string) string {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return "-"
+	}
+	return v
+}
+
+func optionalDateTimeValue(date, clock string) string {
+	date = strings.TrimSpace(date)
+	clock = strings.TrimSpace(clock)
+	if date == "" && clock == "" {
+		return "-"
+	}
+	return strings.TrimSpace(date + " " + clock)
 }
 
 func (m Model) sidebarWidth() int {
@@ -1377,18 +2491,28 @@ func (m *Model) newEventFormState(mode, targetUID string, ev calendar.Event) *ev
 		td = fd.Add(time.Hour)
 	}
 	state := &eventFormState{
-		mode:        mode,
-		targetUID:   targetUID,
-		summary:     ev.Summary,
-		calendarKey: key,
-		location:    ev.Location,
-		description: ev.Description,
-		url:         ev.URL,
-		allDay:      ev.AllDay,
-		fromDate:    fd.Format("2006-01-02"),
-		fromTime:    fd.Format("15:04"),
-		toDate:      td.Format("2006-01-02"),
-		toTime:      td.Format("15:04"),
+		mode:           mode,
+		targetUID:      targetUID,
+		summary:        ev.Summary,
+		calendarKey:    key,
+		location:       ev.Location,
+		description:    ev.Description,
+		url:            ev.URL,
+		attendees:      attendeesInput(ev.Attendees),
+		alarms:         alarmsInput(ev.Alarms),
+		recur:          ev.Recurrence != nil,
+		recurFreq:      recurrenceFrequencyValue(ev.Recurrence),
+		recurEvery:     recurrenceIntervalValue(ev.Recurrence),
+		recurWeekdays:  recurrenceWeekdayValues(ev.Recurrence),
+		recurMonthlyBy: recurrenceMonthlyByValue(ev.Recurrence),
+		recurEnd:       recurrenceEndValue(ev.Recurrence),
+		recurUntil:     recurrenceUntilValue(ev.Recurrence),
+		recurCount:     recurrenceCountValue(ev.Recurrence),
+		allDay:         ev.AllDay,
+		fromDate:       fd.Format("2006-01-02"),
+		fromTime:       fd.Format("15:04"),
+		toDate:         td.Format("2006-01-02"),
+		toTime:         td.Format("15:04"),
 	}
 	state.form = m.buildEventForm(state)
 	return state
@@ -1409,6 +2533,18 @@ func (m *Model) buildEventForm(s *eventFormState) *huh.Form {
 	}
 	if len(calOptions) == 0 {
 		calOptions = append(calOptions, huh.NewOption("No writable calendar", ""))
+	}
+	attendeeSuggestions := m.attendeeSuggestions()
+	frequencyOptions := []huh.Option[string]{
+		huh.NewOption("Daily", "DAILY"),
+		huh.NewOption("Weekly", "WEEKLY"),
+		huh.NewOption("Monthly", "MONTHLY"),
+		huh.NewOption("Yearly", "YEARLY"),
+	}
+	endOptions := []huh.Option[string]{
+		huh.NewOption("Forever", "forever"),
+		huh.NewOption("Until date", "until"),
+		huh.NewOption("Fixed count", "count"),
 	}
 
 	modeTitle := "Create Event"
@@ -1432,6 +2568,37 @@ func (m *Model) buildEventForm(s *eventFormState) *huh.Form {
 		huh.NewInput().Key("location").Title("Location").Value(&s.location),
 		huh.NewText().Key("description").Title("Description").Value(&s.description).Lines(4),
 		huh.NewInput().Key("url").Title("URL").Value(&s.url),
+		huh.NewInput().Key("attendees").Title("Attendees").Description("Separate attendees with commas or semicolons").Value(&s.attendees).Suggestions(attendeeSuggestions),
+		huh.NewInput().Key("alarms").Title("Notifications").Description("Examples: 10m before, 2h before, 1d after").Value(&s.alarms).Validate(validateAlarmsInput),
+		huh.NewConfirm().Key("recur").Title("Repeat").Value(&s.recur),
+		huh.NewSelect[string]().Key("recur-freq").Title("Repeat frequency").Options(frequencyOptions...).Value(&s.recurFreq),
+		huh.NewInput().Key("recur-every").Title("Repeat every").Value(&s.recurEvery).Validate(func(v string) error {
+			if !s.recur {
+				return nil
+			}
+			n, err := parsePositiveIntDefault(v, 1)
+			if err != nil || n <= 0 {
+				return errors.New("repeat interval must be a positive number")
+			}
+			return nil
+		}),
+		huh.NewSelect[string]().Key("recur-end").Title("Repeat ending").Options(endOptions...).Value(&s.recurEnd),
+		huh.NewInput().Key("recur-until").Title("Repeat until (YYYY-MM-DD)").Value(&s.recurUntil).Validate(func(v string) error {
+			if !s.recur || s.recurEnd != "until" {
+				return nil
+			}
+			return validateEventDateInput(v)
+		}),
+		huh.NewInput().Key("recur-count").Title("Repeat count").Value(&s.recurCount).Validate(func(v string) error {
+			if !s.recur || s.recurEnd != "count" {
+				return nil
+			}
+			n, err := parsePositiveIntDefault(v, 0)
+			if err != nil || n <= 0 {
+				return errors.New("repeat count must be a positive number")
+			}
+			return nil
+		}),
 		huh.NewConfirm().Key("all-day").Title("All-day").Value(&s.allDay),
 		huh.NewInput().Key("from-date").Title("From date (YYYY-MM-DD)").Value(&s.fromDate).Validate(validateEventDateInput),
 		huh.NewInput().Key("from-time").Title("From time (HH:MM)").Description("Ignored when all-day is enabled").Value(&s.fromTime).Validate(func(v string) error {
@@ -1501,13 +2668,26 @@ func (m *Model) commitEventForm() error {
 	if err != nil {
 		return err
 	}
+	attendees := parseAttendeesInput(s.attendees)
+	alarms, err := parseAlarmsInput(s.alarms)
+	if err != nil {
+		return err
+	}
+	recurrence, err := parseRecurrenceInput(*s)
+	if err != nil {
+		return err
+	}
 
 	if s.mode == "edit" {
+		recurrenceUpdate := recurrence
 		upd := calendar.EventUpdate{
 			Summary:     &s.summary,
 			Description: &s.description,
 			Location:    &s.location,
 			URL:         &s.url,
+			Attendees:   &attendees,
+			Recurrence:  &recurrenceUpdate,
+			Alarms:      &alarms,
 			Start:       &start,
 			End:         &end,
 			AllDay:      &s.allDay,
@@ -1521,6 +2701,9 @@ func (m *Model) commitEventForm() error {
 			Description: s.description,
 			Location:    s.location,
 			URL:         s.url,
+			Attendees:   attendees,
+			Recurrence:  recurrence,
+			Alarms:      alarms,
 			AllDay:      s.allDay,
 			Start:       start,
 			End:         end,
@@ -1541,6 +2724,100 @@ func (m *Model) commitEventForm() error {
 		m.eventCursor = 0
 		m.eventListOffset = 0
 	}
+	return nil
+}
+
+func (m *Model) openDeleteConfirmForSelected() bool {
+	if m.store == nil {
+		return false
+	}
+	items := m.agendaItems()
+	if len(items) == 0 || m.eventCursor < 0 || m.eventCursor >= len(items) {
+		return false
+	}
+	it := items[m.eventCursor]
+	if it.IsFree {
+		return false
+	}
+	state := &deleteConfirmState{confirm: false, scope: string(calendar.DeleteRecurringOccurrence)}
+	if it.Event != nil {
+		ev := *it.Event
+		if ev.Source == calendar.SpecialSourceBirthdays {
+			return false
+		}
+		state.kind = "event"
+		state.event = &ev
+		state.recurring = ev.Recurring
+		state.itemLabel = ev.Summary
+	} else if it.Todo != nil {
+		td := *it.Todo
+		state.kind = "task"
+		state.todo = &td
+		state.itemLabel = td.Summary
+	} else {
+		return false
+	}
+	state.form = m.buildDeleteConfirmForm(state)
+	m.deleteConfirm = state
+	m.focusDetails = true
+	m.focusMain = false
+	m.detailScroll = 0
+	m.deleteConfirm.form.UpdateFieldPositions()
+	return true
+}
+
+func (m *Model) buildDeleteConfirmForm(s *deleteConfirmState) *huh.Form {
+	title := "Delete " + s.kind
+	if strings.TrimSpace(s.itemLabel) != "" {
+		title += ": " + s.itemLabel
+	}
+	fields := []huh.Field{
+		huh.NewConfirm().Key("confirm").Title(title).Description("This cannot be undone").Value(&s.confirm),
+	}
+	if s.recurring {
+		fields = append(fields, huh.NewSelect[string]().
+			Key("scope").
+			Title("Recurring event").
+			Options(
+				huh.NewOption("Only this occurrence", string(calendar.DeleteRecurringOccurrence)),
+				huh.NewOption("This and following occurrences", string(calendar.DeleteRecurringFuture)),
+				huh.NewOption("All occurrences", string(calendar.DeleteRecurringAll)),
+			).
+			Value(&s.scope))
+	}
+	return huh.NewForm(huh.NewGroup(fields...).Title("Delete")).WithShowHelp(true).WithShowErrors(true)
+}
+
+func (m *Model) commitDeleteConfirm() error {
+	if m.deleteConfirm == nil {
+		return nil
+	}
+	if !m.deleteConfirm.confirm {
+		return nil
+	}
+	if m.store == nil {
+		return errors.New("calendar store is unavailable")
+	}
+	if m.deleteConfirm.todo != nil {
+		if err := m.store.DeleteTodo(m.deleteConfirm.todo.UID); err != nil {
+			return err
+		}
+	} else if m.deleteConfirm.event != nil {
+		scope := calendar.DeleteRecurringAll
+		if m.deleteConfirm.recurring {
+			scope = calendar.DeleteRecurringScope(m.deleteConfirm.scope)
+		}
+		if err := m.store.DeleteEvent(*m.deleteConfirm.event, scope); err != nil {
+			return err
+		}
+	}
+	ds, err := m.store.Load()
+	if err != nil {
+		return err
+	}
+	m.data = ds
+	m.eventCursor = 0
+	m.eventListOffset = 0
 	return nil
 }
 
@@ -1600,6 +2877,397 @@ func parseEventFormTimes(s eventFormState) (time.Time, time.Time, error) {
 		return time.Time{}, time.Time{}, errors.New("end must be after start")
 	}
 	return start, end, nil
+}
+
+func (m Model) attendeeSuggestions() []string {
+	if m.store == nil {
+		return nil
+	}
+	contacts, err := m.store.Contacts()
+	if err != nil {
+		return nil
+	}
+	out := make([]string, 0, len(contacts))
+	for _, contact := range contacts {
+		if strings.TrimSpace(contact.Email) == "" {
+			continue
+		}
+		if strings.TrimSpace(contact.Name) == "" || contact.Name == contact.Email {
+			out = append(out, contact.Email)
+			continue
+		}
+		out = append(out, fmt.Sprintf("%s <%s>", contact.Name, contact.Email))
+	}
+	return out
+}
+
+func attendeesInput(attendees []calendar.Attendee) string {
+	parts := make([]string, 0, len(attendees))
+	for _, attendee := range attendees {
+		if attendee.Name != "" && attendee.Email != "" && attendee.Name != attendee.Email {
+			parts = append(parts, fmt.Sprintf("%s <%s>", attendee.Name, attendee.Email))
+		} else if attendee.Email != "" {
+			parts = append(parts, attendee.Email)
+		} else if attendee.Name != "" {
+			parts = append(parts, attendee.Name)
+		}
+	}
+	return strings.Join(parts, "; ")
+}
+
+func parseAttendeesInput(raw string) []calendar.Attendee {
+	fields := splitListInput(raw)
+	out := make([]calendar.Attendee, 0, len(fields))
+	for _, field := range fields {
+		name := ""
+		email := strings.TrimSpace(field)
+		if left := strings.LastIndex(field, "<"); left >= 0 && strings.HasSuffix(strings.TrimSpace(field), ">") {
+			name = strings.TrimSpace(field[:left])
+			email = strings.TrimSuffix(strings.TrimSpace(field[left+1:]), ">")
+		}
+		email = strings.TrimPrefix(strings.TrimSpace(email), "mailto:")
+		if name == "" {
+			name = email
+		}
+		if name == "" && email == "" {
+			continue
+		}
+		out = append(out, calendar.Attendee{Name: name, Email: email})
+	}
+	return out
+}
+
+func alarmsInput(alarms []calendar.Alarm) string {
+	parts := make([]string, 0, len(alarms))
+	for _, alarm := range alarms {
+		when := "before"
+		offset := alarm.Offset
+		if offset > 0 {
+			when = "after"
+		} else {
+			offset = -offset
+		}
+		parts = append(parts, formatDurationShort(offset)+" "+when)
+	}
+	return strings.Join(parts, "; ")
+}
+
+func parseAlarmsInput(raw string) ([]calendar.Alarm, error) {
+	fields := splitListInput(raw)
+	out := make([]calendar.Alarm, 0, len(fields))
+	for _, field := range fields {
+		alarm, err := parseAlarmInput(field)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, alarm)
+	}
+	return out, nil
+}
+
+func parseAlarmInput(raw string) (calendar.Alarm, error) {
+	parts := strings.Fields(strings.ToLower(strings.TrimSpace(raw)))
+	if len(parts) == 0 {
+		return calendar.Alarm{}, errors.New("notification cannot be empty")
+	}
+	dur, err := parseDurationShort(parts[0])
+	if err != nil {
+		return calendar.Alarm{}, fmt.Errorf("invalid notification %q", raw)
+	}
+	offset := -dur
+	if len(parts) > 1 {
+		switch parts[1] {
+		case "before":
+			offset = -dur
+		case "after":
+			offset = dur
+		default:
+			return calendar.Alarm{}, fmt.Errorf("notification %q must use before or after", raw)
+		}
+	}
+	return calendar.Alarm{Offset: offset, Action: "DISPLAY"}, nil
+}
+
+func validateAlarmsInput(v string) error {
+	_, err := parseAlarmsInput(v)
+	return err
+}
+
+func parseDurationShort(raw string) (time.Duration, error) {
+	raw = strings.TrimSpace(strings.ToLower(raw))
+	if raw == "" {
+		return 0, errors.New("empty duration")
+	}
+	unit := raw[len(raw)-1]
+	nRaw := raw[:len(raw)-1]
+	if unit >= '0' && unit <= '9' {
+		unit = 'm'
+		nRaw = raw
+	}
+	n, err := parsePositiveIntDefault(nRaw, 0)
+	if err != nil || n <= 0 {
+		return 0, errors.New("duration must be positive")
+	}
+	switch unit {
+	case 'd':
+		return time.Duration(n) * 24 * time.Hour, nil
+	case 'h':
+		return time.Duration(n) * time.Hour, nil
+	case 'm':
+		return time.Duration(n) * time.Minute, nil
+	case 's':
+		return time.Duration(n) * time.Second, nil
+	default:
+		return 0, errors.New("duration unit must be d, h, m, or s")
+	}
+}
+
+func formatDurationShort(d time.Duration) string {
+	if d%(24*time.Hour) == 0 {
+		return fmt.Sprintf("%dd", int(d/(24*time.Hour)))
+	}
+	if d%time.Hour == 0 {
+		return fmt.Sprintf("%dh", int(d/time.Hour))
+	}
+	if d%time.Minute == 0 {
+		return fmt.Sprintf("%dm", int(d/time.Minute))
+	}
+	return fmt.Sprintf("%ds", int(d/time.Second))
+}
+
+func parseRecurrenceInput(s eventFormState) (*calendar.Recurrence, error) {
+	if !s.recur {
+		return nil, nil
+	}
+	interval, err := parsePositiveIntDefault(s.recurEvery, 1)
+	if err != nil || interval <= 0 {
+		return nil, errors.New("repeat interval must be a positive number")
+	}
+	rec := &calendar.Recurrence{
+		Frequency: strings.ToUpper(strings.TrimSpace(s.recurFreq)),
+		Interval:  interval,
+		Weekdays:  weekdayCodesFromLabels(s.recurWeekdays),
+		MonthlyBy: s.recurMonthlyBy,
+	}
+	if rec.Frequency == "" {
+		rec.Frequency = "DAILY"
+	}
+	if rec.Frequency == "MONTHLY" {
+		if rec.MonthlyBy == "" {
+			rec.MonthlyBy = "month day"
+		}
+	}
+	switch s.recurEnd {
+	case "", "forever":
+	case "until":
+		untilDate, err := time.Parse("2006-01-02", strings.TrimSpace(s.recurUntil))
+		if err != nil {
+			return nil, errors.New("invalid repeat until date (expected YYYY-MM-DD)")
+		}
+		until := time.Date(untilDate.Year(), untilDate.Month(), untilDate.Day(), 23, 59, 59, 0, time.Local)
+		rec.Until = &until
+	case "count":
+		count, err := parsePositiveIntDefault(s.recurCount, 0)
+		if err != nil || count <= 0 {
+			return nil, errors.New("repeat count must be a positive number")
+		}
+		rec.Count = count
+	default:
+		return nil, errors.New("invalid repeat ending")
+	}
+	return rec, nil
+}
+
+func recurrenceFrequencyValue(rec *calendar.Recurrence) string {
+	if rec == nil || strings.TrimSpace(rec.Frequency) == "" {
+		return "DAILY"
+	}
+	return strings.ToUpper(rec.Frequency)
+}
+
+func recurrenceIntervalValue(rec *calendar.Recurrence) string {
+	if rec == nil || rec.Interval <= 0 {
+		return "1"
+	}
+	return fmt.Sprintf("%d", rec.Interval)
+}
+
+func recurrenceWeekdayValues(rec *calendar.Recurrence) []string {
+	if rec == nil {
+		return nil
+	}
+	out := make([]string, 0, len(rec.Weekdays))
+	for _, day := range rec.Weekdays {
+		out = append(out, weekdayLabel(day))
+	}
+	return out
+}
+
+func recurrenceMonthlyByValue(rec *calendar.Recurrence) string {
+	if rec == nil || rec.MonthlyBy == "" {
+		return "month day"
+	}
+	return rec.MonthlyBy
+}
+
+func weekdayCodesFromLabels(labels []string) []string {
+	out := make([]string, 0, len(labels))
+	for _, label := range labels {
+		switch strings.ToLower(strings.TrimSpace(label)) {
+		case "mo", "mon", "monday":
+			out = append(out, "MO")
+		case "tu", "tue", "tuesday":
+			out = append(out, "TU")
+		case "we", "wed", "wednesday":
+			out = append(out, "WE")
+		case "th", "thu", "thursday":
+			out = append(out, "TH")
+		case "fr", "fri", "friday":
+			out = append(out, "FR")
+		case "sa", "sat", "saturday":
+			out = append(out, "SA")
+		case "su", "sun", "sunday":
+			out = append(out, "SU")
+		}
+	}
+	return out
+}
+
+func weekdayLabel(code string) string {
+	code = strings.ToUpper(strings.TrimSpace(code))
+	if len(code) > 2 {
+		code = code[len(code)-2:]
+	}
+	switch code {
+	case "MO":
+		return "Mo"
+	case "TU":
+		return "Tu"
+	case "WE":
+		return "We"
+	case "TH":
+		return "Th"
+	case "FR":
+		return "Fr"
+	case "SA":
+		return "Sa"
+	case "SU":
+		return "Su"
+	default:
+		return code
+	}
+}
+
+func recurrenceEndValue(rec *calendar.Recurrence) string {
+	if rec == nil {
+		return "forever"
+	}
+	if rec.Until != nil {
+		return "until"
+	}
+	if rec.Count > 0 {
+		return "count"
+	}
+	return "forever"
+}
+
+func recurrenceUntilValue(rec *calendar.Recurrence) string {
+	if rec == nil || rec.Until == nil {
+		return ""
+	}
+	return rec.Until.Format("2006-01-02")
+}
+
+func recurrenceCountValue(rec *calendar.Recurrence) string {
+	if rec == nil || rec.Count <= 0 {
+		return ""
+	}
+	return fmt.Sprintf("%d", rec.Count)
+}
+
+func parsePositiveIntDefault(raw string, fallback int) (int, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return fallback, nil
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0, err
+	}
+	return n, nil
+}
+
+func splitListInput(raw string) []string {
+	raw = strings.ReplaceAll(raw, "\n", ";")
+	splitter := func(r rune) bool {
+		return r == ';' || r == ','
+	}
+	fields := strings.FieldsFunc(raw, splitter)
+	out := make([]string, 0, len(fields))
+	for _, field := range fields {
+		field = strings.TrimSpace(field)
+		if field != "" {
+			out = append(out, field)
+		}
+	}
+	return out
+}
+
+func formatAttendees(attendees []calendar.Attendee) string {
+	return truncate(strings.Join(attendeeLabels(attendees), ", "), 160)
+}
+
+func attendeeLabels(attendees []calendar.Attendee) []string {
+	out := make([]string, 0, len(attendees))
+	for _, attendee := range attendees {
+		if attendee.Name != "" && attendee.Email != "" && attendee.Name != attendee.Email {
+			out = append(out, attendee.Name+" <"+attendee.Email+">")
+		} else if attendee.Name != "" {
+			out = append(out, attendee.Name)
+		} else if attendee.Email != "" {
+			out = append(out, attendee.Email)
+		}
+	}
+	return out
+}
+
+func formatRecurrence(rec *calendar.Recurrence) string {
+	if rec == nil {
+		return ""
+	}
+	freq := strings.ToLower(rec.Frequency)
+	if freq == "" {
+		freq = "daily"
+	}
+	interval := rec.Interval
+	if interval <= 0 {
+		interval = 1
+	}
+	text := freq
+	if interval > 1 {
+		text = fmt.Sprintf("every %d %s", interval, freq)
+	}
+	if rec.Until != nil {
+		text += " until " + rec.Until.Format("2006-01-02")
+	} else if rec.Count > 0 {
+		text += fmt.Sprintf(" for %d times", rec.Count)
+	}
+	return text
+}
+
+func formatAlarms(alarms []calendar.Alarm) string {
+	parts := make([]string, 0, len(alarms))
+	for _, alarm := range alarms {
+		when := "before"
+		offset := alarm.Offset
+		if offset > 0 {
+			when = "after"
+		} else {
+			offset = -offset
+		}
+		parts = append(parts, formatDurationShort(offset)+" "+when)
+	}
+	return strings.Join(parts, ", ")
 }
 
 func validateOptionalDateInput(v string) error {
