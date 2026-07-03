@@ -2036,33 +2036,59 @@ func (m *Model) ensureCalendarCursorVisible(height int) {
 }
 
 func (m Model) renderHelpOverlay(width, height int) string {
-	if width < 36 {
-		width = 36
+	if width < 78 {
+		width = 78
 	}
-	if height < 12 {
-		height = 12
+	if height < 22 {
+		height = 22
 	}
 	title := m.styles.Title.Render("Shortcuts")
-	lines := []string{
+	left := []string{
 		"q, ctrl+c   Quit",
 		"?           Toggle help",
-		"j / k       Next / previous event",
+		"",
+		"Agenda:",
+		"j/k, ↑/↓    Next / previous item",
 		"ctrl+f/b    Page down / page up",
-		"h / l       Previous / next day",
+		"h/l, ←/→    Previous / next day",
 		"ctrl+h/l    Previous / next week",
-		"ctrl+j/k    Scroll description down/up",
+		"t           Today",
+		"enter, spc  Focus / unfocus details",
+		"ctrl+j/k    Scroll details down/up",
 		"f           Toggle show-free mode",
 		"m           Toggle tasks-only mode",
 		"c           Open calendars toggle pane",
-		"n           New item form (event/task)",
+		"n           New event / task",
 		"e           Edit selected item",
+		"ctrl+d      Delete selected item",
 		"",
-		"Event form:",
-		"tab/s-tab   Next / previous field",
-		"ctrl+s      Save",
-		"esc         Cancel",
+		"Calendar pane:",
+		"j/k, ↑/↓    Move calendar cursor",
+		"enter, spc  Toggle calendar visibility",
+		"h, esc      Close calendar pane",
 	}
-	body := strings.Join(lines, "\n")
+	right := []string{
+		"Event / task editor:",
+		"j/k, tab    Move between items",
+		"enter       Edit selected item / submit popup",
+		"ctrl+s      Save item",
+		"esc, q      Cancel editor or popup",
+		"ctrl+c      Cancel popup/editor",
+		"ctrl+e      Open $EDITOR in description popup",
+		"/           Filter attendee picker",
+		"space, x    Toggle multiselect choice",
+		"",
+		"Delete confirm:",
+		"enter       Confirm selected delete action",
+		"esc, q      Cancel delete",
+	}
+	columnWidth := (width - 8) / 2
+	body := lipgloss.JoinHorizontal(
+		lipgloss.Top,
+		lipgloss.NewStyle().Width(columnWidth).Render(strings.Join(left, "\n")),
+		lipgloss.NewStyle().Width(4).Render(""),
+		lipgloss.NewStyle().Width(columnWidth).Render(strings.Join(right, "\n")),
+	)
 	content := lipgloss.JoinVertical(lipgloss.Left, title, "", body)
 	box := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("245")).Padding(1, 2).Width(width).Height(height).Render(content)
 	return box
