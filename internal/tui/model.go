@@ -44,39 +44,50 @@ type Model struct {
 }
 
 type eventFormState struct {
-	mode           string
-	targetUID      string
-	targetEvent    *calendar.Event
-	editScope      string
-	form           *huh.Form
-	activeKey      string
-	activeForm     *huh.Form
-	backup         *eventFormSnapshot
-	cursor         int
-	summary        string
-	calendarKey    string
-	location       string
-	description    string
-	url            string
-	attendees      string
-	rsvp           string
-	availability   string
-	visibility     string
-	alarms         string
-	recur          bool
-	recurFreq      string
-	recurEvery     string
-	recurWeekdays  []string
-	recurMonthlyBy string
-	recurEnd       string
-	recurUntil     string
-	recurCount     string
-	allDay         bool
-	fromDate       string
-	fromTime       string
-	toDate         string
-	toTime         string
-	errMsg         string
+	mode            string
+	targetUID       string
+	targetEvent     *calendar.Event
+	editScope       string
+	form            *huh.Form
+	activeKey       string
+	activeForm      *huh.Form
+	attendeeManager *attendeeManagerState
+	backup          *eventFormSnapshot
+	cursor          int
+	summary         string
+	calendarKey     string
+	location        string
+	description     string
+	url             string
+	attendees       string
+	rsvp            string
+	availability    string
+	visibility      string
+	alarms          string
+	recur           bool
+	recurFreq       string
+	recurEvery      string
+	recurWeekdays   []string
+	recurMonthlyBy  string
+	recurEnd        string
+	recurUntil      string
+	recurCount      string
+	allDay          bool
+	fromDate        string
+	fromTime        string
+	toDate          string
+	toTime          string
+	errMsg          string
+}
+
+type attendeeManagerState struct {
+	attendees []attendeeEditorItem
+	cursor    int
+}
+
+type attendeeEditorItem struct {
+	attendee calendar.Attendee
+	remove   bool
 }
 
 type deleteConfirmState struct {
@@ -553,6 +564,10 @@ func (m Model) renderEventFormMainPanel(width, panelHeight int) string {
 	}
 	content := lipgloss.JoinVertical(lipgloss.Left, header, m.styles.Subtle.Render("[j/k] move  [enter] edit  [ctrl+s] save  [esc] cancel"), "", body)
 	panel := m.styles.MainPanel.Width(width).Height(panelHeight).Render(content)
+	if m.eventForm.attendeeManager != nil {
+		modal := m.renderAttendeeManager(min(78, max(36, width-8)), max(9, min(panelHeight-4, (panelHeight*2)/3)))
+		return overlayCentered(panel, modal, width, panelHeight)
+	}
 	if m.eventForm.activeForm != nil {
 		formHeight := max(7, panelHeight/3)
 		if m.eventForm.activeKey == "description" {
@@ -632,6 +647,54 @@ func activeFormModalView(form *huh.Form, width, height int, errMsg string) strin
 		Render(lipgloss.JoinVertical(lipgloss.Left, err, "", view))
 }
 
+func (m Model) renderAttendeeManager(width, height int) string {
+	width = max(28, width)
+	height = max(6, height)
+	mgr := m.eventForm.attendeeManager
+	lines := []string{
+		lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("117")).Render("Attendees"),
+		m.styles.Subtle.Render("[j/k] move  [space/o] optional  [x/d] remove  [enter] apply"),
+		"",
+	}
+	if mgr == nil || len(mgr.attendees) == 0 {
+		lines = append(lines, m.styles.Subtle.Render("No attendees"))
+	} else {
+		available := max(1, height-len(lines)-1)
+		start := 0
+		if mgr.cursor >= available {
+			start = mgr.cursor - available + 1
+		}
+		end := min(len(mgr.attendees), start+available)
+		for i := start; i < end; i++ {
+			item := mgr.attendees[i]
+			selected := i == mgr.cursor
+			prefix := "  "
+			if selected {
+				prefix = " "
+			}
+			glyph := ""
+			glyphColor := lipgloss.Color("65")
+			if attendeeIsOptional(item.attendee) {
+				glyphColor = lipgloss.Color("244")
+			}
+			if item.remove {
+				glyph = ""
+				glyphColor = lipgloss.Color("210")
+			}
+			state := lipgloss.NewStyle().Foreground(glyphColor).Bold(true).Render(glyph)
+			label := attendeeBaseLabel(item.attendee)
+			valueBudget := max(8, width-lipgloss.Width(prefix)-lipgloss.Width(state)-2)
+			line := prefix + state + " " + truncate(label, valueBudget)
+			lines = append(lines, editorRowStyle(selected, width).Render(line))
+		}
+	}
+	return lipgloss.NewStyle().
+		Width(width).
+		Height(height).
+		MaxHeight(height).
+		Render(strings.Join(lines, "\n"))
+}
+
 func (m Model) renderEventEditorList(width, height int) string {
 	rows := m.eventEditorRows()
 	if len(rows) == 0 {
@@ -702,6 +765,19 @@ func (m Model) renderEditorRow(row editorRow, selected bool, width int) string {
 	sep := m.styles.Subtle.Render(": ")
 	valueBudget := max(1, width-lipgloss.Width(prefix)-lipgloss.Width(row.label)-2)
 	valueStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
+	if row.key == "attendees" {
+		lines := attendeeEditorDisplayLines(row.value, valueBudget, valueStyle)
+		indent := strings.Repeat(" ", lipgloss.Width(prefix)+lipgloss.Width(row.label)+2)
+		rendered := make([]string, 0, len(lines))
+		for i, valueLine := range lines {
+			if i == 0 {
+				rendered = append(rendered, prefix+label+sep+valueLine)
+				continue
+			}
+			rendered = append(rendered, indent+valueLine)
+		}
+		return editorRowStyle(selected, width).Render(strings.Join(rendered, "\n"))
+	}
 	displayValue := editorDisplayValue(row)
 	if editorRowWraps(row) {
 		wrapped := wrapEditorValue(displayValue, valueBudget)
@@ -726,20 +802,34 @@ func (m Model) eventEditorRows() []editorRow {
 		return nil
 	}
 	s := m.eventForm
+	if m.eventFormAttendeeOnly() {
+		return []editorRow{
+			editorSeparatorRow("󰉢 Event"),
+			{"calendar", "Calendar", m.calendarDisplayName(s.calendarKey)},
+			editorSeparatorRow(" Response"),
+			{"rsvp", "RSVP", emptyDefault(eventRSVPDisplayValue(s.rsvp), "default")},
+			editorSeparatorRow("󰛐 Privacy"),
+			{"availability", "Availability", emptyDefault(s.availability, "default")},
+			{"visibility", "Visibility", emptyDefault(s.visibility, "default")},
+			editorSeparatorRow("󰀠 Notifications"),
+			{"alarms", "Notifications", emptyDefault(s.alarms, "-")},
+			{"alarms-add", "", ""},
+		}
+	}
 	rows := []editorRow{
 		editorSeparatorRow("󰉢 Title"),
 		{"title", "Title", emptyDefault(strings.TrimSpace(s.summary), "(untitled event)")},
 		{"calendar", "Calendar", m.calendarDisplayName(s.calendarKey)},
-		editorSeparatorRow("󰋫 Place"),
+		editorSeparatorRow(" Place"),
 		{"location", "Location", emptyDefault(s.location, "-")},
 		{"url", "URL", emptyDefault(s.url, "-")},
 		editorSeparatorRow("󰦨 Description"),
 		{"description", "Description", multilineValue(s.description)},
-		editorSeparatorRow("󰅺 Attendees"),
+		editorSeparatorRow(" Attendees"),
 		{"attendees", "Attendees", emptyDefault(s.attendees, "-")},
 		{"rsvp", "RSVP", emptyDefault(eventRSVPDisplayValue(s.rsvp), "default")},
 		{"attendees-add", "", ""},
-		editorSeparatorRow("󰄨 Privacy"),
+		editorSeparatorRow("󰛐 Privacy"),
 		{"availability", "Availability", emptyDefault(s.availability, "default")},
 		{"visibility", "Visibility", emptyDefault(s.visibility, "default")},
 		editorSeparatorRow("󰥔 Time"),
@@ -778,6 +868,13 @@ func (m Model) eventEditorRows() []editorRow {
 	return rows
 }
 
+func (m Model) eventFormAttendeeOnly() bool {
+	if m.store == nil || m.eventForm == nil || m.eventForm.targetEvent == nil {
+		return false
+	}
+	return m.store.EventUserRole(*m.eventForm.targetEvent) == calendar.EventUserRoleAttendee
+}
+
 func (m Model) todoEditorRows() []editorRow {
 	if m.todoForm == nil {
 		return nil
@@ -787,7 +884,7 @@ func (m Model) todoEditorRows() []editorRow {
 		editorSeparatorRow("󰉢 Title"),
 		{"summary", "Title", emptyDefault(strings.TrimSpace(s.summary), "(untitled task)")},
 		{"calendar", "Calendar", m.calendarDisplayName(s.calendarKey)},
-		editorSeparatorRow("󰋫 Place"),
+		editorSeparatorRow(" Place"),
 		{"location", "Location", emptyDefault(s.location, "-")},
 		editorSeparatorRow("󰦨 Description"),
 		{"description", "Description", multilineValue(s.description)},
@@ -802,6 +899,29 @@ func (m Model) todoEditorRows() []editorRow {
 
 func (m *Model) updateEventEditor(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	s := m.eventForm
+	if s.attendeeManager != nil {
+		switch msg.String() {
+		case "esc", "ctrl+c", "q":
+			s.attendeeManager = nil
+			s.activeKey = ""
+			s.backup = nil
+		case "enter":
+			s.attendees = attendeesInput(attendeeManagerValues(s.attendeeManager))
+			s.attendeeManager = nil
+			s.activeKey = ""
+			s.backup = nil
+			s.errMsg = ""
+		case "j", "down", "tab":
+			s.attendeeManager.cursor = min(len(s.attendeeManager.attendees)-1, s.attendeeManager.cursor+1)
+		case "k", "up", "shift+tab":
+			s.attendeeManager.cursor = max(0, s.attendeeManager.cursor-1)
+		case " ", "space", "o":
+			toggleAttendeeOptional(s.attendeeManager)
+		case "x", "d", "backspace":
+			toggleAttendeeRemove(s.attendeeManager)
+		}
+		return m, nil
+	}
 	if s.activeForm != nil {
 		switch msg.String() {
 		case "esc", "ctrl+c", "q":
@@ -893,6 +1013,10 @@ func (m *Model) openEventEditorForm() tea.Cmd {
 	}
 	s.activeKey = key
 	s.backup = s.snapshot()
+	if key == "attendees" {
+		s.attendeeManager = newAttendeeManager(parseAttendeesInput(s.attendees))
+		return nil
+	}
 	s.activeForm = m.buildEventEditorForm(key)
 	if s.activeForm == nil {
 		s.activeKey = ""
@@ -1001,6 +1125,7 @@ func (m *Model) buildEventEditorForm(key string) *huh.Form {
 			huh.NewOption("Yes", "yes"),
 			huh.NewOption("No", "no"),
 			huh.NewOption("Maybe", "maybe"),
+			huh.NewOption("Needs action", "needs-action"),
 		).Value(&value))).WithShowHelp(true).WithShowErrors(true)
 	case "availability":
 		return huh.NewForm(huh.NewGroup(huh.NewSelect[string]().Key("value").Title("Availability").Options(
@@ -1364,6 +1489,7 @@ func (s *eventFormState) cancelActive() {
 		s.toTime = b.toTime
 	}
 	s.activeForm = nil
+	s.attendeeManager = nil
 	s.activeKey = ""
 	s.backup = nil
 }
@@ -1538,6 +1664,33 @@ func editorDisplayValue(row editorRow) string {
 	return row.value
 }
 
+func attendeeEditorDisplayLines(raw string, width int, valueStyle lipgloss.Style) []string {
+	attendees := parseAttendeesInput(raw)
+	if len(attendees) == 0 {
+		return []string{valueStyle.Render("-")}
+	}
+	width = max(1, width)
+	lines := make([]string, 0, len(attendees))
+	for _, attendee := range attendees {
+		glyph := ""
+		glyphColor := lipgloss.Color("65")
+		if attendeeIsOptional(attendee) {
+			glyphColor = lipgloss.Color("244")
+		}
+		icon := lipgloss.NewStyle().Foreground(glyphColor).Bold(true).Render(glyph)
+		label := attendeeBaseLabel(attendee)
+		if label == "" {
+			continue
+		}
+		labelBudget := max(1, width-lipgloss.Width(glyph)-1)
+		lines = append(lines, icon+" "+valueStyle.Render(truncate(label, labelBudget)))
+	}
+	if len(lines) == 0 {
+		return []string{valueStyle.Render("-")}
+	}
+	return lines
+}
+
 func wrapEditorValue(value string, width int) []string {
 	width = max(1, width)
 	value = strings.TrimSpace(value)
@@ -1654,6 +1807,55 @@ func mergeListInput(existing string, added []string) string {
 	return strings.Join(out, "; ")
 }
 
+func newAttendeeManager(attendees []calendar.Attendee) *attendeeManagerState {
+	items := make([]attendeeEditorItem, 0, len(attendees))
+	for _, attendee := range attendees {
+		if strings.TrimSpace(attendee.Name) == "" && strings.TrimSpace(attendee.Email) == "" {
+			continue
+		}
+		items = append(items, attendeeEditorItem{attendee: attendee})
+	}
+	return &attendeeManagerState{attendees: items}
+}
+
+func attendeeManagerValues(mgr *attendeeManagerState) []calendar.Attendee {
+	if mgr == nil {
+		return nil
+	}
+	out := make([]calendar.Attendee, 0, len(mgr.attendees))
+	for _, item := range mgr.attendees {
+		if item.remove {
+			continue
+		}
+		out = append(out, item.attendee)
+	}
+	return out
+}
+
+func toggleAttendeeOptional(mgr *attendeeManagerState) {
+	if mgr == nil || len(mgr.attendees) == 0 {
+		return
+	}
+	idx := clamp(mgr.cursor, 0, len(mgr.attendees)-1)
+	if attendeeIsOptional(mgr.attendees[idx].attendee) {
+		mgr.attendees[idx].attendee.Role = ""
+		return
+	}
+	mgr.attendees[idx].attendee.Role = "optional"
+}
+
+func toggleAttendeeRemove(mgr *attendeeManagerState) {
+	if mgr == nil || len(mgr.attendees) == 0 {
+		return
+	}
+	idx := clamp(mgr.cursor, 0, len(mgr.attendees)-1)
+	mgr.attendees[idx].remove = !mgr.attendees[idx].remove
+}
+
+func attendeeIsOptional(attendee calendar.Attendee) bool {
+	return strings.EqualFold(strings.TrimSpace(attendee.Role), "optional")
+}
+
 func (m Model) renderEventDetailsPane(width, height int) string {
 	if m.eventForm != nil {
 		return lipgloss.NewStyle().Width(width).Height(height).MaxHeight(height).Render(m.renderEventEditorList(width, height))
@@ -1691,6 +1893,14 @@ func (m Model) renderEventDetailsFor(ev calendar.Event, width, height int) strin
 		"Title: " + ev.Summary,
 		"Calendar: " + calendarName,
 		"When: " + ev.Start.Format("2006-01-02 15:04") + " - " + ev.End.Format("2006-01-02 15:04"),
+	}
+	if ev.Organizer != "" {
+		lines = append(lines, "Organizer: "+ev.Organizer)
+	}
+	if m.store != nil {
+		if role := eventUserRoleDisplay(m.store.EventUserRole(ev)); role != "" {
+			lines = append(lines, "Role: "+role)
+		}
 	}
 	if ev.Location != "" {
 		lines = append(lines, "Location: "+ev.Location)
@@ -2744,6 +2954,7 @@ func (m *Model) buildEventForm(s *eventFormState) *huh.Form {
 			huh.NewOption("Yes", "yes"),
 			huh.NewOption("No", "no"),
 			huh.NewOption("Maybe", "maybe"),
+			huh.NewOption("Needs action", "needs-action"),
 		).Value(&s.rsvp),
 		huh.NewSelect[string]().Key("availability").Title("Availability").Options(
 			huh.NewOption("Default", ""),
@@ -2888,6 +3099,14 @@ func (m *Model) commitEventForm() error {
 			AllDay:       &s.allDay,
 		}
 		if s.targetEvent != nil {
+			var organizerUpdate *string
+			if !m.eventFormAttendeeOnly() && strings.TrimSpace(s.targetEvent.Organizer) == "" && len(attendees) > 0 {
+				organizer := m.store.CalendarUserEmail(cal.source, cal.name)
+				if organizer != "" {
+					organizerUpdate = &organizer
+				}
+			}
+			upd.Organizer = organizerUpdate
 			if err := m.store.UpdateEventScoped(*s.targetEvent, upd, calendar.EditRecurringScope(s.editScope)); err != nil {
 				return err
 			}
@@ -3114,12 +3333,8 @@ func (m Model) attendeeSuggestions() []string {
 func attendeesInput(attendees []calendar.Attendee) string {
 	parts := make([]string, 0, len(attendees))
 	for _, attendee := range attendees {
-		if attendee.Name != "" && attendee.Email != "" && attendee.Name != attendee.Email {
-			parts = append(parts, fmt.Sprintf("%s <%s>", attendee.Name, attendee.Email))
-		} else if attendee.Email != "" {
-			parts = append(parts, attendee.Email)
-		} else if attendee.Name != "" {
-			parts = append(parts, attendee.Name)
+		if label := attendeeLabel(attendee); label != "" {
+			parts = append(parts, label)
 		}
 	}
 	return strings.Join(parts, "; ")
@@ -3129,6 +3344,7 @@ func parseAttendeesInput(raw string) []calendar.Attendee {
 	fields := splitListInput(raw)
 	out := make([]calendar.Attendee, 0, len(fields))
 	for _, field := range fields {
+		field, role := parseAttendeeRoleMarker(field)
 		name := ""
 		email := strings.TrimSpace(field)
 		if left := strings.LastIndex(field, "<"); left >= 0 && strings.HasSuffix(strings.TrimSpace(field), ">") {
@@ -3142,9 +3358,24 @@ func parseAttendeesInput(raw string) []calendar.Attendee {
 		if name == "" && email == "" {
 			continue
 		}
-		out = append(out, calendar.Attendee{Name: name, Email: email})
+		out = append(out, calendar.Attendee{Name: name, Email: email, Role: role})
 	}
 	return out
+}
+
+func parseAttendeeRoleMarker(raw string) (string, string) {
+	field := strings.TrimSpace(raw)
+	for _, marker := range []string{"[optional]", "(optional)"} {
+		if strings.HasSuffix(strings.ToLower(field), marker) {
+			return strings.TrimSpace(field[:len(field)-len(marker)]), "optional"
+		}
+	}
+	for _, marker := range []string{"[required]", "(required)"} {
+		if strings.HasSuffix(strings.ToLower(field), marker) {
+			return strings.TrimSpace(field[:len(field)-len(marker)]), ""
+		}
+	}
+	return field, ""
 }
 
 func applyRSVPToAttendees(attendees []calendar.Attendee, rsvp string) {
@@ -3180,6 +3411,8 @@ func eventRSVPDisplayValue(rsvp string) string {
 		return "no"
 	case "maybe":
 		return "maybe"
+	case "needs-action":
+		return "needs action"
 	default:
 		return "default"
 	}
@@ -3202,7 +3435,7 @@ func attendeeRSVPDisplay(attendees []calendar.Attendee) string {
 			return eventRSVPDisplayValue(status)
 		}
 	}
-	order := []string{"yes", "no", "maybe", "default"}
+	order := []string{"yes", "no", "maybe", "needs-action", "default"}
 	parts := make([]string, 0, len(counts))
 	for _, status := range order {
 		if n := counts[status]; n > 0 {
@@ -3220,6 +3453,8 @@ func normalizeRSVPValue(rsvp string) string {
 		return "no"
 	case "maybe", "tentative":
 		return "maybe"
+	case "needs-action", "needs action", "needs_action":
+		return "needs-action"
 	default:
 		return ""
 	}
@@ -3247,6 +3482,19 @@ func eventVisibilityValue(visibility string) string {
 
 func eventVisibilityDisplay(visibility string) string {
 	return eventVisibilityValue(visibility)
+}
+
+func eventUserRoleDisplay(role calendar.EventUserRole) string {
+	switch role {
+	case calendar.EventUserRoleOrganizer:
+		return "organizer"
+	case calendar.EventUserRoleAttendee:
+		return "attendee"
+	case calendar.EventUserRoleLocal:
+		return "local"
+	default:
+		return ""
+	}
 }
 
 func alarmsInput(alarms []calendar.Alarm) string {
@@ -3532,15 +3780,33 @@ func formatAttendees(attendees []calendar.Attendee) string {
 func attendeeLabels(attendees []calendar.Attendee) []string {
 	out := make([]string, 0, len(attendees))
 	for _, attendee := range attendees {
-		if attendee.Name != "" && attendee.Email != "" && attendee.Name != attendee.Email {
-			out = append(out, attendee.Name+" <"+attendee.Email+">")
-		} else if attendee.Name != "" {
-			out = append(out, attendee.Name)
-		} else if attendee.Email != "" {
-			out = append(out, attendee.Email)
+		if label := attendeeLabel(attendee); label != "" {
+			out = append(out, label)
 		}
 	}
 	return out
+}
+
+func attendeeLabel(attendee calendar.Attendee) string {
+	label := attendeeBaseLabel(attendee)
+	if label == "" {
+		return ""
+	}
+	if attendeeIsOptional(attendee) {
+		label += " [optional]"
+	}
+	return label
+}
+
+func attendeeBaseLabel(attendee calendar.Attendee) string {
+	if attendee.Name != "" && attendee.Email != "" && attendee.Name != attendee.Email {
+		return attendee.Name + " <" + attendee.Email + ">"
+	} else if attendee.Name != "" {
+		return attendee.Name
+	} else if attendee.Email != "" {
+		return attendee.Email
+	}
+	return ""
 }
 
 func formatRecurrence(rec *calendar.Recurrence) string {

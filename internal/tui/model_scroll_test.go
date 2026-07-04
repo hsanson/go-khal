@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"reflect"
 	"testing"
 	"time"
 
@@ -8,6 +9,21 @@ import (
 	"github.com/hsanson/go-khal/internal/calendar"
 	"github.com/hsanson/go-khal/internal/config"
 )
+
+func TestAttendeesInputPreservesOptionalRole(t *testing.T) {
+	attendees := []calendar.Attendee{
+		{Name: "Ada Lovelace", Email: "ada@example.test"},
+		{Name: "Grace Hopper", Email: "grace@example.test", Role: "optional"},
+	}
+	raw := attendeesInput(attendees)
+	if raw != "Ada Lovelace <ada@example.test>; Grace Hopper <grace@example.test> [optional]" {
+		t.Fatalf("unexpected attendees input: %q", raw)
+	}
+	parsed := parseAttendeesInput(raw)
+	if !reflect.DeepEqual(parsed, attendees) {
+		t.Fatalf("parsed attendees mismatch:\n got: %#v\nwant: %#v", parsed, attendees)
+	}
+}
 
 func TestWeekViewportScrollsDown(t *testing.T) {
 	m := NewModel(&config.Config{SidebarWidth: 30}, calendar.Dataset{}, nil)

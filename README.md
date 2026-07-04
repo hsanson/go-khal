@@ -122,6 +122,7 @@ Example:
     {
       "name": "personal",
       "path": "/home/user/.local/share/calendars/personal",
+      "email": "user@example.com",
       "address_book": "/home/user/.local/share/contacts/personal",
       "default_timezone": "Europe/Paris",
       "calendars": [
@@ -133,6 +134,7 @@ Example:
         },
         {
           "name": "calendar",
+          "email": "user@example.com",
           "display_name": "Personal",
           "color": "#4caf50"
         }
@@ -160,11 +162,13 @@ Event editing supports:
 
 - Title and calendar
 - Location, URL, and description
-- Attendees, including fuzzy add/search from address-book contacts
+- Attendees, including required/optional roles and fuzzy add/search from address-book contacts
 - RSVP, availability, and visibility
 - Notifications such as `10m before`, `2h before`, `10d before`, or `1d after`
 - Recurrence: daily, weekly, monthly, yearly, interval, weekdays, monthly mode, until date, and fixed count
 - All-day and timed start/end values
+
+When an event has attendees, go-khal uses the configured source/calendar `email` as the iCalendar `ORGANIZER`. If `email` is omitted, calendar/source names that look like email addresses are used as a fallback. Events where the configured email is an attendee but not the organizer are treated as attendee-owned: only local calendar placement, RSVP, availability/visibility, and notifications are editable.
 
 Task editing supports title, calendar, description, location, start/due times, completion, and priority.
 
