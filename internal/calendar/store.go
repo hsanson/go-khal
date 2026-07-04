@@ -1073,6 +1073,21 @@ func (s *Store) UpdateTodo(uid string, update TodoUpdate) error {
 	return ical.NewEncoder(out).Encode(cal)
 }
 
+func (s *Store) MoveTodo(uid, sourceName, calendarName string) error {
+	todo, err := s.FindTodo(uid)
+	if err != nil {
+		return err
+	}
+	target, _, err := s.findWritableCalendar(sourceName, calendarName)
+	if err != nil {
+		return err
+	}
+	if sameFilePath(todo.CalendarDir, target.Path) {
+		return nil
+	}
+	return moveCalendarComponents(todo.FilePath, target.Path, ical.CompToDo, uid)
+}
+
 func (s *Store) FindTodo(uid string) (Todo, error) {
 	ds, err := s.Load()
 	if err != nil {
@@ -1375,6 +1390,27 @@ func (s *Store) UpdateEventScoped(ev Event, update EventUpdate, scope EditRecurr
 	default:
 		return s.updateEventAll(ev, update)
 	}
+}
+
+func (s *Store) MoveEvent(ev Event, sourceName, calendarName string) error {
+	if ev.Source == SpecialSourceBirthdays {
+		return errors.New("birthday and anniversary events are generated from contacts")
+	}
+	if ev.UID == "" {
+		return errors.New("event uid is required")
+	}
+	current, err := s.FindEvent(ev.UID)
+	if err != nil {
+		return err
+	}
+	target, _, err := s.findWritableCalendar(sourceName, calendarName)
+	if err != nil {
+		return err
+	}
+	if sameFilePath(current.CalendarDir, target.Path) {
+		return nil
+	}
+	return moveCalendarComponents(current.FilePath, target.Path, ical.CompEvent, ev.UID)
 }
 
 func (s *Store) updateEventAll(ev Event, update EventUpdate) error {
@@ -1960,6 +1996,111 @@ func writeCalendarFile(path string, cal *ical.Calendar) error {
 	}
 	defer out.Close()
 	return ical.NewEncoder(out).Encode(cal)
+}
+
+func moveCalendarComponents(sourcePath, targetDir, componentName, uid string) error {
+	if strings.TrimSpace(sourcePath) == "" {
+		return errors.New("source calendar file is required")
+	}
+	if strings.TrimSpace(targetDir) == "" {
+		return errors.New("target calendar directory is required")
+	}
+	sourceCal, err := readCalendarFile(sourcePath)
+	if err != nil {
+		return err
+	}
+
+	moved := make([]*ical.Component, 0, 1)
+	remaining := sourceCal.Children[:0]
+	for _, child := range sourceCal.Children {
+		if child == nil || child.Name != componentName {
+			remaining = append(remaining, child)
+			continue
+		}
+		entryUID, _ := child.Props.Text(ical.PropUID)
+		if entryUID != uid {
+			remaining = append(remaining, child)
+			continue
+		}
+		moved = append(moved, child)
+	}
+	if len(moved) == 0 {
+		return fmt.Errorf("component with uid %q not found", uid)
+	}
+
+	if err := os.MkdirAll(targetDir, 0o755); err != nil {
+		return err
+	}
+	targetPath := filepath.Join(targetDir, filepath.Base(sourcePath))
+	if strings.TrimSpace(filepath.Base(sourcePath)) == "" || filepath.Ext(targetPath) == "" {
+		targetPath = filepath.Join(targetDir, uid+".ics")
+	}
+	if sameFilePath(sourcePath, targetPath) {
+		return nil
+	}
+
+	targetCal := cloneCalendarShell(sourceCal)
+	if existing, err := readCalendarFile(targetPath); err == nil {
+		targetCal = existing
+		targetCal.Children = removeComponentsByUID(targetCal.Children, componentName, uid)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	targetCal.Children = append(targetCal.Children, moved...)
+	if err := writeCalendarFile(targetPath, targetCal); err != nil {
+		return err
+	}
+
+	sourceCal.Children = remaining
+	if len(sourceCal.Children) == 0 {
+		return os.Remove(sourcePath)
+	}
+	return writeCalendarFile(sourcePath, sourceCal)
+}
+
+func cloneCalendarShell(cal *ical.Calendar) *ical.Calendar {
+	out := ical.NewCalendar()
+	if cal != nil {
+		out.Props = cal.Props
+	}
+	if out.Props.Get(ical.PropVersion) == nil {
+		out.Props.SetText(ical.PropVersion, "2.0")
+	}
+	if out.Props.Get(ical.PropProductID) == nil {
+		out.Props.SetText(ical.PropProductID, "-//go-khal//EN")
+	}
+	return out
+}
+
+func removeComponentsByUID(children []*ical.Component, componentName, uid string) []*ical.Component {
+	out := children[:0]
+	for _, child := range children {
+		if child == nil || child.Name != componentName {
+			out = append(out, child)
+			continue
+		}
+		entryUID, _ := child.Props.Text(ical.PropUID)
+		if entryUID == uid {
+			continue
+		}
+		out = append(out, child)
+	}
+	return out
+}
+
+func sameFilePath(a, b string) bool {
+	if strings.TrimSpace(a) == "" || strings.TrimSpace(b) == "" {
+		return false
+	}
+	aa, errA := filepath.Abs(a)
+	bb, errB := filepath.Abs(b)
+	if errA == nil {
+		a = aa
+	}
+	if errB == nil {
+		b = bb
+	}
+	return filepath.Clean(a) == filepath.Clean(b)
 }
 
 func setEventURL(comp *ical.Component, raw string) {

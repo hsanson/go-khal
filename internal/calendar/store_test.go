@@ -128,6 +128,95 @@ func TestDeleteTodoRemovesFile(t *testing.T) {
 	}
 }
 
+func TestMoveEventMovesFileToTargetCalendar(t *testing.T) {
+	store, root, calDir := testStore(t)
+	targetDir := filepath.Join(root, "work")
+	if err := os.MkdirAll(targetDir, 0o755); err != nil {
+		t.Fatalf("mkdir target calendar: %v", err)
+	}
+	store.config.Sources[0].Calendars = append(store.config.Sources[0].Calendars, config.CalendarConfig{
+		Name: "work",
+		Path: targetDir,
+	})
+
+	start := time.Now().Truncate(time.Minute)
+	if err := store.CreateEvent("src", "cal", Event{
+		UID:     "move-event@example.test",
+		Summary: "Move me",
+		Start:   start,
+		End:     start.Add(time.Hour),
+	}); err != nil {
+		t.Fatalf("CreateEvent: %v", err)
+	}
+	oldPath := filepath.Join(calDir, "move-event@example.test.ics")
+	if _, err := os.Stat(oldPath); err != nil {
+		t.Fatalf("expected source event file: %v", err)
+	}
+	ev, err := store.FindEvent("move-event@example.test")
+	if err != nil {
+		t.Fatalf("FindEvent: %v", err)
+	}
+
+	if err := store.MoveEvent(ev, "src", "work"); err != nil {
+		t.Fatalf("MoveEvent: %v", err)
+	}
+	if _, err := os.Stat(oldPath); !os.IsNotExist(err) {
+		t.Fatalf("expected source event file removed, stat err=%v", err)
+	}
+	newPath := filepath.Join(targetDir, "move-event@example.test.ics")
+	if _, err := os.Stat(newPath); err != nil {
+		t.Fatalf("expected target event file: %v", err)
+	}
+	moved, err := store.FindEvent("move-event@example.test")
+	if err != nil {
+		t.Fatalf("FindEvent after move: %v", err)
+	}
+	if moved.Calendar != "work" || moved.CalendarDir != targetDir {
+		t.Fatalf("expected moved event in work calendar, got %s %s", moved.Calendar, moved.CalendarDir)
+	}
+}
+
+func TestMoveTodoMovesFileToTargetCalendar(t *testing.T) {
+	store, root, calDir := testStore(t)
+	targetDir := filepath.Join(root, "work")
+	if err := os.MkdirAll(targetDir, 0o755); err != nil {
+		t.Fatalf("mkdir target calendar: %v", err)
+	}
+	store.config.Sources[0].Calendars = append(store.config.Sources[0].Calendars, config.CalendarConfig{
+		Name: "work",
+		Path: targetDir,
+	})
+
+	if err := store.CreateTodo("src", "cal", Todo{
+		UID:     "move-todo@example.test",
+		Summary: "Move task",
+	}); err != nil {
+		t.Fatalf("CreateTodo: %v", err)
+	}
+	oldPath := filepath.Join(calDir, "move-todo@example.test.ics")
+	if _, err := os.Stat(oldPath); err != nil {
+		t.Fatalf("expected source todo file: %v", err)
+	}
+
+	if err := store.MoveTodo("move-todo@example.test", "src", "work"); err != nil {
+		t.Fatalf("MoveTodo: %v", err)
+	}
+	if _, err := os.Stat(oldPath); !os.IsNotExist(err) {
+		t.Fatalf("expected source todo file removed, stat err=%v", err)
+	}
+	newPath := filepath.Join(targetDir, "move-todo@example.test.ics")
+	if _, err := os.Stat(newPath); err != nil {
+		t.Fatalf("expected target todo file: %v", err)
+	}
+	moved, err := store.FindTodo("move-todo@example.test")
+	if err != nil {
+		t.Fatalf("FindTodo after move: %v", err)
+	}
+	if moved.Calendar != "work" || moved.CalendarDir != targetDir {
+		t.Fatalf("expected moved todo in work calendar, got %s %s", moved.Calendar, moved.CalendarDir)
+	}
+}
+
 func TestUpdateRecurringOccurrenceCreatesOverride(t *testing.T) {
 	store, _, _ := testStore(t)
 	start := time.Date(2026, time.July, 7, 12, 0, 0, 0, time.Local)

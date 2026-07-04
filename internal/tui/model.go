@@ -558,7 +558,8 @@ func (m Model) renderEventFormMainPanel(width, panelHeight int) string {
 		if m.eventForm.activeKey == "description" {
 			formHeight = max(12, (panelHeight*2)/3)
 		}
-		return overlayCentered(panel, m.eventForm.activeForm.WithWidth(min(70, max(30, width-10))).WithHeight(formHeight).WithShowHelp(true).WithShowErrors(true).View(), width, panelHeight)
+		modal := activeFormModalView(m.eventForm.activeForm, min(70, max(30, width-10)), formHeight, m.eventForm.errMsg)
+		return overlayCentered(panel, modal, width, panelHeight)
 	}
 	return panel
 }
@@ -582,7 +583,8 @@ func (m Model) renderTodoFormMainPanel(width, panelHeight int) string {
 		if m.todoForm.activeKey == "description" {
 			formHeight = max(12, (panelHeight*2)/3)
 		}
-		return overlayCentered(panel, m.todoForm.activeForm.WithWidth(min(70, max(30, width-10))).WithHeight(formHeight).WithShowHelp(true).WithShowErrors(true).View(), width, panelHeight)
+		modal := activeFormModalView(m.todoForm.activeForm, min(70, max(30, width-10)), formHeight, m.todoForm.errMsg)
+		return overlayCentered(panel, modal, width, panelHeight)
 	}
 	return panel
 }
@@ -607,6 +609,27 @@ func overlayCentered(base, modal string, width, height int) string {
 		Width(min(width-8, max(30, lipgloss.Width(modal)+4))).
 		Render(modal)
 	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, box)
+}
+
+func activeFormModalView(form *huh.Form, width, height int, errMsg string) string {
+	if form == nil {
+		return ""
+	}
+	if strings.TrimSpace(errMsg) == "" {
+		return form.WithWidth(width).WithHeight(height).WithShowHelp(true).WithShowErrors(true).View()
+	}
+	formHeight := max(3, height-2)
+	view := form.WithWidth(width).WithHeight(formHeight).WithShowHelp(true).WithShowErrors(true).View()
+	err := lipgloss.NewStyle().
+		Width(width).
+		Foreground(lipgloss.Color("210")).
+		Bold(true).
+		Render("Error: " + errMsg)
+	return lipgloss.NewStyle().
+		Width(width).
+		Height(height).
+		MaxHeight(height).
+		Render(lipgloss.JoinVertical(lipgloss.Left, err, "", view))
 }
 
 func (m Model) renderEventEditorList(width, height int) string {
@@ -2579,6 +2602,11 @@ func (m *Model) commitTodoForm() error {
 		if err := m.store.UpdateTodo(s.targetUID, upd); err != nil {
 			return err
 		}
+		if s.targetUID != "" {
+			if err := m.store.MoveTodo(s.targetUID, cal.source, cal.name); err != nil {
+				return err
+			}
+		}
 	} else {
 		td := calendar.Todo{
 			Summary:     s.summary,
@@ -2863,8 +2891,17 @@ func (m *Model) commitEventForm() error {
 			if err := m.store.UpdateEventScoped(*s.targetEvent, upd, calendar.EditRecurringScope(s.editScope)); err != nil {
 				return err
 			}
+			if err := m.store.MoveEvent(*s.targetEvent, cal.source, cal.name); err != nil {
+				return err
+			}
 		} else if err := m.store.UpdateEvent(s.targetUID, upd); err != nil {
 			return err
+		} else if s.targetUID != "" {
+			if ev, err := m.store.FindEvent(s.targetUID); err == nil {
+				if err := m.store.MoveEvent(ev, cal.source, cal.name); err != nil {
+					return err
+				}
+			}
 		}
 	} else {
 		ev := calendar.Event{
