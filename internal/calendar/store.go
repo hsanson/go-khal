@@ -382,6 +382,8 @@ func (s *Store) componentToEvents(comp *ical.Component, src calendarSource, file
 	}
 	organizer, _ := comp.Props.Text(ical.PropOrganizer)
 	attendees := propsToAttendees(comp.Props)
+	availability := propsToAvailability(comp.Props)
+	visibility := propsToVisibility(comp.Props)
 	recurrence := propsToRecurrence(comp.Props)
 	alarms := componentToAlarms(comp)
 	start, err := comp.Props.DateTime(ical.PropDateTimeStart, src.location)
@@ -414,25 +416,27 @@ func (s *Store) componentToEvents(comp *ical.Component, src calendarSource, file
 		}
 	}
 	base := Event{
-		UID:         uid,
-		Summary:     emptyDefault(summary, "(untitled event)"),
-		Description: desc,
-		Location:    location,
-		URL:         urlText,
-		Organizer:   organizer,
-		Attendees:   attendees,
-		Recurrence:  recurrence,
-		Alarms:      alarms,
-		AllDay:      allDay,
-		Recurring:   recurring || recurrence != nil,
-		HasAlarm:    hasAlarm || len(alarms) > 0,
-		Source:      src.sourceName,
-		Calendar:    src.calendar.Name,
-		CalendarDir: src.calendar.Path,
-		DisplayName: src.calendar.DisplayName,
-		Color:       src.calendar.Color,
-		Hidden:      src.calendar.Hidden,
-		FilePath:    filePath,
+		UID:          uid,
+		Summary:      emptyDefault(summary, "(untitled event)"),
+		Description:  desc,
+		Location:     location,
+		URL:          urlText,
+		Organizer:    organizer,
+		Attendees:    attendees,
+		Availability: availability,
+		Visibility:   visibility,
+		Recurrence:   recurrence,
+		Alarms:       alarms,
+		AllDay:       allDay,
+		Recurring:    recurring || recurrence != nil,
+		HasAlarm:     hasAlarm || len(alarms) > 0,
+		Source:       src.sourceName,
+		Calendar:     src.calendar.Name,
+		CalendarDir:  src.calendar.Path,
+		DisplayName:  src.calendar.DisplayName,
+		Color:        src.calendar.Color,
+		Hidden:       src.calendar.Hidden,
+		FilePath:     filePath,
 	}
 
 	if !recurring || forceSingle {
@@ -561,9 +565,36 @@ func propsToAttendees(props ical.Props) []Attendee {
 		if email == "" && name == "" {
 			continue
 		}
-		out = append(out, Attendee{Name: name, Email: email})
+		status := normalizeAttendeeStatus(prop.Params.Get(ical.ParamParticipationStatus))
+		out = append(out, Attendee{Name: name, Email: email, Status: status})
 	}
 	return out
+}
+
+func propsToAvailability(props ical.Props) string {
+	value, _ := props.Text(ical.PropTransparency)
+	switch strings.ToUpper(strings.TrimSpace(value)) {
+	case "TRANSPARENT":
+		return "free"
+	case "OPAQUE":
+		return "busy"
+	default:
+		return ""
+	}
+}
+
+func propsToVisibility(props ical.Props) string {
+	value, _ := props.Text(ical.PropClass)
+	switch strings.ToUpper(strings.TrimSpace(value)) {
+	case "PUBLIC":
+		return "public"
+	case "PRIVATE":
+		return "private"
+	case "CONFIDENTIAL":
+		return "confidential"
+	default:
+		return "default"
+	}
 }
 
 func propsToRecurrence(props ical.Props) *Recurrence {
@@ -1297,6 +1328,8 @@ func (s *Store) CreateEvent(sourceName, calendarName string, e Event) error {
 	}
 	setEventTimeProps(comp, start.In(loc), end.In(loc), e.AllDay)
 	setEventAttendees(comp, e.Attendees)
+	setEventAvailability(comp, e.Availability)
+	setEventVisibility(comp, e.Visibility)
 	setEventRecurrence(comp, e.Recurrence, start.In(loc))
 	setEventAlarms(comp, e.Alarms)
 
@@ -1517,6 +1550,18 @@ func applyEventUpdateToComponent(comp *ical.Component, base Event, update EventU
 	}
 	setEventAttendees(comp, attendees)
 
+	availability := base.Availability
+	if update.Availability != nil {
+		availability = *update.Availability
+	}
+	setEventAvailability(comp, availability)
+
+	visibility := base.Visibility
+	if update.Visibility != nil {
+		visibility = *update.Visibility
+	}
+	setEventVisibility(comp, visibility)
+
 	alarms := base.Alarms
 	if update.Alarms != nil {
 		alarms = *update.Alarms
@@ -1573,7 +1618,58 @@ func setEventAttendees(comp *ical.Component, attendees []Attendee) {
 		if name != "" {
 			prop.Params.Set("CN", name)
 		}
+		if status := attendeePartstat(attendee.Status); status != "" {
+			prop.Params.Set(ical.ParamParticipationStatus, status)
+		}
 		comp.Props.Add(prop)
+	}
+}
+
+func setEventAvailability(comp *ical.Component, availability string) {
+	comp.Props.Del(ical.PropTransparency)
+	switch strings.ToLower(strings.TrimSpace(availability)) {
+	case "free":
+		comp.Props.SetText(ical.PropTransparency, "TRANSPARENT")
+	case "busy":
+		comp.Props.SetText(ical.PropTransparency, "OPAQUE")
+	}
+}
+
+func setEventVisibility(comp *ical.Component, visibility string) {
+	comp.Props.Del(ical.PropClass)
+	switch strings.ToLower(strings.TrimSpace(visibility)) {
+	case "public":
+		comp.Props.SetText(ical.PropClass, "PUBLIC")
+	case "private":
+		comp.Props.SetText(ical.PropClass, "PRIVATE")
+	case "confidential":
+		comp.Props.SetText(ical.PropClass, "CONFIDENTIAL")
+	}
+}
+
+func normalizeAttendeeStatus(status string) string {
+	switch strings.ToUpper(strings.TrimSpace(status)) {
+	case "ACCEPTED":
+		return "yes"
+	case "DECLINED":
+		return "no"
+	case "TENTATIVE":
+		return "maybe"
+	default:
+		return ""
+	}
+}
+
+func attendeePartstat(status string) string {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "yes":
+		return "ACCEPTED"
+	case "no":
+		return "DECLINED"
+	case "maybe":
+		return "TENTATIVE"
+	default:
+		return ""
 	}
 }
 

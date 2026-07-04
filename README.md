@@ -161,6 +161,7 @@ Event editing supports:
 - Title and calendar
 - Location, URL, and description
 - Attendees, including fuzzy add/search from address-book contacts
+- RSVP, availability, and visibility
 - Notifications such as `10m before`, `2h before`, `10d before`, or `1d after`
 - Recurrence: daily, weekly, monthly, yearly, interval, weekdays, monthly mode, until date, and fixed count
 - All-day and timed start/end values

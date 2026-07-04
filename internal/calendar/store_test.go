@@ -22,10 +22,12 @@ func TestEventMetadataRoundTrip(t *testing.T) {
 		End:     start.Add(time.Hour),
 		AllDay:  false,
 		Attendees: []Attendee{
-			{Name: "Ada Lovelace", Email: "ada@example.test"},
-			{Name: "grace@example.test", Email: "grace@example.test"},
+			{Name: "Ada Lovelace", Email: "ada@example.test", Status: "yes"},
+			{Name: "grace@example.test", Email: "grace@example.test", Status: "yes"},
 		},
-		Recurrence: &Recurrence{Frequency: "DAILY", Interval: 2, Until: &until},
+		Availability: "free",
+		Visibility:   "private",
+		Recurrence:   &Recurrence{Frequency: "DAILY", Interval: 2, Until: &until},
 		Alarms: []Alarm{
 			{Offset: -10 * time.Minute, Action: "DISPLAY"},
 			{Offset: time.Hour, Action: "DISPLAY"},
@@ -45,6 +47,15 @@ func TestEventMetadataRoundTrip(t *testing.T) {
 	ev := ds.Events[0]
 	if len(ev.Attendees) != 2 {
 		t.Fatalf("expected 2 attendees, got %d", len(ev.Attendees))
+	}
+	if ev.Attendees[0].Status != "yes" || ev.Attendees[1].Status != "yes" {
+		t.Fatalf("expected attendee RSVP yes, got %+v", ev.Attendees)
+	}
+	if ev.Availability != "free" {
+		t.Fatalf("expected free availability, got %q", ev.Availability)
+	}
+	if ev.Visibility != "private" {
+		t.Fatalf("expected private visibility, got %q", ev.Visibility)
 	}
 	if ev.Recurrence == nil {
 		t.Fatal("expected recurrence")

@@ -59,6 +59,9 @@ type eventFormState struct {
 	description    string
 	url            string
 	attendees      string
+	rsvp           string
+	availability   string
+	visibility     string
 	alarms         string
 	recur          bool
 	recurFreq      string
@@ -123,6 +126,9 @@ type eventFormSnapshot struct {
 	description    string
 	url            string
 	attendees      string
+	rsvp           string
+	availability   string
+	visibility     string
 	alarms         string
 	recur          bool
 	recurFreq      string
@@ -708,7 +714,11 @@ func (m Model) eventEditorRows() []editorRow {
 		{"description", "Description", multilineValue(s.description)},
 		editorSeparatorRow("󰅺 Attendees"),
 		{"attendees", "Attendees", emptyDefault(s.attendees, "-")},
+		{"rsvp", "RSVP", emptyDefault(eventRSVPDisplayValue(s.rsvp), "default")},
 		{"attendees-add", "", ""},
+		editorSeparatorRow("󰄨 Privacy"),
+		{"availability", "Availability", emptyDefault(s.availability, "default")},
+		{"visibility", "Visibility", emptyDefault(s.visibility, "default")},
 		editorSeparatorRow("󰥔 Time"),
 		{"all-day", "All-day", yesNo(s.allDay)},
 	}
@@ -961,6 +971,27 @@ func (m *Model) buildEventEditorForm(key string) *huh.Form {
 	case "attendees-add":
 		values := []string{}
 		return huh.NewForm(huh.NewGroup(huh.NewMultiSelect[string]().Key("value").Title("Add attendees").Options(m.attendeeOptions()...).Filterable(true).Value(&values).WithKeyMap(attendeeMultiSelectKeyMap()))).WithShowHelp(true).WithShowErrors(true)
+	case "rsvp":
+		value := s.rsvp
+		return huh.NewForm(huh.NewGroup(huh.NewSelect[string]().Key("value").Title("RSVP").Options(
+			huh.NewOption("Default", ""),
+			huh.NewOption("Yes", "yes"),
+			huh.NewOption("No", "no"),
+			huh.NewOption("Maybe", "maybe"),
+		).Value(&value))).WithShowHelp(true).WithShowErrors(true)
+	case "availability":
+		return huh.NewForm(huh.NewGroup(huh.NewSelect[string]().Key("value").Title("Availability").Options(
+			huh.NewOption("Default", ""),
+			huh.NewOption("Busy", "busy"),
+			huh.NewOption("Free", "free"),
+		).Value(&s.availability))).WithShowHelp(true).WithShowErrors(true)
+	case "visibility":
+		return huh.NewForm(huh.NewGroup(huh.NewSelect[string]().Key("value").Title("Visibility").Options(
+			huh.NewOption("Default", "default"),
+			huh.NewOption("Public", "public"),
+			huh.NewOption("Private", "private"),
+			huh.NewOption("Confidential", "confidential"),
+		).Value(&s.visibility))).WithShowHelp(true).WithShowErrors(true)
 	case "alarms":
 		values := splitListInput(s.alarms)
 		return huh.NewForm(huh.NewGroup(huh.NewMultiSelect[string]().Key("value").Title("Notifications").Options(selectedOptions(values)...).Filterable(false).Value(&values))).WithShowHelp(true).WithShowErrors(true)
@@ -1031,6 +1062,8 @@ func (m *Model) applyEventEditorForm() error {
 		s.attendees = strings.Join(anyStringSlice(value), "; ")
 	case "attendees-add":
 		s.attendees = mergeListInput(s.attendees, anyStringSlice(value))
+	case "rsvp":
+		s.rsvp = anyString(value)
 	case "alarms":
 		s.alarms = strings.Join(anyStringSlice(value), "; ")
 	case "alarms-add":
@@ -1257,6 +1290,9 @@ func (s *eventFormState) snapshot() *eventFormSnapshot {
 		description:    s.description,
 		url:            s.url,
 		attendees:      s.attendees,
+		rsvp:           s.rsvp,
+		availability:   s.availability,
+		visibility:     s.visibility,
 		alarms:         s.alarms,
 		recur:          s.recur,
 		recurFreq:      s.recurFreq,
@@ -1286,6 +1322,9 @@ func (s *eventFormState) cancelActive() {
 		s.description = b.description
 		s.url = b.url
 		s.attendees = b.attendees
+		s.rsvp = b.rsvp
+		s.availability = b.availability
+		s.visibility = b.visibility
 		s.alarms = b.alarms
 		s.recur = b.recur
 		s.recurFreq = b.recurFreq
@@ -1636,6 +1675,11 @@ func (m Model) renderEventDetailsFor(ev calendar.Event, width, height int) strin
 	if len(ev.Attendees) > 0 {
 		lines = append(lines, "Attendees: "+formatAttendees(ev.Attendees))
 	}
+	lines = append(lines,
+		"RSVP: "+attendeeRSVPDisplay(ev.Attendees),
+		"Availability: "+eventAvailabilityDisplay(ev.Availability),
+		"Visibility: "+eventVisibilityDisplay(ev.Visibility),
+	)
 	if ev.Recurrence != nil {
 		lines = append(lines, "Repeats: "+formatRecurrence(ev.Recurrence))
 	} else if ev.Recurring {
@@ -2587,6 +2631,9 @@ func (m *Model) newEventFormState(mode, targetUID string, ev calendar.Event) *ev
 		description:    ev.Description,
 		url:            ev.URL,
 		attendees:      attendeesInput(ev.Attendees),
+		rsvp:           attendeeRSVPValue(ev.Attendees),
+		availability:   ev.Availability,
+		visibility:     eventVisibilityValue(ev.Visibility),
 		alarms:         alarmsInput(ev.Alarms),
 		recur:          ev.Recurrence != nil,
 		recurFreq:      recurrenceFrequencyValue(ev.Recurrence),
@@ -2664,6 +2711,23 @@ func (m *Model) buildEventForm(s *eventFormState) *huh.Form {
 		huh.NewText().Key("description").Title("Description").Value(&s.description).Lines(4),
 		huh.NewInput().Key("url").Title("URL").Value(&s.url),
 		huh.NewInput().Key("attendees").Title("Attendees").Description("Separate attendees with commas or semicolons").Value(&s.attendees).Suggestions(attendeeSuggestions),
+		huh.NewSelect[string]().Key("rsvp").Title("RSVP").Options(
+			huh.NewOption("Default", ""),
+			huh.NewOption("Yes", "yes"),
+			huh.NewOption("No", "no"),
+			huh.NewOption("Maybe", "maybe"),
+		).Value(&s.rsvp),
+		huh.NewSelect[string]().Key("availability").Title("Availability").Options(
+			huh.NewOption("Default", ""),
+			huh.NewOption("Busy", "busy"),
+			huh.NewOption("Free", "free"),
+		).Value(&s.availability),
+		huh.NewSelect[string]().Key("visibility").Title("Visibility").Options(
+			huh.NewOption("Default", "default"),
+			huh.NewOption("Public", "public"),
+			huh.NewOption("Private", "private"),
+			huh.NewOption("Confidential", "confidential"),
+		).Value(&s.visibility),
 		huh.NewInput().Key("alarms").Title("Notifications").Description("Examples: 10m before, 2h before, 1d after").Value(&s.alarms).Validate(validateAlarmsInput),
 		huh.NewConfirm().Key("recur").Title("Repeat").Value(&s.recur),
 		huh.NewSelect[string]().Key("recur-freq").Title("Repeat frequency").Options(frequencyOptions...).Value(&s.recurFreq),
@@ -2764,6 +2828,7 @@ func (m *Model) commitEventForm() error {
 		return err
 	}
 	attendees := parseAttendeesInput(s.attendees)
+	applyRSVPToAttendees(attendees, s.rsvp)
 	alarms, err := parseAlarmsInput(s.alarms)
 	if err != nil {
 		return err
@@ -2781,16 +2846,18 @@ func (m *Model) commitEventForm() error {
 			recurrenceUpdatePtr = &recurrenceUpdate
 		}
 		upd := calendar.EventUpdate{
-			Summary:     &s.summary,
-			Description: &s.description,
-			Location:    &s.location,
-			URL:         &s.url,
-			Attendees:   &attendees,
-			Recurrence:  recurrenceUpdatePtr,
-			Alarms:      &alarms,
-			Start:       &start,
-			End:         &end,
-			AllDay:      &s.allDay,
+			Summary:      &s.summary,
+			Description:  &s.description,
+			Location:     &s.location,
+			URL:          &s.url,
+			Attendees:    &attendees,
+			Availability: &s.availability,
+			Visibility:   &s.visibility,
+			Recurrence:   recurrenceUpdatePtr,
+			Alarms:       &alarms,
+			Start:        &start,
+			End:          &end,
+			AllDay:       &s.allDay,
 		}
 		if s.targetEvent != nil {
 			if err := m.store.UpdateEventScoped(*s.targetEvent, upd, calendar.EditRecurringScope(s.editScope)); err != nil {
@@ -2801,16 +2868,18 @@ func (m *Model) commitEventForm() error {
 		}
 	} else {
 		ev := calendar.Event{
-			Summary:     s.summary,
-			Description: s.description,
-			Location:    s.location,
-			URL:         s.url,
-			Attendees:   attendees,
-			Recurrence:  recurrence,
-			Alarms:      alarms,
-			AllDay:      s.allDay,
-			Start:       start,
-			End:         end,
+			Summary:      s.summary,
+			Description:  s.description,
+			Location:     s.location,
+			URL:          s.url,
+			Attendees:    attendees,
+			Availability: s.availability,
+			Visibility:   s.visibility,
+			Recurrence:   recurrence,
+			Alarms:       alarms,
+			AllDay:       s.allDay,
+			Start:        start,
+			End:          end,
 		}
 		if err := m.store.CreateEvent(cal.source, cal.name, ev); err != nil {
 			return err
@@ -3039,6 +3108,108 @@ func parseAttendeesInput(raw string) []calendar.Attendee {
 		out = append(out, calendar.Attendee{Name: name, Email: email})
 	}
 	return out
+}
+
+func applyRSVPToAttendees(attendees []calendar.Attendee, rsvp string) {
+	status := normalizeRSVPValue(rsvp)
+	for i := range attendees {
+		attendees[i].Status = status
+	}
+}
+
+func attendeeRSVPValue(attendees []calendar.Attendee) string {
+	status := ""
+	for _, attendee := range attendees {
+		next := normalizeRSVPValue(attendee.Status)
+		if next == "" {
+			continue
+		}
+		if status == "" {
+			status = next
+			continue
+		}
+		if status != next {
+			return ""
+		}
+	}
+	return status
+}
+
+func eventRSVPDisplayValue(rsvp string) string {
+	switch normalizeRSVPValue(rsvp) {
+	case "yes":
+		return "yes"
+	case "no":
+		return "no"
+	case "maybe":
+		return "maybe"
+	default:
+		return "default"
+	}
+}
+
+func attendeeRSVPDisplay(attendees []calendar.Attendee) string {
+	counts := map[string]int{}
+	for _, attendee := range attendees {
+		status := normalizeRSVPValue(attendee.Status)
+		if status == "" {
+			status = "default"
+		}
+		counts[status]++
+	}
+	if len(counts) == 0 {
+		return "default"
+	}
+	if len(counts) == 1 {
+		for status := range counts {
+			return eventRSVPDisplayValue(status)
+		}
+	}
+	order := []string{"yes", "no", "maybe", "default"}
+	parts := make([]string, 0, len(counts))
+	for _, status := range order {
+		if n := counts[status]; n > 0 {
+			parts = append(parts, fmt.Sprintf("%s %d", eventRSVPDisplayValue(status), n))
+		}
+	}
+	return strings.Join(parts, ", ")
+}
+
+func normalizeRSVPValue(rsvp string) string {
+	switch strings.ToLower(strings.TrimSpace(rsvp)) {
+	case "yes", "accepted":
+		return "yes"
+	case "no", "declined":
+		return "no"
+	case "maybe", "tentative":
+		return "maybe"
+	default:
+		return ""
+	}
+}
+
+func eventAvailabilityDisplay(availability string) string {
+	switch strings.ToLower(strings.TrimSpace(availability)) {
+	case "busy":
+		return "busy"
+	case "free":
+		return "free"
+	default:
+		return "default"
+	}
+}
+
+func eventVisibilityValue(visibility string) string {
+	switch strings.ToLower(strings.TrimSpace(visibility)) {
+	case "public", "private", "confidential":
+		return strings.ToLower(strings.TrimSpace(visibility))
+	default:
+		return "default"
+	}
+}
+
+func eventVisibilityDisplay(visibility string) string {
+	return eventVisibilityValue(visibility)
 }
 
 func alarmsInput(alarms []calendar.Alarm) string {
