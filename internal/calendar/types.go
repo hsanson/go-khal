@@ -33,6 +33,8 @@ type Attendee struct {
 	Name   string
 	Email  string
 	Status string
+	RSVP   bool
+	Role   string
 }
 
 type Recurrence struct {
@@ -58,6 +60,15 @@ const (
 
 	SpecialSourceBirthdays   = "__special__"
 	SpecialCalendarBirthdays = "birthdays-anniversaries"
+)
+
+type EventUserRole string
+
+const (
+	EventUserRoleUnknown   EventUserRole = ""
+	EventUserRoleOrganizer EventUserRole = "organizer"
+	EventUserRoleAttendee  EventUserRole = "attendee"
+	EventUserRoleLocal     EventUserRole = "local"
 )
 
 type Todo struct {
@@ -90,6 +101,7 @@ type Calendar struct {
 	Source      string
 	Name        string
 	Path        string
+	Email       string
 	DisplayName string
 	Color       string
 	Hidden      bool
@@ -111,6 +123,7 @@ type EventUpdate struct {
 	Description  *string
 	Location     *string
 	URL          *string
+	Organizer    *string
 	Attendees    *[]Attendee
 	Availability *string
 	Visibility   *string

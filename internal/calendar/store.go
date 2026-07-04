@@ -158,6 +158,7 @@ func (s *Store) resolveCalendarSources(src config.Source) ([]calendarSource, err
 					Source:      src.Name,
 					Name:        name,
 					Path:        calPath,
+					Email:       calendarEmail(src, cal, name),
 					DisplayName: emptyDefault(cal.DisplayName, emptyDefault(metaDisplay, name)),
 					Color:       emptyDefault(cal.Color, metaColor),
 					Hidden:      cal.Hidden,
@@ -195,6 +196,7 @@ func (s *Store) resolveCalendarSources(src config.Source) ([]calendarSource, err
 				Source:      src.Name,
 				Name:        src.Name,
 				Path:        src.Path,
+				Email:       calendarEmail(src, meta, src.Name),
 				DisplayName: emptyDefault(meta.DisplayName, emptyDefault(metaDisplay, src.Name)),
 				Color:       emptyDefault(meta.Color, metaColor),
 				Hidden:      meta.Hidden,
@@ -219,6 +221,7 @@ func (s *Store) resolveCalendarSources(src config.Source) ([]calendarSource, err
 				Source:      src.Name,
 				Name:        calName,
 				Path:        calPath,
+				Email:       calendarEmail(src, meta, calName),
 				DisplayName: emptyDefault(meta.DisplayName, emptyDefault(metaDisplay, calName)),
 				Color:       emptyDefault(meta.Color, metaColor),
 				Hidden:      meta.Hidden,
@@ -237,6 +240,7 @@ func (s *Store) resolveCalendarSources(src config.Source) ([]calendarSource, err
 				Source:      src.Name,
 				Name:        src.Name,
 				Path:        src.Path,
+				Email:       calendarEmail(src, meta, src.Name),
 				DisplayName: emptyDefault(meta.DisplayName, emptyDefault(metaDisplay, src.Name)),
 				Color:       emptyDefault(meta.Color, metaColor),
 				Hidden:      meta.Hidden,
@@ -380,7 +384,7 @@ func (s *Store) componentToEvents(comp *ical.Component, src calendarSource, file
 			urlText = u.String()
 		}
 	}
-	organizer, _ := comp.Props.Text(ical.PropOrganizer)
+	organizer := propEmail(comp.Props.Get(ical.PropOrganizer))
 	attendees := propsToAttendees(comp.Props)
 	availability := propsToAvailability(comp.Props)
 	visibility := propsToVisibility(comp.Props)
@@ -554,11 +558,8 @@ func propsToAttendees(props ical.Props) []Attendee {
 	}
 	out := make([]Attendee, 0, len(values))
 	for _, prop := range values {
-		raw := strings.TrimSpace(prop.Value)
-		raw = strings.TrimPrefix(raw, "mailto:")
-		raw = strings.TrimPrefix(raw, "MAILTO:")
+		email := propValueEmail(prop.Value)
 		name := strings.TrimSpace(prop.Params.Get("CN"))
-		email := strings.TrimSpace(raw)
 		if name == "" {
 			name = email
 		}
@@ -566,9 +567,25 @@ func propsToAttendees(props ical.Props) []Attendee {
 			continue
 		}
 		status := normalizeAttendeeStatus(prop.Params.Get(ical.ParamParticipationStatus))
-		out = append(out, Attendee{Name: name, Email: email, Status: status})
+		rsvp := strings.EqualFold(strings.TrimSpace(prop.Params.Get(ical.ParamRSVP)), "TRUE")
+		role := normalizeAttendeeRole(prop.Params.Get(ical.ParamRole))
+		out = append(out, Attendee{Name: name, Email: email, Status: status, RSVP: rsvp, Role: role})
 	}
 	return out
+}
+
+func propEmail(prop *ical.Prop) string {
+	if prop == nil {
+		return ""
+	}
+	return propValueEmail(prop.Value)
+}
+
+func propValueEmail(value string) string {
+	raw := strings.TrimSpace(value)
+	raw = strings.TrimPrefix(raw, "mailto:")
+	raw = strings.TrimPrefix(raw, "MAILTO:")
+	return strings.TrimSpace(raw)
 }
 
 func propsToAvailability(props ical.Props) string {
@@ -1127,6 +1144,35 @@ func (s *Store) FindEvent(uid string) (Event, error) {
 	return Event{}, fmt.Errorf("event with uid %q not found", uid)
 }
 
+func (s *Store) CalendarUserEmail(sourceName, calendarName string) string {
+	return s.calendarUserEmail(sourceName, calendarName)
+}
+
+func (s *Store) EventUserRole(ev Event) EventUserRole {
+	if ev.Source == SpecialSourceBirthdays {
+		return EventUserRoleLocal
+	}
+	userEmail := s.calendarUserEmail(ev.Source, ev.Calendar)
+	if userEmail == "" {
+		return EventUserRoleUnknown
+	}
+	if sameEmail(ev.Organizer, userEmail) {
+		return EventUserRoleOrganizer
+	}
+	for _, attendee := range ev.Attendees {
+		if sameEmail(attendee.Email, userEmail) {
+			if strings.TrimSpace(ev.Organizer) == "" {
+				return EventUserRoleLocal
+			}
+			return EventUserRoleAttendee
+		}
+	}
+	if strings.TrimSpace(ev.Organizer) == "" {
+		return EventUserRoleLocal
+	}
+	return EventUserRoleUnknown
+}
+
 func (s *Store) Contacts() ([]Contact, error) {
 	if s == nil || s.config == nil {
 		return nil, errors.New("missing config")
@@ -1341,8 +1387,15 @@ func (s *Store) CreateEvent(sourceName, calendarName string, e Event) error {
 	if strings.TrimSpace(e.URL) != "" {
 		setEventURL(comp, e.URL)
 	}
+	organizer := strings.TrimSpace(e.Organizer)
+	if organizer == "" && len(e.Attendees) > 0 {
+		organizer = s.calendarUserEmail(sourceName, calendarName)
+	}
+	if organizer != "" {
+		setEventOrganizer(comp, organizer)
+	}
 	setEventTimeProps(comp, start.In(loc), end.In(loc), e.AllDay)
-	setEventAttendees(comp, e.Attendees)
+	setEventAttendees(comp, e.Attendees, organizer != "")
 	setEventAvailability(comp, e.Availability)
 	setEventVisibility(comp, e.Visibility)
 	setEventRecurrence(comp, e.Recurrence, start.In(loc))
@@ -1379,6 +1432,9 @@ func (s *Store) UpdateEventScoped(ev Event, update EventUpdate, scope EditRecurr
 	if scope == "" {
 		scope = EditRecurringAll
 	}
+	if s.EventUserRole(ev) == EventUserRoleAttendee {
+		update = s.attendeeScopedEventUpdate(ev, update)
+	}
 	if !ev.Recurring || scope == EditRecurringAll {
 		return s.updateEventAll(ev, update)
 	}
@@ -1390,6 +1446,39 @@ func (s *Store) UpdateEventScoped(ev Event, update EventUpdate, scope EditRecurr
 	default:
 		return s.updateEventAll(ev, update)
 	}
+}
+
+func (s *Store) attendeeScopedEventUpdate(ev Event, update EventUpdate) EventUpdate {
+	scoped := EventUpdate{
+		Availability: update.Availability,
+		Visibility:   update.Visibility,
+		Alarms:       update.Alarms,
+	}
+	userEmail := s.calendarUserEmail(ev.Source, ev.Calendar)
+	if update.Attendees != nil && userEmail != "" {
+		attendees := mergeAttendeeResponse(ev.Attendees, *update.Attendees, userEmail)
+		scoped.Attendees = &attendees
+	}
+	return scoped
+}
+
+func mergeAttendeeResponse(base, update []Attendee, userEmail string) []Attendee {
+	out := append([]Attendee{}, base...)
+	for _, next := range update {
+		if !sameEmail(next.Email, userEmail) {
+			continue
+		}
+		for i := range out {
+			if sameEmail(out[i].Email, userEmail) {
+				out[i].Status = next.Status
+				out[i].RSVP = next.RSVP
+				return out
+			}
+		}
+		out = append(out, next)
+		return out
+	}
+	return out
 }
 
 func (s *Store) MoveEvent(ev Event, sourceName, calendarName string) error {
@@ -1580,11 +1669,20 @@ func applyEventUpdateToComponent(comp *ical.Component, base Event, update EventU
 		setEventURL(comp, url)
 	}
 
+	organizer := base.Organizer
+	if update.Organizer != nil {
+		organizer = *update.Organizer
+	}
+	comp.Props.Del(ical.PropOrganizer)
+	if strings.TrimSpace(organizer) != "" {
+		setEventOrganizer(comp, organizer)
+	}
+
 	attendees := base.Attendees
 	if update.Attendees != nil {
 		attendees = *update.Attendees
 	}
-	setEventAttendees(comp, attendees)
+	setEventAttendees(comp, attendees, strings.TrimSpace(organizer) != "")
 
 	availability := base.Availability
 	if update.Availability != nil {
@@ -1634,7 +1732,7 @@ func applyEventUpdateToComponent(comp *ical.Component, base Event, update EventU
 	setEventRecurrence(comp, rec, nextStart)
 }
 
-func setEventAttendees(comp *ical.Component, attendees []Attendee) {
+func setEventAttendees(comp *ical.Component, attendees []Attendee, requestRSVP bool) {
 	comp.Props.Del(ical.PropAttendee)
 	for _, attendee := range attendees {
 		email := strings.TrimSpace(attendee.Email)
@@ -1654,11 +1752,36 @@ func setEventAttendees(comp *ical.Component, attendees []Attendee) {
 		if name != "" {
 			prop.Params.Set("CN", name)
 		}
-		if status := attendeePartstat(attendee.Status); status != "" {
+		status := attendeePartstat(attendee.Status)
+		if status == "" && requestRSVP {
+			status = "NEEDS-ACTION"
+		}
+		if status != "" {
 			prop.Params.Set(ical.ParamParticipationStatus, status)
+		}
+		if attendee.RSVP || requestRSVP {
+			prop.Params.Set(ical.ParamRSVP, "TRUE")
+		}
+		if role := attendeeRoleParam(attendee.Role); role != "" {
+			prop.Params.Set(ical.ParamRole, role)
 		}
 		comp.Props.Add(prop)
 	}
+}
+
+func setEventOrganizer(comp *ical.Component, organizer string) {
+	comp.Props.Del(ical.PropOrganizer)
+	email := strings.TrimSpace(organizer)
+	if email == "" {
+		return
+	}
+	value := email
+	if !strings.Contains(value, ":") {
+		value = "mailto:" + value
+	}
+	prop := ical.NewProp(ical.PropOrganizer)
+	prop.Value = value
+	comp.Props.Set(prop)
 }
 
 func setEventAvailability(comp *ical.Component, availability string) {
@@ -1691,6 +1814,8 @@ func normalizeAttendeeStatus(status string) string {
 		return "no"
 	case "TENTATIVE":
 		return "maybe"
+	case "NEEDS-ACTION":
+		return "needs-action"
 	default:
 		return ""
 	}
@@ -1704,6 +1829,34 @@ func attendeePartstat(status string) string {
 		return "DECLINED"
 	case "maybe":
 		return "TENTATIVE"
+	case "needs-action":
+		return "NEEDS-ACTION"
+	default:
+		return ""
+	}
+}
+
+func normalizeAttendeeRole(role string) string {
+	switch strings.ToUpper(strings.TrimSpace(role)) {
+	case "OPT-PARTICIPANT":
+		return "optional"
+	case "NON-PARTICIPANT":
+		return "non-participant"
+	case "CHAIR":
+		return "chair"
+	default:
+		return ""
+	}
+}
+
+func attendeeRoleParam(role string) string {
+	switch strings.ToLower(strings.TrimSpace(role)) {
+	case "optional":
+		return "OPT-PARTICIPANT"
+	case "non-participant":
+		return "NON-PARTICIPANT"
+	case "chair":
+		return "CHAIR"
 	default:
 		return ""
 	}
@@ -2183,6 +2336,49 @@ func (s *Store) findWritableCalendar(sourceName, calendarName string) (Calendar,
 		}
 	}
 	return Calendar{}, nil, fmt.Errorf("calendar %q not found in source %q", calendarName, selectedSource.Name)
+}
+
+func (s *Store) calendarUserEmail(sourceName, calendarName string) string {
+	if s == nil || s.config == nil {
+		return ""
+	}
+	src := s.config.SourceByName(sourceName)
+	if src == nil {
+		return ""
+	}
+	for _, cal := range src.Calendars {
+		name := cal.Name
+		if name == "" && cal.Path != "" {
+			name = filepath.Base(cal.Path)
+		}
+		if name == calendarName {
+			return calendarEmail(*src, cal, name)
+		}
+	}
+	return calendarEmail(*src, config.CalendarConfig{Name: calendarName}, calendarName)
+}
+
+func calendarEmail(src config.Source, cal config.CalendarConfig, calendarName string) string {
+	for _, candidate := range []string{cal.Email, src.Email, calendarName, cal.Name, src.Name} {
+		candidate = strings.TrimSpace(candidate)
+		if strings.Contains(candidate, "@") {
+			return normalizeEmail(candidate)
+		}
+	}
+	return ""
+}
+
+func sameEmail(a, b string) bool {
+	a = normalizeEmail(a)
+	b = normalizeEmail(b)
+	return a != "" && b != "" && a == b
+}
+
+func normalizeEmail(email string) string {
+	email = strings.TrimSpace(email)
+	email = strings.TrimPrefix(email, "mailto:")
+	email = strings.TrimPrefix(email, "MAILTO:")
+	return strings.ToLower(strings.TrimSpace(email))
 }
 
 func emptyDefault(v, d string) string {

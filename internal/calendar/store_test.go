@@ -23,7 +23,7 @@ func TestEventMetadataRoundTrip(t *testing.T) {
 		AllDay:  false,
 		Attendees: []Attendee{
 			{Name: "Ada Lovelace", Email: "ada@example.test", Status: "yes"},
-			{Name: "grace@example.test", Email: "grace@example.test", Status: "yes"},
+			{Name: "grace@example.test", Email: "grace@example.test", Status: "yes", Role: "optional"},
 		},
 		Availability: "free",
 		Visibility:   "private",
@@ -51,6 +51,9 @@ func TestEventMetadataRoundTrip(t *testing.T) {
 	if ev.Attendees[0].Status != "yes" || ev.Attendees[1].Status != "yes" {
 		t.Fatalf("expected attendee RSVP yes, got %+v", ev.Attendees)
 	}
+	if ev.Attendees[1].Role != "optional" {
+		t.Fatalf("expected optional attendee role, got %+v", ev.Attendees[1])
+	}
 	if ev.Availability != "free" {
 		t.Fatalf("expected free availability, got %q", ev.Availability)
 	}
@@ -65,6 +68,98 @@ func TestEventMetadataRoundTrip(t *testing.T) {
 	}
 	if len(ev.Alarms) != 2 {
 		t.Fatalf("expected 2 alarms, got %d", len(ev.Alarms))
+	}
+}
+
+func TestCreateEventWithAttendeesWritesOrganizerAndRSVP(t *testing.T) {
+	store, _, calDir := testStore(t)
+	store.config.Sources[0].Email = "organizer@example.test"
+	start := time.Now().Truncate(time.Minute)
+	if err := store.CreateEvent("src", "cal", Event{
+		UID:     "invite@example.test",
+		Summary: "Invite",
+		Start:   start,
+		End:     start.Add(time.Hour),
+		Attendees: []Attendee{
+			{Name: "Guest", Email: "guest@example.test"},
+		},
+	}); err != nil {
+		t.Fatalf("CreateEvent: %v", err)
+	}
+	raw := readEventFile(t, filepath.Join(calDir, "invite@example.test.ics"))
+	for _, want := range []string{
+		"ORGANIZER:mailto:organizer@example.test",
+		"ATTENDEE;CN=Guest;PARTSTAT=NEEDS-ACTION;RSVP=TRUE:mailto:guest@example.test",
+	} {
+		if !strings.Contains(raw, want) {
+			t.Fatalf("expected %q in event file:\n%s", want, raw)
+		}
+	}
+}
+
+func TestAttendeeScopedUpdatePreservesOrganizerFields(t *testing.T) {
+	store, _, _ := testStore(t)
+	store.config.Sources[0].Email = "guest@example.test"
+	start := time.Now().Truncate(time.Minute)
+	if err := store.CreateEvent("src", "cal", Event{
+		UID:       "attendee-update@example.test",
+		Summary:   "Original",
+		Organizer: "organizer@example.test",
+		Start:     start,
+		End:       start.Add(time.Hour),
+		Attendees: []Attendee{
+			{Name: "Guest", Email: "guest@example.test", Status: "needs-action", RSVP: true},
+			{Name: "Other", Email: "other@example.test", Status: "needs-action", RSVP: true},
+		},
+	}); err != nil {
+		t.Fatalf("CreateEvent: %v", err)
+	}
+	ev, err := store.FindEvent("attendee-update@example.test")
+	if err != nil {
+		t.Fatalf("FindEvent: %v", err)
+	}
+	nextSummary := "Changed"
+	nextLocation := "Somewhere else"
+	nextStart := start.Add(24 * time.Hour)
+	nextEnd := nextStart.Add(2 * time.Hour)
+	alarms := []Alarm{{Offset: -10 * time.Minute, Action: "DISPLAY"}}
+	availability := "free"
+	attendees := []Attendee{
+		{Name: "Guest", Email: "guest@example.test", Status: "yes", RSVP: true},
+		{Name: "Other", Email: "other@example.test", Status: "no", RSVP: true},
+	}
+	if err := store.UpdateEventScoped(ev, EventUpdate{
+		Summary:      &nextSummary,
+		Location:     &nextLocation,
+		Start:        &nextStart,
+		End:          &nextEnd,
+		Attendees:    &attendees,
+		Availability: &availability,
+		Alarms:       &alarms,
+	}, EditRecurringAll); err != nil {
+		t.Fatalf("UpdateEventScoped: %v", err)
+	}
+	updated, err := store.FindEvent("attendee-update@example.test")
+	if err != nil {
+		t.Fatalf("FindEvent updated: %v", err)
+	}
+	if updated.Summary != "Original" || updated.Location != "" || !updated.Start.Equal(start) || !updated.End.Equal(start.Add(time.Hour)) {
+		t.Fatalf("organizer fields changed unexpectedly: %+v", updated)
+	}
+	if updated.Availability != "free" || len(updated.Alarms) != 1 {
+		t.Fatalf("local attendee fields not updated: %+v", updated)
+	}
+	for _, attendee := range updated.Attendees {
+		switch attendee.Email {
+		case "guest@example.test":
+			if attendee.Status != "yes" {
+				t.Fatalf("expected guest RSVP yes, got %+v", attendee)
+			}
+		case "other@example.test":
+			if attendee.Status != "needs-action" {
+				t.Fatalf("expected other attendee unchanged, got %+v", attendee)
+			}
+		}
 	}
 }
 

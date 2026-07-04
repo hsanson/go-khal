@@ -12,6 +12,7 @@ import (
 type Source struct {
 	Name          string           `json:"name"`
 	Path          string           `json:"path"`
+	Email         string           `json:"email,omitempty"`
 	AddressBook   string           `json:"address_book,omitempty"`
 	DefaultTZName string           `json:"default_timezone,omitempty"`
 	Calendars     []CalendarConfig `json:"calendars,omitempty"`
@@ -20,6 +21,7 @@ type Source struct {
 type CalendarConfig struct {
 	Name        string `json:"name"`
 	Path        string `json:"path,omitempty"`
+	Email       string `json:"email,omitempty"`
 	DisplayName string `json:"display_name,omitempty"`
 	Color       string `json:"color,omitempty"`
 	Hidden      bool   `json:"hidden,omitempty"`
@@ -141,6 +143,9 @@ func (s *Source) UpsertCalendar(cal CalendarConfig) {
 		}
 		if cal.Path != "" {
 			s.Calendars[i].Path = cal.Path
+		}
+		if cal.Email != "" {
+			s.Calendars[i].Email = cal.Email
 		}
 		if cal.DisplayName != "" {
 			s.Calendars[i].DisplayName = cal.DisplayName
