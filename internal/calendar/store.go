@@ -1324,7 +1324,27 @@ func (s *Store) UpdateEvent(uid string, update EventUpdate) error {
 	if err != nil {
 		return err
 	}
+	return s.UpdateEventScoped(ev, update, EditRecurringAll)
+}
 
+func (s *Store) UpdateEventScoped(ev Event, update EventUpdate, scope EditRecurringScope) error {
+	if scope == "" {
+		scope = EditRecurringAll
+	}
+	if !ev.Recurring || scope == EditRecurringAll {
+		return s.updateEventAll(ev, update)
+	}
+	switch scope {
+	case EditRecurringOccurrence:
+		return s.updateEventOccurrence(ev, update)
+	case EditRecurringFuture:
+		return s.updateEventFuture(ev, update)
+	default:
+		return s.updateEventAll(ev, update)
+	}
+}
+
+func (s *Store) updateEventAll(ev Event, update EventUpdate) error {
 	f, err := os.Open(ev.FilePath)
 	if err != nil {
 		return err
@@ -1342,83 +1362,20 @@ func (s *Store) UpdateEvent(uid string, update EventUpdate) error {
 			continue
 		}
 		entryUID, _ := child.Props.Text(ical.PropUID)
-		if entryUID != uid {
+		if entryUID != ev.UID {
+			continue
+		}
+		if _, hasRID := eventRecurrenceID(child, ev.Start.Location()); hasRID {
 			continue
 		}
 		if updated {
 			continue
 		}
-		if update.Summary != nil {
-			child.Props.SetText(ical.PropSummary, emptyDefault(*update.Summary, "(untitled event)"))
-		}
-		if update.Location != nil {
-			child.Props.Del(ical.PropLocation)
-			if strings.TrimSpace(*update.Location) != "" {
-				child.Props.SetText(ical.PropLocation, *update.Location)
-			}
-		}
-		if update.Description != nil {
-			child.Props.Del(ical.PropDescription)
-			if strings.TrimSpace(*update.Description) != "" {
-				child.Props.SetText(ical.PropDescription, *update.Description)
-			}
-		}
-		if update.URL != nil {
-			child.Props.Del(ical.PropURL)
-			if strings.TrimSpace(*update.URL) != "" {
-				child.Props.SetText(ical.PropURL, *update.URL)
-			}
-		}
-		if update.Attendees != nil {
-			setEventAttendees(child, *update.Attendees)
-		}
-		if update.Recurrence != nil {
-			rec := *update.Recurrence
-			setEventRecurrence(child, rec, ev.Start)
-		}
-		if update.Alarms != nil {
-			setEventAlarms(child, *update.Alarms)
-		}
-
-		currentStart, _ := child.Props.DateTime(ical.PropDateTimeStart, time.Local)
-		currentEnd, _ := child.Props.DateTime(ical.PropDateTimeEnd, time.Local)
-		if currentStart.IsZero() {
-			currentStart = ev.Start
-		}
-		if currentEnd.IsZero() {
-			currentEnd = ev.End
-		}
-		if !currentEnd.After(currentStart) {
-			currentEnd = currentStart.Add(time.Hour)
-		}
-
-		nextStart := currentStart
-		nextEnd := currentEnd
-		if update.Start != nil {
-			nextStart = *update.Start
-		}
-		if update.End != nil {
-			nextEnd = *update.End
-		}
-		allDay := ev.AllDay
-		if update.AllDay != nil {
-			allDay = *update.AllDay
-		}
-		if allDay {
-			nextStart = time.Date(nextStart.Year(), nextStart.Month(), nextStart.Day(), 0, 0, 0, 0, nextStart.Location())
-			nextEnd = time.Date(nextEnd.Year(), nextEnd.Month(), nextEnd.Day(), 0, 0, 0, 0, nextEnd.Location())
-			if !nextEnd.After(nextStart) {
-				nextEnd = nextStart.Add(24 * time.Hour)
-			}
-		} else if !nextEnd.After(nextStart) {
-			nextEnd = nextStart.Add(time.Hour)
-		}
-
-		setEventTimeProps(child, nextStart, nextEnd, allDay)
-		if update.Recurrence != nil && *update.Recurrence != nil {
-			setEventRecurrence(child, *update.Recurrence, nextStart)
-		}
+		applyEventUpdateToComponent(child, ev, update)
 		updated = true
+	}
+	if update.Recurrence != nil && *update.Recurrence == nil {
+		cal.Children = removeEventOverrides(cal.Children, ev.UID)
 	}
 
 	out, err := os.Create(ev.FilePath)
@@ -1427,6 +1384,173 @@ func (s *Store) UpdateEvent(uid string, update EventUpdate) error {
 	}
 	defer out.Close()
 	return ical.NewEncoder(out).Encode(cal)
+}
+
+func (s *Store) updateEventOccurrence(ev Event, update EventUpdate) error {
+	cal, err := readCalendarFile(ev.FilePath)
+	if err != nil {
+		return err
+	}
+	var master *ical.Component
+	var override *ical.Component
+	for _, child := range cal.Children {
+		if child == nil || child.Name != ical.CompEvent {
+			continue
+		}
+		entryUID, _ := child.Props.Text(ical.PropUID)
+		if entryUID != ev.UID {
+			continue
+		}
+		rid, hasRID := eventRecurrenceID(child, ev.Start.Location())
+		if hasRID {
+			if sameOccurrence(rid, ev.Start, ev.AllDay) {
+				override = child
+			}
+			continue
+		}
+		if master == nil {
+			master = child
+		}
+	}
+	if master == nil {
+		return fmt.Errorf("event with uid %q not found", ev.UID)
+	}
+	if override == nil {
+		override = ical.NewComponent(ical.CompEvent)
+		override.Props.SetText(ical.PropUID, ev.UID)
+		setRecurrenceID(override, ev.Start, ev.AllDay)
+		cal.Children = append(cal.Children, override)
+	}
+	occ := ev
+	occ.Recurrence = nil
+	occ.Recurring = false
+	applyEventUpdateToComponent(override, occ, update)
+	removeEventRecurrenceProps(override)
+	setRecurrenceID(override, ev.Start, ev.AllDay)
+	return writeCalendarFile(ev.FilePath, cal)
+}
+
+func (s *Store) updateEventFuture(ev Event, update EventUpdate) error {
+	cal, err := readCalendarFile(ev.FilePath)
+	if err != nil {
+		return err
+	}
+	var master *ical.Component
+	for _, child := range cal.Children {
+		if child == nil || child.Name != ical.CompEvent {
+			continue
+		}
+		entryUID, _ := child.Props.Text(ical.PropUID)
+		if entryUID != ev.UID {
+			continue
+		}
+		if _, hasRID := eventRecurrenceID(child, ev.Start.Location()); hasRID {
+			continue
+		}
+		master = child
+		break
+	}
+	if master == nil {
+		return fmt.Errorf("event with uid %q not found", ev.UID)
+	}
+	if !ev.Start.After(masterEventStart(master, ev.Start.Location(), ev.Start)) {
+		applyEventUpdateToComponent(master, ev, update)
+		return writeCalendarFile(ev.FilePath, cal)
+	}
+	truncateEventRecurrence(master, ev.Start.Add(-time.Second))
+	cal.Children = removeEventOverridesFrom(cal.Children, ev.UID, ev.Start, ev.AllDay)
+
+	next := ical.NewComponent(ical.CompEvent)
+	future := ev
+	future.UID = fmt.Sprintf("event-%d@go-khal", time.Now().UnixNano())
+	next.Props.SetText(ical.PropUID, future.UID)
+	next.Props.SetDateTime(ical.PropDateTimeStamp, time.Now().UTC())
+	applyEventUpdateToComponent(next, future, update)
+	cal.Children = append(cal.Children, next)
+	return writeCalendarFile(ev.FilePath, cal)
+}
+
+func applyEventUpdateToComponent(comp *ical.Component, base Event, update EventUpdate) {
+	if comp.Props.Get(ical.PropUID) == nil {
+		comp.Props.SetText(ical.PropUID, base.UID)
+	}
+	if comp.Props.Get(ical.PropDateTimeStamp) == nil {
+		comp.Props.SetDateTime(ical.PropDateTimeStamp, time.Now().UTC())
+	}
+
+	summary := base.Summary
+	if update.Summary != nil {
+		summary = *update.Summary
+	}
+	comp.Props.SetText(ical.PropSummary, emptyDefault(summary, "(untitled event)"))
+
+	location := base.Location
+	if update.Location != nil {
+		location = *update.Location
+	}
+	comp.Props.Del(ical.PropLocation)
+	if strings.TrimSpace(location) != "" {
+		comp.Props.SetText(ical.PropLocation, location)
+	}
+
+	description := base.Description
+	if update.Description != nil {
+		description = *update.Description
+	}
+	comp.Props.Del(ical.PropDescription)
+	if strings.TrimSpace(description) != "" {
+		comp.Props.SetText(ical.PropDescription, description)
+	}
+
+	url := base.URL
+	if update.URL != nil {
+		url = *update.URL
+	}
+	comp.Props.Del(ical.PropURL)
+	if strings.TrimSpace(url) != "" {
+		setEventURL(comp, url)
+	}
+
+	attendees := base.Attendees
+	if update.Attendees != nil {
+		attendees = *update.Attendees
+	}
+	setEventAttendees(comp, attendees)
+
+	alarms := base.Alarms
+	if update.Alarms != nil {
+		alarms = *update.Alarms
+	}
+	setEventAlarms(comp, alarms)
+
+	nextStart := base.Start
+	nextEnd := base.End
+	if update.Start != nil {
+		nextStart = *update.Start
+	}
+	if update.End != nil {
+		nextEnd = *update.End
+	}
+	allDay := base.AllDay
+	if update.AllDay != nil {
+		allDay = *update.AllDay
+	}
+	if allDay {
+		nextStart = time.Date(nextStart.Year(), nextStart.Month(), nextStart.Day(), 0, 0, 0, 0, nextStart.Location())
+		nextEnd = time.Date(nextEnd.Year(), nextEnd.Month(), nextEnd.Day(), 0, 0, 0, 0, nextEnd.Location())
+		if !nextEnd.After(nextStart) {
+			nextEnd = nextStart.Add(24 * time.Hour)
+		}
+	} else if !nextEnd.After(nextStart) {
+		nextEnd = nextStart.Add(time.Hour)
+	}
+	setEventTimeProps(comp, nextStart, nextEnd, allDay)
+
+	rec := base.Recurrence
+	if update.Recurrence != nil {
+		rec = *update.Recurrence
+	}
+	setEventRecurrence(comp, rec, nextStart)
 }
 
 func setEventAttendees(comp *ical.Component, attendees []Attendee) {
@@ -1454,7 +1578,7 @@ func setEventAttendees(comp *ical.Component, attendees []Attendee) {
 }
 
 func setEventRecurrence(comp *ical.Component, rec *Recurrence, start time.Time) {
-	comp.Props.Del(ical.PropRecurrenceRule)
+	removeEventRecurrenceProps(comp)
 	if rec == nil || strings.TrimSpace(rec.Frequency) == "" || strings.EqualFold(rec.Frequency, "NONE") {
 		return
 	}
@@ -1505,6 +1629,90 @@ func setEventRecurrence(comp *ical.Component, rec *Recurrence, start time.Time) 
 		opt.Until = *rec.Until
 	}
 	comp.Props.SetRecurrenceRule(opt)
+}
+
+func removeEventRecurrenceProps(comp *ical.Component) {
+	comp.Props.Del(ical.PropRecurrenceRule)
+	comp.Props.Del(ical.PropRecurrenceDates)
+	comp.Props.Del(ical.PropExceptionDates)
+}
+
+func eventRecurrenceID(comp *ical.Component, loc *time.Location) (time.Time, bool) {
+	if loc == nil {
+		loc = time.Local
+	}
+	rid, err := comp.Props.DateTime(ical.PropRecurrenceID, loc)
+	if err != nil || rid.IsZero() {
+		return time.Time{}, false
+	}
+	return rid.In(loc), true
+}
+
+func setRecurrenceID(comp *ical.Component, start time.Time, allDay bool) {
+	comp.Props.Del(ical.PropRecurrenceID)
+	prop := ical.NewProp(ical.PropRecurrenceID)
+	if allDay {
+		prop.SetDate(start)
+	} else {
+		prop.SetDateTime(start.UTC())
+	}
+	comp.Props.Add(prop)
+}
+
+func sameOccurrence(a, b time.Time, allDay bool) bool {
+	if allDay {
+		return sameDate(a, b)
+	}
+	return a.Equal(b)
+}
+
+func masterEventStart(comp *ical.Component, loc *time.Location, fallback time.Time) time.Time {
+	start, err := comp.Props.DateTime(ical.PropDateTimeStart, loc)
+	if err != nil || start.IsZero() {
+		return fallback
+	}
+	if loc != nil {
+		return start.In(loc)
+	}
+	return start
+}
+
+func removeEventOverrides(children []*ical.Component, uid string) []*ical.Component {
+	out := children[:0]
+	for _, child := range children {
+		if child == nil || child.Name != ical.CompEvent {
+			out = append(out, child)
+			continue
+		}
+		entryUID, _ := child.Props.Text(ical.PropUID)
+		if entryUID == uid {
+			if _, hasRID := eventRecurrenceID(child, time.Local); hasRID {
+				continue
+			}
+		}
+		out = append(out, child)
+	}
+	return out
+}
+
+func removeEventOverridesFrom(children []*ical.Component, uid string, start time.Time, allDay bool) []*ical.Component {
+	out := children[:0]
+	for _, child := range children {
+		if child == nil || child.Name != ical.CompEvent {
+			out = append(out, child)
+			continue
+		}
+		entryUID, _ := child.Props.Text(ical.PropUID)
+		if entryUID == uid {
+			if rid, hasRID := eventRecurrenceID(child, start.Location()); hasRID {
+				if sameOccurrence(rid, start, allDay) || rid.After(start) {
+					continue
+				}
+			}
+		}
+		out = append(out, child)
+	}
+	return out
 }
 
 func rruleWeekday(raw string, nth int) (rrule.Weekday, bool) {

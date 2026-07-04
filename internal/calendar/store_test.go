@@ -117,6 +117,122 @@ func TestDeleteTodoRemovesFile(t *testing.T) {
 	}
 }
 
+func TestUpdateRecurringOccurrenceCreatesOverride(t *testing.T) {
+	store, _, _ := testStore(t)
+	start := time.Date(2026, time.July, 7, 12, 0, 0, 0, time.Local)
+	if err := store.CreateEvent("src", "cal", Event{
+		UID:        "edit-one@example.test",
+		Summary:    "Series",
+		Start:      start,
+		End:        start.Add(time.Hour),
+		Recurrence: &Recurrence{Frequency: "WEEKLY", Interval: 1, Count: 3},
+	}); err != nil {
+		t.Fatalf("CreateEvent: %v", err)
+	}
+
+	ds, err := store.Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(ds.Events) < 2 {
+		t.Fatalf("expected recurrence instances, got %d", len(ds.Events))
+	}
+	updatedSummary := "Changed occurrence"
+	occurrence := ds.Events[1]
+	if err := store.UpdateEventScoped(occurrence, EventUpdate{Summary: &updatedSummary}, EditRecurringOccurrence); err != nil {
+		t.Fatalf("UpdateEventScoped occurrence: %v", err)
+	}
+
+	raw := readEventFile(t, occurrence.FilePath)
+	if got := strings.Count(raw, "BEGIN:VEVENT"); got != 2 {
+		t.Fatalf("expected master and override components, got %d\n%s", got, raw)
+	}
+	if !strings.Contains(raw, "RECURRENCE-ID") {
+		t.Fatalf("expected override RECURRENCE-ID\n%s", raw)
+	}
+	if !strings.Contains(raw, "SUMMARY:Changed occurrence") {
+		t.Fatalf("expected edited override summary\n%s", raw)
+	}
+	if strings.Count(raw, "RRULE:") != 1 {
+		t.Fatalf("expected only the master to keep RRULE\n%s", raw)
+	}
+}
+
+func TestUpdateRecurringFutureSplitsSeries(t *testing.T) {
+	store, _, _ := testStore(t)
+	start := time.Date(2026, time.July, 7, 12, 0, 0, 0, time.Local)
+	if err := store.CreateEvent("src", "cal", Event{
+		UID:        "edit-future@example.test",
+		Summary:    "Series",
+		Start:      start,
+		End:        start.Add(time.Hour),
+		Recurrence: &Recurrence{Frequency: "WEEKLY", Interval: 1, Count: 5},
+	}); err != nil {
+		t.Fatalf("CreateEvent: %v", err)
+	}
+
+	ds, err := store.Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(ds.Events) < 3 {
+		t.Fatalf("expected recurrence instances, got %d", len(ds.Events))
+	}
+	updatedSummary := "Changed future"
+	future := ds.Events[2]
+	if err := store.UpdateEventScoped(future, EventUpdate{Summary: &updatedSummary}, EditRecurringFuture); err != nil {
+		t.Fatalf("UpdateEventScoped future: %v", err)
+	}
+
+	raw := readEventFile(t, future.FilePath)
+	if got := strings.Count(raw, "BEGIN:VEVENT"); got != 2 {
+		t.Fatalf("expected truncated master and new future series, got %d\n%s", got, raw)
+	}
+	if !strings.Contains(raw, "SUMMARY:Changed future") {
+		t.Fatalf("expected new future summary\n%s", raw)
+	}
+	if strings.Count(raw, "UID:") != 2 {
+		t.Fatalf("expected split series to use two UIDs\n%s", raw)
+	}
+	if strings.Count(raw, "RRULE:") != 2 {
+		t.Fatalf("expected both split components to have RRULEs\n%s", raw)
+	}
+	if !strings.Contains(raw, "UNTIL=") {
+		t.Fatalf("expected original series to be truncated with UNTIL\n%s", raw)
+	}
+}
+
+func TestUpdateRecurringAllCanRemoveRecurrence(t *testing.T) {
+	store, _, _ := testStore(t)
+	start := time.Date(2026, time.July, 7, 12, 0, 0, 0, time.Local)
+	if err := store.CreateEvent("src", "cal", Event{
+		UID:        "edit-all@example.test",
+		Summary:    "Series",
+		Start:      start,
+		End:        start.Add(time.Hour),
+		Recurrence: &Recurrence{Frequency: "WEEKLY", Interval: 1, Count: 3},
+	}); err != nil {
+		t.Fatalf("CreateEvent: %v", err)
+	}
+	ds, err := store.Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	updatedSummary := "One event"
+	noRecurrence := (*Recurrence)(nil)
+	if err := store.UpdateEventScoped(ds.Events[0], EventUpdate{Summary: &updatedSummary, Recurrence: &noRecurrence}, EditRecurringAll); err != nil {
+		t.Fatalf("UpdateEventScoped all: %v", err)
+	}
+
+	raw := readEventFile(t, ds.Events[0].FilePath)
+	if strings.Contains(raw, "RRULE:") || strings.Contains(raw, "EXDATE") || strings.Contains(raw, "RDATE") {
+		t.Fatalf("expected recurrence properties removed\n%s", raw)
+	}
+	if !strings.Contains(raw, "SUMMARY:One event") {
+		t.Fatalf("expected updated summary\n%s", raw)
+	}
+}
+
 func TestGoogleOverrideUsesRecurrenceIDDateWhenStartWasFlattened(t *testing.T) {
 	store, _, calDir := testStore(t)
 	path := filepath.Join(calDir, "override.ics")
@@ -167,6 +283,15 @@ END:VCALENDAR
 	if !found {
 		t.Fatal("expected recovered override event")
 	}
+}
+
+func readEventFile(t *testing.T, path string) string {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read event file: %v", err)
+	}
+	return string(raw)
 }
 
 func TestFormatICalDurationGoogleCompatible(t *testing.T) {

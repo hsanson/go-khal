@@ -46,6 +46,8 @@ type Model struct {
 type eventFormState struct {
 	mode           string
 	targetUID      string
+	targetEvent    *calendar.Event
+	editScope      string
 	form           *huh.Form
 	activeKey      string
 	activeForm     *huh.Form
@@ -114,6 +116,7 @@ type editorRow struct {
 }
 
 type eventFormSnapshot struct {
+	editScope      string
 	summary        string
 	calendarKey    string
 	location       string
@@ -307,7 +310,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.detailScroll = 0
 			case "e":
 				if m.openEventFormEditSelected() {
-					return m, m.eventForm.form.Init()
+					return m, m.initCurrentEventForm()
 				}
 			case "ctrl+d":
 				if m.openDeleteConfirmForSelected() {
@@ -389,7 +392,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "e":
 			if m.openEditFormForSelected() {
 				if m.eventForm != nil {
-					return m, m.eventForm.form.Init()
+					return m, m.initCurrentEventForm()
 				}
 				if m.todoForm != nil {
 					return m, m.todoForm.form.Init()
@@ -534,6 +537,9 @@ func (m Model) renderEventFormMainPanel(width, panelHeight int) string {
 	header := m.styles.PanelTitle.Render("Event")
 	if m.eventForm.mode == "edit" {
 		header = m.styles.PanelTitle.Render("Edit Event")
+	}
+	if label := eventEditScopeLabel(m.eventForm.editScope); m.eventForm.mode == "edit" && label != "" {
+		header = lipgloss.JoinHorizontal(lipgloss.Left, header, m.styles.Subtle.Render("  ["+label+"]"))
 	}
 	body := m.renderEventEditorList(width-2, panelHeight-4)
 	if strings.TrimSpace(m.eventForm.errMsg) != "" {
@@ -709,24 +715,26 @@ func (m Model) eventEditorRows() []editorRow {
 	if !s.allDay {
 		rows = append(rows, editorRow{"when", "When", fmt.Sprintf("%s %s - %s %s", s.fromDate, s.fromTime, s.toDate, s.toTime)})
 	}
-	rows = append(rows,
-		editorSeparatorRow("󰑖 Repeat"),
-		editorRow{"recur", "Repeat", repeatValue(s)},
-	)
-	if s.recur {
-		rows = append(rows, editorRow{"recur-every", "Frequency", emptyDefault(s.recurEvery, "1")})
-		if s.recurFreq == "WEEKLY" {
-			rows = append(rows, editorRow{"recur-weekdays", "Weekday", emptyDefault(strings.Join(s.recurWeekdays, ", "), "-")})
-		}
-		if s.recurFreq == "MONTHLY" {
-			rows = append(rows, editorRow{"recur-monthly-by", "By", emptyDefault(s.recurMonthlyBy, "month day")})
-		}
-		rows = append(rows, editorRow{"recur-end", "Until", repeatEndValue(s)})
-		if s.recurEnd == "until" {
-			rows = append(rows, editorRow{"recur-until", "Repeat until (YYYY-MM-DD)", emptyDefault(s.recurUntil, "-")})
-		}
-		if s.recurEnd == "count" {
-			rows = append(rows, editorRow{"recur-count", "Repeat count", emptyDefault(s.recurCount, "-")})
+	if s.editScope != string(calendar.EditRecurringOccurrence) {
+		rows = append(rows,
+			editorSeparatorRow("󰑖 Repeat"),
+			editorRow{"recur", "Repeat", repeatValue(s)},
+		)
+		if s.recur {
+			rows = append(rows, editorRow{"recur-every", "Frequency", emptyDefault(s.recurEvery, "1")})
+			if s.recurFreq == "WEEKLY" {
+				rows = append(rows, editorRow{"recur-weekdays", "Weekday", emptyDefault(strings.Join(s.recurWeekdays, ", "), "-")})
+			}
+			if s.recurFreq == "MONTHLY" {
+				rows = append(rows, editorRow{"recur-monthly-by", "By", emptyDefault(s.recurMonthlyBy, "month day")})
+			}
+			rows = append(rows, editorRow{"recur-end", "Until", repeatEndValue(s)})
+			if s.recurEnd == "until" {
+				rows = append(rows, editorRow{"recur-until", "Repeat until (YYYY-MM-DD)", emptyDefault(s.recurUntil, "-")})
+			}
+			if s.recurEnd == "count" {
+				rows = append(rows, editorRow{"recur-count", "Repeat count", emptyDefault(s.recurCount, "-")})
+			}
 		}
 	}
 	rows = append(rows,
@@ -861,6 +869,20 @@ func (m *Model) openEventEditorForm() tea.Cmd {
 	return s.activeForm.Init()
 }
 
+func (m *Model) openEventEditScopeForm() tea.Cmd {
+	s := m.eventForm
+	if s == nil {
+		return nil
+	}
+	s.activeKey = "edit-scope"
+	s.activeForm = m.buildEventEditorForm("edit-scope")
+	if s.activeForm == nil {
+		s.activeKey = ""
+		return nil
+	}
+	return s.activeForm.Init()
+}
+
 func (m *Model) updateActiveEventEditorForm(msg tea.Msg) tea.Cmd {
 	s := m.eventForm
 	if s == nil || s.activeForm == nil {
@@ -912,6 +934,12 @@ func (m *Model) submitActiveEventForm() tea.Cmd {
 func (m *Model) buildEventEditorForm(key string) *huh.Form {
 	s := m.eventForm
 	switch key {
+	case "edit-scope":
+		return huh.NewForm(huh.NewGroup(huh.NewSelect[string]().Key("value").Title("Edit recurring event").Options(
+			huh.NewOption("Only this occurrence", string(calendar.EditRecurringOccurrence)),
+			huh.NewOption("This and following occurrences", string(calendar.EditRecurringFuture)),
+			huh.NewOption("All occurrences", string(calendar.EditRecurringAll)),
+		).Value(&s.editScope))).WithShowHelp(true).WithShowErrors(true)
 	case "title":
 		return singleInputForm("Title", "value", &s.summary, func(v string) error {
 			if strings.TrimSpace(v) == "" {
@@ -997,6 +1025,8 @@ func (m *Model) applyEventEditorForm() error {
 	f := s.activeForm
 	value := activeFormValue(f)
 	switch s.activeKey {
+	case "edit-scope":
+		s.editScope = anyString(value)
 	case "attendees":
 		s.attendees = strings.Join(anyStringSlice(value), "; ")
 	case "attendees-add":
@@ -1220,6 +1250,7 @@ func (s *eventFormState) snapshot() *eventFormSnapshot {
 		return nil
 	}
 	return &eventFormSnapshot{
+		editScope:      s.editScope,
 		summary:        s.summary,
 		calendarKey:    s.calendarKey,
 		location:       s.location,
@@ -1248,6 +1279,7 @@ func (s *eventFormState) cancelActive() {
 		return
 	}
 	if b := s.backup; b != nil {
+		s.editScope = b.editScope
 		s.summary = b.summary
 		s.calendarKey = b.calendarKey
 		s.location = b.location
@@ -1357,6 +1389,19 @@ func repeatEndValue(s *eventFormState) string {
 		return "fixed count"
 	default:
 		return "forever"
+	}
+}
+
+func eventEditScopeLabel(scope string) string {
+	switch calendar.EditRecurringScope(scope) {
+	case calendar.EditRecurringOccurrence:
+		return "only this occurrence"
+	case calendar.EditRecurringFuture:
+		return "this and following"
+	case calendar.EditRecurringAll:
+		return "all occurrences"
+	default:
+		return ""
 	}
 }
 
@@ -2309,7 +2354,23 @@ func (m *Model) openEventFormEditSelected() bool {
 	m.focusMain = false
 	m.detailScroll = 0
 	m.eventForm.form.UpdateFieldPositions()
+	if ev.Recurring {
+		m.openEventEditScopeForm()
+	}
 	return true
+}
+
+func (m *Model) initCurrentEventForm() tea.Cmd {
+	if m.eventForm == nil {
+		return nil
+	}
+	if m.eventForm.activeForm != nil {
+		return m.eventForm.activeForm.Init()
+	}
+	if m.eventForm.form != nil {
+		return m.eventForm.form.Init()
+	}
+	return nil
 }
 
 func (m *Model) newTodoFormState(mode, targetUID string, td calendar.Todo) *todoFormState {
@@ -2519,6 +2580,7 @@ func (m *Model) newEventFormState(mode, targetUID string, ev calendar.Event) *ev
 	state := &eventFormState{
 		mode:           mode,
 		targetUID:      targetUID,
+		editScope:      string(calendar.EditRecurringAll),
 		summary:        ev.Summary,
 		calendarKey:    key,
 		location:       ev.Location,
@@ -2539,6 +2601,13 @@ func (m *Model) newEventFormState(mode, targetUID string, ev calendar.Event) *ev
 		fromTime:       fd.Format("15:04"),
 		toDate:         td.Format("2006-01-02"),
 		toTime:         td.Format("15:04"),
+	}
+	if mode == "edit" {
+		target := ev
+		state.targetEvent = &target
+		if ev.Recurring {
+			state.editScope = string(calendar.EditRecurringOccurrence)
+		}
 	}
 	state.form = m.buildEventForm(state)
 	return state
@@ -2705,20 +2774,29 @@ func (m *Model) commitEventForm() error {
 	}
 
 	if s.mode == "edit" {
-		recurrenceUpdate := recurrence
+		var recurrenceUpdate *calendar.Recurrence
+		var recurrenceUpdatePtr **calendar.Recurrence
+		if s.editScope != string(calendar.EditRecurringOccurrence) {
+			recurrenceUpdate = recurrence
+			recurrenceUpdatePtr = &recurrenceUpdate
+		}
 		upd := calendar.EventUpdate{
 			Summary:     &s.summary,
 			Description: &s.description,
 			Location:    &s.location,
 			URL:         &s.url,
 			Attendees:   &attendees,
-			Recurrence:  &recurrenceUpdate,
+			Recurrence:  recurrenceUpdatePtr,
 			Alarms:      &alarms,
 			Start:       &start,
 			End:         &end,
 			AllDay:      &s.allDay,
 		}
-		if err := m.store.UpdateEvent(s.targetUID, upd); err != nil {
+		if s.targetEvent != nil {
+			if err := m.store.UpdateEventScoped(*s.targetEvent, upd, calendar.EditRecurringScope(s.editScope)); err != nil {
+				return err
+			}
+		} else if err := m.store.UpdateEvent(s.targetUID, upd); err != nil {
 			return err
 		}
 	} else {

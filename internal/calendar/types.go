@@ -128,3 +128,11 @@ const (
 	DeleteRecurringOccurrence DeleteRecurringScope = "occurrence"
 	DeleteRecurringFuture     DeleteRecurringScope = "future"
 )
+
+type EditRecurringScope string
+
+const (
+	EditRecurringAll        EditRecurringScope = "all"
+	EditRecurringOccurrence EditRecurringScope = "occurrence"
+	EditRecurringFuture     EditRecurringScope = "future"
+)
