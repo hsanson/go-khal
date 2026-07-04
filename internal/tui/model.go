@@ -814,10 +814,10 @@ func (m Model) eventEditorRows() []editorRow {
 			editorSeparatorRow("󰉢 Event"),
 			{"calendar", "Calendar", m.calendarDisplayName(s.calendarKey)},
 			editorSeparatorRow(" Response"),
-			{"rsvp", "RSVP", emptyDefault(eventRSVPDisplayValue(s.rsvp), "default")},
+			{"rsvp", "RSVP", eventRSVPDisplayValue(s.rsvp)},
 			editorSeparatorRow("󰛐 Privacy"),
-			{"availability", "Availability", emptyDefault(s.availability, "default")},
-			{"visibility", "Visibility", emptyDefault(s.visibility, "default")},
+			{"availability", "Availability", eventAvailabilityDisplay(s.availability)},
+			{"visibility", "Visibility", eventVisibilityDisplay(s.visibility)},
 			editorSeparatorRow("󰀠 Notifications"),
 			{"alarms", "Notifications", emptyDefault(s.alarms, "-")},
 			{"alarms-add", "", ""},
@@ -834,11 +834,11 @@ func (m Model) eventEditorRows() []editorRow {
 		{"description", "Description", multilineValue(s.description)},
 		editorSeparatorRow(" Attendees"),
 		{"attendees", "Attendees", emptyDefault(s.attendees, "-")},
-		{"rsvp", "RSVP", emptyDefault(eventRSVPDisplayValue(s.rsvp), "default")},
+		{"rsvp", "RSVP", eventRSVPDisplayValue(s.rsvp)},
 		{"attendees-add", "", ""},
 		editorSeparatorRow("󰛐 Privacy"),
-		{"availability", "Availability", emptyDefault(s.availability, "default")},
-		{"visibility", "Visibility", emptyDefault(s.visibility, "default")},
+		{"availability", "Availability", eventAvailabilityDisplay(s.availability)},
+		{"visibility", "Visibility", eventVisibilityDisplay(s.visibility)},
 		editorSeparatorRow("󰥔 Time"),
 		{"all-day", "All-day", yesNo(s.allDay)},
 	}
@@ -1128,21 +1128,19 @@ func (m *Model) buildEventEditorForm(key string) *huh.Form {
 	case "rsvp":
 		value := s.rsvp
 		return huh.NewForm(huh.NewGroup(huh.NewSelect[string]().Key("value").Title("RSVP").Options(
-			huh.NewOption("Default", ""),
 			huh.NewOption("Yes", "yes"),
 			huh.NewOption("No", "no"),
 			huh.NewOption("Maybe", "maybe"),
-			huh.NewOption("Needs action", "needs-action"),
 		).Value(&value))).WithShowHelp(true).WithShowErrors(true)
 	case "availability":
 		return huh.NewForm(huh.NewGroup(huh.NewSelect[string]().Key("value").Title("Availability").Options(
-			huh.NewOption("Default", ""),
+			huh.NewOption("Calendar default", ""),
 			huh.NewOption("Busy", "busy"),
 			huh.NewOption("Free", "free"),
 		).Value(&s.availability))).WithShowHelp(true).WithShowErrors(true)
 	case "visibility":
 		return huh.NewForm(huh.NewGroup(huh.NewSelect[string]().Key("value").Title("Visibility").Options(
-			huh.NewOption("Default", "default"),
+			huh.NewOption("Calendar default", "default"),
 			huh.NewOption("Public", "public"),
 			huh.NewOption("Private", "private"),
 			huh.NewOption("Confidential", "confidential"),
@@ -3108,19 +3106,17 @@ func (m *Model) buildEventForm(s *eventFormState) *huh.Form {
 		huh.NewInput().Key("url").Title("URL").Value(&s.url),
 		huh.NewInput().Key("attendees").Title("Attendees").Description("Separate attendees with commas or semicolons").Value(&s.attendees).Suggestions(attendeeSuggestions),
 		huh.NewSelect[string]().Key("rsvp").Title("RSVP").Options(
-			huh.NewOption("Default", ""),
 			huh.NewOption("Yes", "yes"),
 			huh.NewOption("No", "no"),
 			huh.NewOption("Maybe", "maybe"),
-			huh.NewOption("Needs action", "needs-action"),
 		).Value(&s.rsvp),
 		huh.NewSelect[string]().Key("availability").Title("Availability").Options(
-			huh.NewOption("Default", ""),
+			huh.NewOption("Calendar default", ""),
 			huh.NewOption("Busy", "busy"),
 			huh.NewOption("Free", "free"),
 		).Value(&s.availability),
 		huh.NewSelect[string]().Key("visibility").Title("Visibility").Options(
-			huh.NewOption("Default", "default"),
+			huh.NewOption("Calendar default", "default"),
 			huh.NewOption("Public", "public"),
 			huh.NewOption("Private", "private"),
 			huh.NewOption("Confidential", "confidential"),
@@ -3225,7 +3221,11 @@ func (m *Model) commitEventForm() error {
 		return err
 	}
 	attendees := parseAttendeesInput(s.attendees)
-	applyRSVPToAttendees(attendees, s.rsvp)
+	if normalizeRSVPValue(s.rsvp) != "" {
+		applyRSVPToAttendees(attendees, s.rsvp)
+	} else if s.targetEvent != nil {
+		preserveAttendeeRSVP(attendees, s.targetEvent.Attendees)
+	}
 	alarms, err := parseAlarmsInput(s.alarms)
 	if err != nil {
 		return err
@@ -3543,6 +3543,27 @@ func applyRSVPToAttendees(attendees []calendar.Attendee, rsvp string) {
 	}
 }
 
+func preserveAttendeeRSVP(attendees []calendar.Attendee, existing []calendar.Attendee) {
+	statusByEmail := map[string]calendar.Attendee{}
+	for _, attendee := range existing {
+		email := strings.ToLower(strings.TrimSpace(attendee.Email))
+		if email == "" {
+			continue
+		}
+		statusByEmail[email] = attendee
+	}
+	for i := range attendees {
+		email := strings.ToLower(strings.TrimSpace(attendees[i].Email))
+		if email == "" {
+			continue
+		}
+		if previous, ok := statusByEmail[email]; ok {
+			attendees[i].Status = previous.Status
+			attendees[i].RSVP = previous.RSVP
+		}
+	}
+}
+
 func attendeeRSVPValue(attendees []calendar.Attendee) string {
 	status := ""
 	for _, attendee := range attendees {
@@ -3570,9 +3591,9 @@ func eventRSVPDisplayValue(rsvp string) string {
 	case "maybe":
 		return "maybe"
 	case "needs-action":
-		return "needs action"
+		return "no response"
 	default:
-		return "default"
+		return "-"
 	}
 }
 
@@ -3581,19 +3602,19 @@ func attendeeRSVPDisplay(attendees []calendar.Attendee) string {
 	for _, attendee := range attendees {
 		status := normalizeRSVPValue(attendee.Status)
 		if status == "" {
-			status = "default"
+			status = "needs-action"
 		}
 		counts[status]++
 	}
 	if len(counts) == 0 {
-		return "default"
+		return "-"
 	}
 	if len(counts) == 1 {
 		for status := range counts {
 			return eventRSVPDisplayValue(status)
 		}
 	}
-	order := []string{"yes", "no", "maybe", "needs-action", "default"}
+	order := []string{"yes", "no", "maybe", "needs-action"}
 	parts := make([]string, 0, len(counts))
 	for _, status := range order {
 		if n := counts[status]; n > 0 {
@@ -3625,7 +3646,7 @@ func eventAvailabilityDisplay(availability string) string {
 	case "free":
 		return "free"
 	default:
-		return "default"
+		return "calendar default"
 	}
 }
 
@@ -3639,6 +3660,9 @@ func eventVisibilityValue(visibility string) string {
 }
 
 func eventVisibilityDisplay(visibility string) string {
+	if eventVisibilityValue(visibility) == "default" {
+		return "calendar default"
+	}
 	return eventVisibilityValue(visibility)
 }
 

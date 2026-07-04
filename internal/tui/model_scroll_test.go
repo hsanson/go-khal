@@ -25,6 +25,40 @@ func TestAttendeesInputPreservesOptionalRole(t *testing.T) {
 	}
 }
 
+func TestEventResponseDisplaysAvoidDefaultLabel(t *testing.T) {
+	if got := eventRSVPDisplayValue("needs-action"); got != "no response" {
+		t.Fatalf("needs-action RSVP display = %q", got)
+	}
+	if got := eventRSVPDisplayValue(""); got != "-" {
+		t.Fatalf("empty RSVP display = %q", got)
+	}
+	if got := eventAvailabilityDisplay(""); got != "calendar default" {
+		t.Fatalf("empty availability display = %q", got)
+	}
+	if got := eventVisibilityDisplay(""); got != "calendar default" {
+		t.Fatalf("empty visibility display = %q", got)
+	}
+}
+
+func TestPreserveAttendeeRSVPKeepsExistingResponse(t *testing.T) {
+	attendees := []calendar.Attendee{
+		{Name: "Guest", Email: "guest@example.test"},
+		{Name: "New", Email: "new@example.test"},
+	}
+	existing := []calendar.Attendee{
+		{Name: "Guest", Email: "guest@example.test", Status: "yes", RSVP: true},
+	}
+
+	preserveAttendeeRSVP(attendees, existing)
+
+	if attendees[0].Status != "yes" || !attendees[0].RSVP {
+		t.Fatalf("expected existing attendee RSVP to be preserved, got %+v", attendees[0])
+	}
+	if attendees[1].Status != "" || attendees[1].RSVP {
+		t.Fatalf("expected new attendee RSVP to remain unset, got %+v", attendees[1])
+	}
+}
+
 func TestWeekViewportScrollsDown(t *testing.T) {
 	m := NewModel(&config.Config{SidebarWidth: 30}, calendar.Dataset{}, nil)
 	m.height = 30
