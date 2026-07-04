@@ -1,0 +1,25 @@
+# Binaries
+/go-khal
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Go build/test output
+*.test
+*.out
+/coverage/
+/dist/
+/build/
+
+# Local environment
+.env
+.env.*
+
+# Editor and OS files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
