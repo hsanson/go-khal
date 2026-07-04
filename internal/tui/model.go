@@ -43,6 +43,8 @@ type Model struct {
 	showHelpOverlay    bool
 }
 
+const calendarKeySeparator = "\x1f"
+
 type eventFormState struct {
 	mode            string
 	targetUID       string
@@ -567,7 +569,7 @@ func (m Model) renderEventFormMainPanel(width, panelHeight int) string {
 	}
 	body := m.renderEventEditorList(width-2, panelHeight-4)
 	if strings.TrimSpace(m.eventForm.errMsg) != "" {
-		body = lipgloss.JoinVertical(lipgloss.Left, m.styles.Subtle.Render("Error: "+m.eventForm.errMsg), "", body)
+		body = lipgloss.JoinVertical(lipgloss.Left, errorText("Error: "+m.eventForm.errMsg), "", body)
 	}
 	content := lipgloss.JoinVertical(lipgloss.Left, header, m.styles.Subtle.Render("[j/k] move  [enter] edit  [ctrl+s] save  [esc] cancel"), "", body)
 	panel := m.styles.MainPanel.Width(width).Height(panelHeight).Render(content)
@@ -596,7 +598,7 @@ func (m Model) renderTodoFormMainPanel(width, panelHeight int) string {
 	}
 	body := m.renderTodoEditorList(width-2, panelHeight-4)
 	if strings.TrimSpace(m.todoForm.errMsg) != "" {
-		body = lipgloss.JoinVertical(lipgloss.Left, m.styles.Subtle.Render("Error: "+m.todoForm.errMsg), "", body)
+		body = lipgloss.JoinVertical(lipgloss.Left, errorText("Error: "+m.todoForm.errMsg), "", body)
 	}
 	content := lipgloss.JoinVertical(lipgloss.Left, header, m.styles.Subtle.Render("[j/k] move  [enter] edit  [ctrl+s] save  [esc] cancel"), "", body)
 	panel := m.styles.MainPanel.Width(width).Height(panelHeight).Render(content)
@@ -618,7 +620,7 @@ func (m Model) renderDeleteConfirmMainPanel(width, panelHeight int) string {
 	header := m.styles.PanelTitle.Render("Confirm Delete")
 	formView := m.deleteConfirm.form.WithWidth(width - 2).WithHeight(panelHeight - 2).WithShowHelp(true).WithShowErrors(true).View()
 	if strings.TrimSpace(m.deleteConfirm.errMsg) != "" {
-		formView = lipgloss.JoinVertical(lipgloss.Left, m.styles.Subtle.Render("Error: "+m.deleteConfirm.errMsg), "", formView)
+		formView = lipgloss.JoinVertical(lipgloss.Left, errorText("Error: "+m.deleteConfirm.errMsg), "", formView)
 	}
 	content := lipgloss.JoinVertical(lipgloss.Left, header, "", formView)
 	return m.styles.MainPanel.Width(width).Height(panelHeight).Render(content)
@@ -642,16 +644,19 @@ func activeFormModalView(form *huh.Form, width, height int, errMsg string) strin
 	}
 	formHeight := max(3, height-2)
 	view := form.WithWidth(width).WithHeight(formHeight).WithShowHelp(true).WithShowErrors(true).View()
-	err := lipgloss.NewStyle().
-		Width(width).
-		Foreground(lipgloss.Color("210")).
-		Bold(true).
-		Render("Error: " + errMsg)
+	err := lipgloss.NewStyle().Width(width).Render(errorText("Error: " + errMsg))
 	return lipgloss.NewStyle().
 		Width(width).
 		Height(height).
 		MaxHeight(height).
 		Render(lipgloss.JoinVertical(lipgloss.Left, err, "", view))
+}
+
+func errorText(msg string) string {
+	return lipgloss.NewStyle().
+		Foreground(lipgloss.Color("210")).
+		Bold(true).
+		Render(msg)
 }
 
 func (m Model) renderAttendeeManager(width, height int) string {
@@ -2284,7 +2289,7 @@ func (m Model) calendarByKey(key string) *calendar.Calendar {
 	return nil
 }
 
-func calendarKey(source, name string) string { return source + "/" + name }
+func calendarKey(source, name string) string { return source + calendarKeySeparator + name }
 
 func filteredEvents(events []calendar.Event, vis map[string]bool, includeDeclined bool) []calendar.Event {
 	out := make([]calendar.Event, 0, len(events))
@@ -2821,7 +2826,7 @@ func (m *Model) initCurrentEventForm() tea.Cmd {
 
 func (m *Model) newTodoFormState(mode, targetUID string, td calendar.Todo) *todoFormState {
 	key := calendarKey(td.Source, td.Calendar)
-	if key == "/" || key == "" {
+	if strings.TrimSpace(td.Source) == "" || strings.TrimSpace(td.Calendar) == "" {
 		key = m.firstWritableCalendarKey()
 	}
 	startDate := ""
@@ -3014,7 +3019,7 @@ func (m *Model) commitTodoForm() error {
 
 func (m *Model) newEventFormState(mode, targetUID string, ev calendar.Event) *eventFormState {
 	key := calendarKey(ev.Source, ev.Calendar)
-	if key == "/" || key == "" {
+	if strings.TrimSpace(ev.Source) == "" || strings.TrimSpace(ev.Calendar) == "" {
 		key = m.firstWritableCalendarKey()
 	}
 	fd := ev.Start.In(m.selected.Location())
@@ -3421,8 +3426,12 @@ type calendarKeyParts struct {
 }
 
 func splitCalendarKey(v string) calendarKeyParts {
-	parts := strings.SplitN(v, "/", 2)
+	parts := strings.SplitN(v, calendarKeySeparator, 2)
 	if len(parts) != 2 {
+		parts = strings.SplitN(v, "/", 2)
+		if len(parts) == 2 && parts[0] != "" {
+			return calendarKeyParts{source: parts[0], name: parts[1]}
+		}
 		return calendarKeyParts{}
 	}
 	return calendarKeyParts{source: parts[0], name: parts[1]}

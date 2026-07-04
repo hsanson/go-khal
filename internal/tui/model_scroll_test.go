@@ -59,6 +59,42 @@ func TestPreserveAttendeeRSVPKeepsExistingResponse(t *testing.T) {
 	}
 }
 
+func TestCalendarKeyRoundTripsAbsoluteSourcePath(t *testing.T) {
+	key := calendarKey("/home/user/.calendars/personal", "personal")
+	parts := splitCalendarKey(key)
+
+	if parts.source != "/home/user/.calendars/personal" {
+		t.Fatalf("source = %q", parts.source)
+	}
+	if parts.name != "personal" {
+		t.Fatalf("name = %q", parts.name)
+	}
+}
+
+func TestEventFormKeepsAbsolutePathCalendarKey(t *testing.T) {
+	source := "/home/user/.calendars/personal"
+	cal := calendar.Calendar{Source: source, Name: "personal"}
+	ev := calendar.Event{
+		UID:      "event",
+		Summary:  "Event",
+		Source:   source,
+		Calendar: "personal",
+		Start:    time.Date(2026, time.July, 7, 12, 0, 0, 0, time.Local),
+		End:      time.Date(2026, time.July, 7, 13, 0, 0, 0, time.Local),
+	}
+	m := NewModel(&config.Config{SidebarWidth: 30}, calendar.Dataset{Calendars: []calendar.Calendar{cal}, Events: []calendar.Event{ev}}, nil)
+
+	form := m.newEventFormState("edit", ev.UID, ev)
+	parts := splitCalendarKey(form.calendarKey)
+
+	if parts.source != source {
+		t.Fatalf("source = %q", parts.source)
+	}
+	if parts.name != "personal" {
+		t.Fatalf("name = %q", parts.name)
+	}
+}
+
 func TestWeekViewportScrollsDown(t *testing.T) {
 	m := NewModel(&config.Config{SidebarWidth: 30}, calendar.Dataset{}, nil)
 	m.height = 30
