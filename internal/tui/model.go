@@ -1371,18 +1371,43 @@ func singleInputForm(title, key string, value *string, validate func(string) err
 	return huh.NewForm(huh.NewGroup(input)).WithShowHelp(true).WithShowErrors(true)
 }
 
-func (m Model) calendarOptions() []huh.Option[string] {
-	out := make([]huh.Option[string], 0, len(m.calendarOrder))
+func (m Model) calendarOptionLabels() map[string]string {
+	labels := make(map[string]string, len(m.calendarOrder))
+	counts := map[string]int{}
 	for _, key := range m.calendarOrder {
 		cal := m.calendarByKey(key)
 		if cal == nil || cal.Source == calendar.SpecialSourceBirthdays {
 			continue
 		}
-		name := cal.DisplayName
-		if name == "" {
-			name = cal.Name
+		label := cal.DisplayName
+		if label == "" {
+			label = cal.Name
 		}
-		out = append(out, huh.NewOption(name+" ("+cal.Source+")", key))
+		labels[key] = label
+		counts[label]++
+	}
+	for _, key := range m.calendarOrder {
+		cal := m.calendarByKey(key)
+		if cal == nil || cal.Source == calendar.SpecialSourceBirthdays {
+			continue
+		}
+		label := labels[key]
+		if counts[label] > 1 && cal.Name != "" && cal.Name != label {
+			labels[key] = label + " - " + cal.Name
+		}
+	}
+	return labels
+}
+
+func (m Model) calendarOptions() []huh.Option[string] {
+	out := make([]huh.Option[string], 0, len(m.calendarOrder))
+	labels := m.calendarOptionLabels()
+	for _, key := range m.calendarOrder {
+		cal := m.calendarByKey(key)
+		if cal == nil || cal.Source == calendar.SpecialSourceBirthdays {
+			continue
+		}
+		out = append(out, huh.NewOption(labels[key], key))
 	}
 	if len(out) == 0 {
 		out = append(out, huh.NewOption("No writable calendar", ""))
@@ -1541,9 +1566,6 @@ func (m Model) calendarDisplayName(key string) string {
 	name := cal.DisplayName
 	if name == "" {
 		name = cal.Name
-	}
-	if cal.Source != "" {
-		return name + " (" + cal.Source + ")"
 	}
 	return name
 }
@@ -2774,16 +2796,13 @@ func (m *Model) newTodoFormState(mode, targetUID string, td calendar.Todo) *todo
 
 func (m *Model) buildTodoForm(s *todoFormState) *huh.Form {
 	calOptions := make([]huh.Option[string], 0, len(m.calendarOrder))
+	labels := m.calendarOptionLabels()
 	for _, key := range m.calendarOrder {
 		cal := m.calendarByKey(key)
 		if cal == nil || cal.Source == calendar.SpecialSourceBirthdays {
 			continue
 		}
-		name := cal.DisplayName
-		if name == "" {
-			name = cal.Name
-		}
-		calOptions = append(calOptions, huh.NewOption(name+" ("+cal.Source+")", key))
+		calOptions = append(calOptions, huh.NewOption(labels[key], key))
 	}
 	if len(calOptions) == 0 {
 		calOptions = append(calOptions, huh.NewOption("No writable calendar", ""))
@@ -2982,16 +3001,13 @@ func (m *Model) newEventFormState(mode, targetUID string, ev calendar.Event) *ev
 
 func (m *Model) buildEventForm(s *eventFormState) *huh.Form {
 	calOptions := make([]huh.Option[string], 0, len(m.calendarOrder))
+	labels := m.calendarOptionLabels()
 	for _, key := range m.calendarOrder {
 		cal := m.calendarByKey(key)
 		if cal == nil || cal.Source == calendar.SpecialSourceBirthdays {
 			continue
 		}
-		name := cal.DisplayName
-		if name == "" {
-			name = cal.Name
-		}
-		calOptions = append(calOptions, huh.NewOption(name+" ("+cal.Source+")", key))
+		calOptions = append(calOptions, huh.NewOption(labels[key], key))
 	}
 	if len(calOptions) == 0 {
 		calOptions = append(calOptions, huh.NewOption("No writable calendar", ""))
