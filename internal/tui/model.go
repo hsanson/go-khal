@@ -31,7 +31,7 @@ type Model struct {
 	calendarOffset     int
 	focusMain          bool
 	focusDetails       bool
-	showFreeMode       bool
+	showAllMode        bool
 	showTasksMode      bool
 	agendaStart        time.Time
 	eventCursor        int
@@ -427,7 +427,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, m.deleteConfirm.form.Init()
 			}
 		case "f":
-			m.showFreeMode = !m.showFreeMode
+			m.showAllMode = !m.showAllMode
 			m.eventCursor = 0
 			m.eventListOffset = 0
 			m.ensureEventSelectionValid()
@@ -499,7 +499,7 @@ func (m Model) renderLeftPanel(width int) string {
 		bottomHeight = 4
 		topHeight = panelHeight - bottomHeight - 1
 	}
-	weeks := renderWeekViewport(m.weekViewportStart, m.selected, filteredEvents(m.data.Events, m.calendarVisibility), width-2, max(3, topHeight-2), m.weekStart(), m.styles)
+	weeks := renderWeekViewport(m.weekViewportStart, m.selected, filteredEvents(m.data.Events, m.calendarVisibility, true), width-2, max(3, topHeight-2), m.weekStart(), m.styles)
 	calPane := m.renderCalendarListPane(width-2, bottomHeight)
 	divider := m.styles.Subtle.Render(strings.Repeat("-", max(8, width-2)))
 	panel := lipgloss.JoinVertical(lipgloss.Left, m.styles.PanelTitle.Render("Calendar"), weeks, divider, calPane)
@@ -546,8 +546,8 @@ func (m Model) renderMainPanel(width int) string {
 	if m.showTasksMode {
 		header += m.styles.Subtle.Render(" [TASKS]")
 	}
-	if m.showFreeMode {
-		header += m.styles.Subtle.Render(" [SHOW-FREE]")
+	if m.showAllMode {
+		header += m.styles.Subtle.Render(" [SHOW-ALL]")
 	}
 	separator := m.styles.Subtle.Render(strings.Repeat("-", max(10, width-2)))
 	content := lipgloss.JoinVertical(lipgloss.Left, header, "", top, separator, detail)
@@ -2286,15 +2286,22 @@ func (m Model) calendarByKey(key string) *calendar.Calendar {
 
 func calendarKey(source, name string) string { return source + "/" + name }
 
-func filteredEvents(events []calendar.Event, vis map[string]bool) []calendar.Event {
+func filteredEvents(events []calendar.Event, vis map[string]bool, includeDeclined bool) []calendar.Event {
 	out := make([]calendar.Event, 0, len(events))
 	for _, ev := range events {
 		if !vis[calendarKey(ev.Source, ev.Calendar)] {
 			continue
 		}
+		if !includeDeclined && eventRSVPIsNo(ev) {
+			continue
+		}
 		out = append(out, ev)
 	}
 	return out
+}
+
+func eventRSVPIsNo(ev calendar.Event) bool {
+	return attendeeRSVPValue(ev.Attendees) == "no"
 }
 
 func dayStart(t time.Time) time.Time {
@@ -2459,7 +2466,7 @@ func (m Model) renderHelpOverlay(width, height int) string {
 		"t           Today",
 		"enter, spc  Focus / unfocus details",
 		"ctrl+j/k    Scroll details down/up",
-		"f           Toggle show-free mode",
+		"f           Toggle show-all mode",
 		"m           Toggle tasks-only mode",
 		"c           Open calendars toggle pane",
 		"n           New event / task",
@@ -2591,7 +2598,7 @@ func (m Model) agendaEvents() []calendar.Event {
 	if start.IsZero() {
 		start = dayStart(m.selected)
 	}
-	return agendaEventsFromDay(start, filteredEvents(m.data.Events, m.calendarVisibility))
+	return agendaEventsFromDay(start, filteredEvents(m.data.Events, m.calendarVisibility, m.showAllMode))
 }
 
 func (m Model) agendaItems() []AgendaListItem {
@@ -2601,11 +2608,11 @@ func (m Model) agendaItems() []AgendaListItem {
 	}
 	items := buildAgendaItems(
 		start,
-		filteredEvents(m.data.Events, m.calendarVisibility),
+		filteredEvents(m.data.Events, m.calendarVisibility, m.showAllMode),
 		filteredTodos(m.data.Todos, m.calendarVisibility),
 		90,
-		m.showFreeMode,
-		m.showFreeMode,
+		m.showAllMode,
+		m.showAllMode,
 	)
 	if !m.showTasksMode {
 		return items

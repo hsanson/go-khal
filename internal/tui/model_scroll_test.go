@@ -191,7 +191,7 @@ func TestNewTaskDefaultsToSelectedFreeSlotTime(t *testing.T) {
 	m := NewModel(&config.Config{SidebarWidth: 30}, calendar.Dataset{Calendars: []calendar.Calendar{cal}, Events: events}, nil)
 	m.selected = start
 	m.agendaStart = start
-	m.showFreeMode = true
+	m.showAllMode = true
 	m.eventCursor = 2
 
 	m.openTodoFormNew()
@@ -201,5 +201,42 @@ func TestNewTaskDefaultsToSelectedFreeSlotTime(t *testing.T) {
 	}
 	if m.todoForm.dueDate != "2026-07-03" || m.todoForm.dueTime != "12:00" {
 		t.Fatalf("unexpected task due default: %s %s", m.todoForm.dueDate, m.todoForm.dueTime)
+	}
+}
+
+func TestAgendaShowsDeclinedEventsOnlyInShowAllMode(t *testing.T) {
+	start := dayStart(time.Date(2026, time.July, 3, 10, 0, 0, 0, time.Local))
+	cal := calendar.Calendar{Source: "src", Name: "cal"}
+	declined := calendar.Event{
+		UID:      "declined",
+		Summary:  "Declined",
+		Source:   "src",
+		Calendar: "cal",
+		Start:    start.Add(11 * time.Hour),
+		End:      start.Add(12 * time.Hour),
+		Attendees: []calendar.Attendee{
+			{Email: "user@example.test", Status: "no"},
+		},
+	}
+	m := NewModel(&config.Config{SidebarWidth: 30}, calendar.Dataset{Calendars: []calendar.Calendar{cal}, Events: []calendar.Event{declined}}, nil)
+	m.selected = start
+	m.agendaStart = start
+
+	for _, item := range m.agendaItems() {
+		if item.Event != nil && item.Event.UID == "declined" {
+			t.Fatal("declined event should be hidden by default")
+		}
+	}
+
+	m.showAllMode = true
+	found := false
+	for _, item := range m.agendaItems() {
+		if item.Event != nil && item.Event.UID == "declined" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("declined event should be visible in show-all mode")
 	}
 }

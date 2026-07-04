@@ -12,7 +12,7 @@ This project is fully vibe coded using Codex.
 ## Features
 
 - Keyboard-driven terminal calendar with agenda, week overview, details pane, and calendar toggles
-- Infinite backward/forward agenda navigation, page movement, and tasks-only/free-time modes
+- Infinite backward/forward agenda navigation, page movement, tasks-only mode, and show-all mode
 - Event and task create/edit/delete support from the interactive calendar
 - Itemized event and task editors with compact popup controls
 - Event attendees, notifications, recurrence, all-day, URL, location, and description editing
@@ -101,7 +101,7 @@ Keyboard shortcuts:
 - `t`: jump to today
 - `enter`, `space`: focus/unfocus details
 - `ctrl+j`, `ctrl+k`: scroll details down/up
-- `f`: toggle free-time rows
+- `f`: toggle show-all mode with free slots, completed tasks, and declined events
 - `m`: toggle tasks-only mode
 - `c`: open the calendar visibility pane
 - `n`: create a new event, or a new task when tasks-only mode is active

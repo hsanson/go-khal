@@ -147,7 +147,11 @@ func renderAgendaFromItems(items []AgendaListItem, width, maxLines int, timeFmt 
 		} else if item.Event != nil {
 			ev := *item.Event
 			glyph := iconForEvent(ev)
-			icon := styleForColor(styles.Event, ev.Color).Render(glyph)
+			eventStyle := styleForColor(styles.Event, ev.Color)
+			if eventRSVPIsNo(ev) {
+				eventStyle = styles.Subtle
+			}
+			icon := eventStyle.Render(glyph)
 			if ev.AllDay && (ev.Kind == calendar.EventKindBirthday || ev.Kind == calendar.EventKindAnniversary) {
 				line = fmt.Sprintf("  %s %s", icon, ev.Summary)
 			} else if ev.AllDay {
@@ -155,7 +159,7 @@ func renderAgendaFromItems(items []AgendaListItem, width, maxLines int, timeFmt 
 			} else {
 				line = fmt.Sprintf("  %s %s-%s  %s", icon, ev.Start.Format(timeFmt), ev.End.Format(timeFmt), ev.Summary)
 			}
-			line = styleForColor(styles.Event, ev.Color).Render(truncate(line, max(10, width-1)))
+			line = eventStyle.Render(truncate(line, max(10, width-1)))
 		} else if item.Todo != nil {
 			todo := *item.Todo
 			todoStyle := styleForColor(styles.Event, todo.Color)
