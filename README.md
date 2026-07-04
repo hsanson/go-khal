@@ -114,7 +114,7 @@ Create a task directly in the same editor used by the interactive calendar:
 go-khal todo new
 ```
 
-Use `j/k` to move between task fields, `enter` to edit the selected field, `ctrl+s` to save, and `esc`, `q`, or `ctrl+c` to cancel.
+Use `j/k` to move between task fields, `enter` to edit the selected field, `ctrl+s` to save, and `esc`, `q`, or `ctrl+c` to cancel. After saving or canceling, go-khal returns to the agenda.
 
 ## Configuration
 

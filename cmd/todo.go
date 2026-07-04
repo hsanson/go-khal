@@ -6,7 +6,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/huh"
 	"github.com/hsanson/go-khal/internal/calendar"
@@ -17,7 +16,7 @@ import (
 func newTodoCommand() *cobra.Command {
 	todoCmd := &cobra.Command{
 		Use:   "todo",
-		Short: "Manage VTODO entries",
+		Short: "Manage tasks",
 	}
 	todoCmd.AddCommand(newTodoListCommand())
 	todoCmd.AddCommand(newTodoShowCommand())
@@ -81,9 +80,9 @@ func newTodoNewCommand() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "new",
-		Short: "Create a new VTODO",
+		Short: "Create a new task",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, store, _, err := loadStore()
+			cfg, store, ds, err := loadStore()
 			if err != nil {
 				return err
 			}
@@ -96,18 +95,33 @@ func newTodoNewCommand() *cobra.Command {
 				}
 			}
 
-			if !nonInteractive && strings.TrimSpace(summary) == "" {
-				if err := runTodoCreateForm(&sourceName, &calendarName, &summary, &description, &startStr, &dueStr); err != nil {
+			if !nonInteractive {
+				start, err := parseOptionalDateTime(startStr)
+				if err != nil {
+					return fmt.Errorf("invalid --start: %w", err)
+				}
+				due, err := parseOptionalDateTime(dueStr)
+				if err != nil {
+					return fmt.Errorf("invalid --due: %w", err)
+				}
+				model := tui.NewTodoCreateModel(cfg, ds, store, calendar.Todo{
+					Summary:     summary,
+					Description: description,
+					Status:      "NEEDS-ACTION",
+					Source:      sourceName,
+					Calendar:    calendarName,
+					Start:       start,
+					Due:         due,
+					Priority:    5,
+				})
+				if _, err := tea.NewProgram(model, tea.WithAltScreen()).Run(); err != nil {
 					return err
 				}
+				return nil
 			}
 
 			if strings.TrimSpace(summary) == "" {
-				quick, err := runQuickSummaryPrompt()
-				if err != nil {
-					return err
-				}
-				summary = quick
+				return fmt.Errorf("--summary is required in non-interactive mode")
 			}
 
 			start, err := parseOptionalDateTime(startStr)
@@ -156,7 +170,7 @@ func newTodoEditCommand() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "edit <uid>",
-		Short: "Edit an existing VTODO",
+		Short: "Edit an existing task",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			uid := args[0]
@@ -230,20 +244,6 @@ func newTodoEditCommand() *cobra.Command {
 	return cmd
 }
 
-func runTodoCreateForm(sourceName, calendarName, summary, description, startStr, dueStr *string) error {
-	form := huh.NewForm(
-		huh.NewGroup(
-			huh.NewInput().Title("Source").Value(sourceName),
-			huh.NewInput().Title("Calendar").Value(calendarName),
-			huh.NewInput().Title("Summary").Value(summary).Validate(huh.ValidateNotEmpty()),
-			huh.NewText().Title("Description").Value(description),
-			huh.NewInput().Title("Start (RFC3339 or YYYY-MM-DD HH:MM)").Value(startStr),
-			huh.NewInput().Title("Due (RFC3339 or YYYY-MM-DD HH:MM)").Value(dueStr),
-		),
-	)
-	return form.Run()
-}
-
 func runTodoEditForm(summary, description, status, startStr, dueStr *string, percent *int, existing calendar.Todo) error {
 	if *summary == "" {
 		*summary = existing.Summary
@@ -287,60 +287,4 @@ func runTodoEditForm(summary, description, status, startStr, dueStr *string, per
 		*percent = parsed
 	}
 	return nil
-}
-
-type summaryModel struct {
-	input textinput.Model
-	done  bool
-	err   error
-
-	summary string
-}
-
-func runQuickSummaryPrompt() (string, error) {
-	t := textinput.New()
-	t.Placeholder = "Todo summary"
-	t.Focus()
-	t.CharLimit = 200
-	t.Width = 40
-
-	m := summaryModel{input: t}
-	p, err := tea.NewProgram(m).Run()
-	if err != nil {
-		return "", err
-	}
-	model := p.(summaryModel)
-	if model.err != nil {
-		return "", model.err
-	}
-	if strings.TrimSpace(model.summary) == "" {
-		return "", fmt.Errorf("summary cannot be empty")
-	}
-	return model.summary, nil
-}
-
-func (m summaryModel) Init() tea.Cmd {
-	return textinput.Blink
-}
-
-func (m summaryModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch msg := msg.(type) {
-	case tea.KeyMsg:
-		switch msg.Type {
-		case tea.KeyCtrlC, tea.KeyEsc:
-			m.err = fmt.Errorf("cancelled")
-			return m, tea.Quit
-		case tea.KeyEnter:
-			m.summary = m.input.Value()
-			return m, tea.Quit
-		}
-	}
-
-	var cmd tea.Cmd
-	m.input, cmd = m.input.Update(msg)
-	return m, cmd
-}
-
-func (m summaryModel) View() string {
-	return "New todo summary:\n" + m.input.View() + "\n(enter to confirm, esc to cancel)"
 }

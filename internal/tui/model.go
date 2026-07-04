@@ -241,6 +241,13 @@ func NewModel(cfg *config.Config, data calendar.Dataset, store *calendar.Store) 
 	return m
 }
 
+func NewTodoCreateModel(cfg *config.Config, data calendar.Dataset, store *calendar.Store, todo calendar.Todo) Model {
+	m := NewModel(cfg, data, store)
+	m.showTasksMode = true
+	m.openTodoFormNewWith(todo)
+	return m
+}
+
 func (m Model) Init() tea.Cmd { return nil }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -2691,6 +2698,23 @@ func (m *Model) openTodoFormNew() {
 		Source:   splitCalendarKey(defaultKey).source,
 		Calendar: splitCalendarKey(defaultKey).name,
 		Priority: 5,
+	}
+	m.todoForm = m.newTodoFormState("create", "", td)
+	m.focusDetails = true
+	m.focusMain = false
+	m.detailScroll = 0
+	m.todoForm.form.UpdateFieldPositions()
+}
+
+func (m *Model) openTodoFormNewWith(td calendar.Todo) {
+	defaultKey := m.firstWritableCalendarKey()
+	if strings.TrimSpace(td.Source) == "" || strings.TrimSpace(td.Calendar) == "" {
+		parts := splitCalendarKey(defaultKey)
+		td.Source = parts.source
+		td.Calendar = parts.name
+	}
+	if td.Priority == 0 {
+		td.Priority = 5
 	}
 	m.todoForm = m.newTodoFormState("create", "", td)
 	m.focusDetails = true
