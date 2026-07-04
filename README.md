@@ -11,89 +11,86 @@ This project is fully vibe coded using Codex.
 
 ## Features
 
-- Cobra-based CLI with agenda, TUI, config, and todo workflows
-- Bubble Tea TUI with keyboard-driven agenda navigation and calendar toggles
-- Google Calendar-like TUI layout with week overview, agenda list, and details pane
+- Keyboard-driven terminal calendar with agenda, week overview, details pane, and calendar toggles
 - Infinite backward/forward agenda navigation, page movement, and tasks-only/free-time modes
-- Event and VTODO create/edit/delete support from the TUI
+- Event and task create/edit/delete support from the interactive calendar
 - Itemized event and task editors with compact popup controls
 - Event attendees, notifications, recurrence, all-day, URL, location, and description editing
-- VTODO list/show/create/edit support from the CLI
+- Task list/show/create/edit support from the CLI
 - Configurable calendar and addressbook sources that point directly at vdir folders
 - Per-calendar metadata (display name, color) including discovery from `displayname`/`color` files
 - Per-calendar show/hide controls to include/exclude all events and todos
-- iCalendar parsing/writing via `github.com/emersion/go-ical`
-- vCard parsing integration via `github.com/emersion/go-vcard`
-- Interactive forms using Charm `bubbletea`, `bubbles`, `huh`, and `lipgloss`
-- Optional Nerd Font glyphs for the richest TUI rendering
+- Optional Nerd Font glyphs for the richest terminal rendering
 
 ## Installation
 
 Requirements:
 
 - Go 1.24.2 or newer
+- Local vdir calendar/task data, commonly synced by `vdirsyncer`
 - A terminal that supports color and alternate screen applications
 - A Nerd Font-compatible terminal font is recommended
 - `$EDITOR` or `$VISUAL` is used for description editing with `ctrl+e`; if neither is set, `nano` is used
-- Local vdir calendar/task data, commonly synced by `vdirsyncer`
 
 ```bash
-go build ./...
+go install github.com/hsanson/go-khal@latest
 ```
+
+Make sure your Go binary directory, usually `~/go/bin`, is in your `PATH`.
 
 ## Quick Start
 
 Initialize config:
 
 ```bash
-go run . config init
+go-khal config init
 ```
 
 Generate config sources from local vdirsyncer storages:
 
 ```bash
-go run . config from-vdirsyncer
+go-khal config from-vdirsyncer
 ```
 
 Pass a config path when vdirsyncer uses a non-default location:
 
 ```bash
-go run . config from-vdirsyncer /path/to/vdirsyncer/config
+go-khal config from-vdirsyncer /path/to/vdirsyncer/config
 ```
 
 Add a calendar or addressbook source manually:
 
 ```bash
-go run . config add-source --path /path/to/vdir/calendar --type calendar --display-name "Personal" --color "#4caf50" --email user@example.com
-go run . config add-source --path /path/to/vdir/addressbook --type addressbook --display-name "Contacts"
+go-khal config add-source --path /path/to/vdir/calendar --type calendar --display-name "Personal" --color "#4caf50" --email user@example.com
+go-khal config add-source --path /path/to/vdir/addressbook --type addressbook --display-name "Contacts"
 ```
 
 List calendars and visibility:
 
 ```bash
-go run . config list-calendars
+go-khal config list-calendars
 ```
 
 Hide/show one calendar:
 
 ```bash
-go run . config hide-calendar --path /path/to/vdir/calendar
-go run . config show-calendar --path /path/to/vdir/calendar
+go-khal config hide-calendar --path /path/to/vdir/calendar
+go-khal config show-calendar --path /path/to/vdir/calendar
 ```
 
-Show agenda:
+Show agenda in plain text:
 
 ```bash
-go run . agenda
+go-khal agenda
 ```
 
-Launch TUI:
+Launch the interactive calendar:
 
 ```bash
-go run . tui
+go-khal
 ```
 
-TUI shortcuts:
+Keyboard shortcuts:
 
 - `?`: toggle shortcut help
 - `q`, `ctrl+c`: quit
@@ -111,11 +108,13 @@ TUI shortcuts:
 - `e`: edit the selected event or task
 - `ctrl+d`: delete the selected event or task
 
-Create a todo interactively:
+Create a task directly in the same editor used by the interactive calendar:
 
 ```bash
-go run . todo new
+go-khal todo new
 ```
+
+Use `j/k` to move between task fields, `enter` to edit the selected field, `ctrl+s` to save, and `esc`, `q`, or `ctrl+c` to cancel.
 
 ## Configuration
 
@@ -155,9 +154,9 @@ Example:
 }
 ```
 
-## TUI Editing
+## Editing Events And Tasks
 
-The TUI uses itemized editors for events and tasks. Move with `j/k` or `tab`/`shift+tab`, press `enter` to edit the selected item in a popup, and press `ctrl+s` to save the whole event or task. `esc`, `q`, or `ctrl+c` cancel the editor or active popup.
+The interactive calendar uses itemized editors for events and tasks. Move with `j/k` or `tab`/`shift+tab`, press `enter` to edit the selected item in a popup, and press `ctrl+s` to save the whole event or task. `esc`, `q`, or `ctrl+c` cancel the editor or active popup.
 
 Event editing supports:
 
@@ -182,6 +181,6 @@ In description popups, `ctrl+e` opens `$EDITOR`/`$VISUAL` for larger edits. In m
 - `go-khal config from-vdirsyncer` reads vdirsyncer local filesystem storages and adds each discovered concrete vdir folder as a source.
 - Calendar display name/color are read from `displayname` or `.displayname`, and `color` or `.color` when present.
 - Hidden calendars are excluded from agenda, details, editor lists, and todo listings.
-- VEVENT and VTODO entries are created/updated/deleted directly in source `.ics` files.
+- Events and tasks are created/updated/deleted directly in source `.ics` files.
 - Address-book `.vcf` files are parsed for attendee suggestions.
 - Notifications are written as display alarms.
