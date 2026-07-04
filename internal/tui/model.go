@@ -2657,11 +2657,10 @@ func (m *Model) openEventFormNew() {
 			break
 		}
 	}
-	now := time.Now().In(m.selected.Location()).Truncate(time.Minute)
-	end := now.Add(time.Hour)
+	start, end := m.defaultCreationRange()
 	m.eventForm = m.newEventFormState("create", "", calendar.Event{
 		Summary:  "",
-		Start:    now,
+		Start:    start,
 		End:      end,
 		AllDay:   false,
 		Source:   splitCalendarKey(defaultKey).source,
@@ -2693,10 +2692,13 @@ func (m *Model) openTodoFormEditSelected() bool {
 
 func (m *Model) openTodoFormNew() {
 	defaultKey := m.firstWritableCalendarKey()
+	start, due := m.defaultCreationRange()
 	td := calendar.Todo{
 		Summary:  "",
 		Source:   splitCalendarKey(defaultKey).source,
 		Calendar: splitCalendarKey(defaultKey).name,
+		Start:    &start,
+		Due:      &due,
 		Priority: 5,
 	}
 	m.todoForm = m.newTodoFormState("create", "", td)
@@ -2716,11 +2718,45 @@ func (m *Model) openTodoFormNewWith(td calendar.Todo) {
 	if td.Priority == 0 {
 		td.Priority = 5
 	}
+	if td.Start == nil || td.Due == nil {
+		start, due := m.defaultCreationRange()
+		if td.Start != nil {
+			start = *td.Start
+			due = start.Add(time.Hour)
+		} else if td.Due != nil {
+			due = *td.Due
+			start = due.Add(-time.Hour)
+		}
+		td.Start = &start
+		td.Due = &due
+	}
 	m.todoForm = m.newTodoFormState("create", "", td)
 	m.focusDetails = true
 	m.focusMain = false
 	m.detailScroll = 0
 	m.todoForm.form.UpdateFieldPositions()
+}
+
+func (m Model) defaultCreationRange() (time.Time, time.Time) {
+	start := m.defaultCreationStart()
+	return start, start.Add(time.Hour)
+}
+
+func (m Model) defaultCreationStart() time.Time {
+	items := m.agendaItems()
+	if len(items) > 0 && m.eventCursor >= 0 && m.eventCursor < len(items) {
+		it := items[m.eventCursor]
+		if !it.Start.IsZero() {
+			return it.Start
+		}
+		if !it.Day.IsZero() {
+			return dayStart(it.Day)
+		}
+	}
+	if !m.selected.IsZero() {
+		return dayStart(m.selected)
+	}
+	return time.Now().Truncate(time.Minute)
 }
 
 func (m *Model) openEditFormForSelected() bool {

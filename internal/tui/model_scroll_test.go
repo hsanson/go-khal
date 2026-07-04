@@ -126,3 +126,46 @@ func TestMoveEventCursorResetsDetailScroll(t *testing.T) {
 		t.Fatalf("expected detail scroll reset after changing event, got %d", m.detailScroll)
 	}
 }
+
+func TestNewEventDefaultsToSelectedAgendaItemTime(t *testing.T) {
+	start := dayStart(time.Date(2026, time.July, 3, 10, 0, 0, 0, time.Local))
+	cal := calendar.Calendar{Source: "src", Name: "cal"}
+	events := []calendar.Event{
+		{UID: "one", Summary: "One", Source: "src", Calendar: "cal", Start: start.Add(11 * time.Hour), End: start.Add(12 * time.Hour)},
+	}
+	m := NewModel(&config.Config{SidebarWidth: 30}, calendar.Dataset{Calendars: []calendar.Calendar{cal}, Events: events}, nil)
+	m.selected = start
+	m.agendaStart = start
+	m.eventCursor = 0
+
+	m.openEventFormNew()
+
+	if m.eventForm.fromDate != "2026-07-03" || m.eventForm.fromTime != "11:00" {
+		t.Fatalf("unexpected event start default: %s %s", m.eventForm.fromDate, m.eventForm.fromTime)
+	}
+	if m.eventForm.toDate != "2026-07-03" || m.eventForm.toTime != "12:00" {
+		t.Fatalf("unexpected event end default: %s %s", m.eventForm.toDate, m.eventForm.toTime)
+	}
+}
+
+func TestNewTaskDefaultsToSelectedFreeSlotTime(t *testing.T) {
+	start := dayStart(time.Date(2026, time.July, 3, 10, 0, 0, 0, time.Local))
+	cal := calendar.Calendar{Source: "src", Name: "cal"}
+	events := []calendar.Event{
+		{UID: "one", Summary: "One", Source: "src", Calendar: "cal", Start: start.Add(10 * time.Hour), End: start.Add(11 * time.Hour)},
+	}
+	m := NewModel(&config.Config{SidebarWidth: 30}, calendar.Dataset{Calendars: []calendar.Calendar{cal}, Events: events}, nil)
+	m.selected = start
+	m.agendaStart = start
+	m.showFreeMode = true
+	m.eventCursor = 2
+
+	m.openTodoFormNew()
+
+	if m.todoForm.startDate != "2026-07-03" || m.todoForm.startTime != "11:00" {
+		t.Fatalf("unexpected task start default: %s %s", m.todoForm.startDate, m.todoForm.startTime)
+	}
+	if m.todoForm.dueDate != "2026-07-03" || m.todoForm.dueTime != "12:00" {
+		t.Fatalf("unexpected task due default: %s %s", m.todoForm.dueDate, m.todoForm.dueTime)
+	}
+}
