@@ -229,10 +229,7 @@ func TestMoveEventMovesFileToTargetCalendar(t *testing.T) {
 	if err := os.MkdirAll(targetDir, 0o755); err != nil {
 		t.Fatalf("mkdir target calendar: %v", err)
 	}
-	store.config.Sources[0].Calendars = append(store.config.Sources[0].Calendars, config.CalendarConfig{
-		Name: "work",
-		Path: targetDir,
-	})
+	store.config.Sources = append(store.config.Sources, config.Source{Path: targetDir, Type: "calendar"})
 
 	start := time.Now().Truncate(time.Minute)
 	if err := store.CreateEvent("src", "cal", Event{
@@ -277,10 +274,7 @@ func TestMoveTodoMovesFileToTargetCalendar(t *testing.T) {
 	if err := os.MkdirAll(targetDir, 0o755); err != nil {
 		t.Fatalf("mkdir target calendar: %v", err)
 	}
-	store.config.Sources[0].Calendars = append(store.config.Sources[0].Calendars, config.CalendarConfig{
-		Name: "work",
-		Path: targetDir,
-	})
+	store.config.Sources = append(store.config.Sources, config.Source{Path: targetDir, Type: "calendar"})
 
 	if err := store.CreateTodo("src", "cal", Todo{
 		UID:     "move-todo@example.test",
@@ -511,12 +505,8 @@ func testStore(t *testing.T) (*Store, string, string) {
 	}
 	cfg := &config.Config{
 		Sources: []config.Source{{
-			Name: "src",
-			Path: root,
-			Calendars: []config.CalendarConfig{{
-				Name: "cal",
-				Path: calDir,
-			}},
+			Path: calDir,
+			Type: "calendar",
 		}},
 		RecurrenceLookbackMonths:  1,
 		RecurrenceLookaheadMonths: 1,

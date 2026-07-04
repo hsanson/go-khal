@@ -6,24 +6,16 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
 type Source struct {
-	Name          string           `json:"name"`
-	Path          string           `json:"path"`
-	Email         string           `json:"email,omitempty"`
-	AddressBook   string           `json:"address_book,omitempty"`
-	DefaultTZName string           `json:"default_timezone,omitempty"`
-	Calendars     []CalendarConfig `json:"calendars,omitempty"`
-}
-
-type CalendarConfig struct {
-	Name        string `json:"name"`
-	Path        string `json:"path,omitempty"`
-	Email       string `json:"email,omitempty"`
+	Path        string `json:"path"`
+	Type        string `json:"type"`
 	DisplayName string `json:"display_name,omitempty"`
 	Color       string `json:"color,omitempty"`
+	Email       string `json:"email,omitempty"`
 	Hidden      bool   `json:"hidden,omitempty"`
 }
 
@@ -54,6 +46,10 @@ func defaultConfig() *Config {
 		RecurrenceLookbackMonths:  12,
 		RecurrenceLookaheadMonths: 24,
 	}
+}
+
+func Default() *Config {
+	return defaultConfig()
 }
 
 func Load(path string) (*Config, error) {
@@ -93,6 +89,21 @@ func Load(path string) (*Config, error) {
 	if cfg.RecurrenceLookaheadMonths > 120 {
 		cfg.RecurrenceLookaheadMonths = 120
 	}
+	for i := range cfg.Sources {
+		src := &cfg.Sources[i]
+		src.Path = strings.TrimSpace(src.Path)
+		if src.Path == "" {
+			return nil, fmt.Errorf("source %d path is required", i+1)
+		}
+		if !filepath.IsAbs(src.Path) {
+			return nil, fmt.Errorf("source %d path must be absolute: %s", i+1, src.Path)
+		}
+		src.Path = filepath.Clean(src.Path)
+		src.Type = strings.ToLower(strings.TrimSpace(src.Type))
+		if src.Type != "calendar" && src.Type != "addressbook" {
+			return nil, fmt.Errorf("source %d type must be calendar or addressbook", i+1)
+		}
+	}
 	return &cfg, nil
 }
 
@@ -126,35 +137,9 @@ func (c *Config) SourceByName(name string) *Source {
 		return nil
 	}
 	for i := range c.Sources {
-		if c.Sources[i].Name == name {
+		if c.Sources[i].Path == name || filepath.Base(c.Sources[i].Path) == name {
 			return &c.Sources[i]
 		}
 	}
 	return nil
-}
-
-func (s *Source) UpsertCalendar(cal CalendarConfig) {
-	if s == nil || cal.Name == "" {
-		return
-	}
-	for i := range s.Calendars {
-		if s.Calendars[i].Name != cal.Name {
-			continue
-		}
-		if cal.Path != "" {
-			s.Calendars[i].Path = cal.Path
-		}
-		if cal.Email != "" {
-			s.Calendars[i].Email = cal.Email
-		}
-		if cal.DisplayName != "" {
-			s.Calendars[i].DisplayName = cal.DisplayName
-		}
-		if cal.Color != "" {
-			s.Calendars[i].Color = cal.Color
-		}
-		s.Calendars[i].Hidden = cal.Hidden
-		return
-	}
-	s.Calendars = append(s.Calendars, cal)
 }

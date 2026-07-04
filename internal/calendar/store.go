@@ -20,7 +20,6 @@ import (
 
 type calendarSource struct {
 	sourceName string
-	sourcePath string
 	calendar   Calendar
 	location   *time.Location
 }
@@ -45,13 +44,9 @@ func (s *Store) Load() (Dataset, error) {
 		if src.Path == "" {
 			continue
 		}
-
-		calendarSources, err := s.resolveCalendarSources(src)
-		if err != nil {
-			return Dataset{}, err
-		}
-
-		for _, resolved := range calendarSources {
+		switch strings.ToLower(strings.TrimSpace(src.Type)) {
+		case "calendar":
+			resolved := s.resolveCalendarSource(src)
 			out.Calendars = append(out.Calendars, resolved.calendar)
 			events, todos, err := s.loadCalendarFolder(resolved)
 			if err != nil {
@@ -59,11 +54,10 @@ func (s *Store) Load() (Dataset, error) {
 			}
 			out.Events = append(out.Events, events...)
 			out.Todos = append(out.Todos, todos...)
-		}
-
-		if src.AddressBook != "" {
+		case "addressbook":
 			hasAddressBook = true
-			events, err := s.loadAddressBook(src.AddressBook, src.Name)
+			sourceName := sourceID(src)
+			events, err := s.loadAddressBook(src.Path, sourceName)
 			if err == nil {
 				birthdayEvents = append(birthdayEvents, events...)
 			}
@@ -130,134 +124,23 @@ func onlyVisibleTodos(todos []Todo) []Todo {
 	return out
 }
 
-func (s *Store) resolveCalendarSources(src config.Source) ([]calendarSource, error) {
-	loc := time.Local
-	if src.DefaultTZName != "" {
-		if srcLoc, err := time.LoadLocation(src.DefaultTZName); err == nil {
-			loc = srcLoc
-		}
+func (s *Store) resolveCalendarSource(src config.Source) calendarSource {
+	metaDisplay, metaColor := readCalendarMeta(src.Path)
+	name := filepath.Base(filepath.Clean(src.Path))
+	id := sourceID(src)
+	return calendarSource{
+		sourceName: id,
+		location:   time.Local,
+		calendar: Calendar{
+			Source:      id,
+			Name:        name,
+			Path:        src.Path,
+			Email:       normalizeEmail(src.Email),
+			DisplayName: emptyDefault(src.DisplayName, emptyDefault(metaDisplay, name)),
+			Color:       emptyDefault(src.Color, metaColor),
+			Hidden:      src.Hidden,
+		},
 	}
-
-	if len(src.Calendars) > 0 {
-		out := make([]calendarSource, 0, len(src.Calendars))
-		for _, cal := range src.Calendars {
-			calPath := cal.Path
-			if calPath == "" {
-				calPath = filepath.Join(src.Path, cal.Name)
-			}
-			metaDisplay, metaColor := readCalendarMeta(calPath)
-			name := cal.Name
-			if name == "" {
-				name = filepath.Base(calPath)
-			}
-			out = append(out, calendarSource{
-				sourceName: src.Name,
-				sourcePath: src.Path,
-				location:   loc,
-				calendar: Calendar{
-					Source:      src.Name,
-					Name:        name,
-					Path:        calPath,
-					Email:       calendarEmail(src, cal, name),
-					DisplayName: emptyDefault(cal.DisplayName, emptyDefault(metaDisplay, name)),
-					Color:       emptyDefault(cal.Color, metaColor),
-					Hidden:      cal.Hidden,
-				},
-			})
-		}
-		return out, nil
-	}
-
-	entries, err := os.ReadDir(src.Path)
-	if err != nil {
-		return nil, fmt.Errorf("read source %s: %w", src.Path, err)
-	}
-
-	hasICSAtRoot := false
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-		if strings.ToLower(filepath.Ext(entry.Name())) == ".ics" {
-			hasICSAtRoot = true
-			break
-		}
-	}
-
-	var out []calendarSource
-	if hasICSAtRoot {
-		meta := findCalendarConfig(src, src.Name)
-		metaDisplay, metaColor := readCalendarMeta(src.Path)
-		out = append(out, calendarSource{
-			sourceName: src.Name,
-			sourcePath: src.Path,
-			location:   loc,
-			calendar: Calendar{
-				Source:      src.Name,
-				Name:        src.Name,
-				Path:        src.Path,
-				Email:       calendarEmail(src, meta, src.Name),
-				DisplayName: emptyDefault(meta.DisplayName, emptyDefault(metaDisplay, src.Name)),
-				Color:       emptyDefault(meta.Color, metaColor),
-				Hidden:      meta.Hidden,
-			},
-		})
-		return out, nil
-	}
-
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		calName := entry.Name()
-		calPath := filepath.Join(src.Path, calName)
-		meta := findCalendarConfig(src, calName)
-		metaDisplay, metaColor := readCalendarMeta(calPath)
-		out = append(out, calendarSource{
-			sourceName: src.Name,
-			sourcePath: src.Path,
-			location:   loc,
-			calendar: Calendar{
-				Source:      src.Name,
-				Name:        calName,
-				Path:        calPath,
-				Email:       calendarEmail(src, meta, calName),
-				DisplayName: emptyDefault(meta.DisplayName, emptyDefault(metaDisplay, calName)),
-				Color:       emptyDefault(meta.Color, metaColor),
-				Hidden:      meta.Hidden,
-			},
-		})
-	}
-
-	if len(out) == 0 {
-		meta := findCalendarConfig(src, src.Name)
-		metaDisplay, metaColor := readCalendarMeta(src.Path)
-		out = append(out, calendarSource{
-			sourceName: src.Name,
-			sourcePath: src.Path,
-			location:   loc,
-			calendar: Calendar{
-				Source:      src.Name,
-				Name:        src.Name,
-				Path:        src.Path,
-				Email:       calendarEmail(src, meta, src.Name),
-				DisplayName: emptyDefault(meta.DisplayName, emptyDefault(metaDisplay, src.Name)),
-				Color:       emptyDefault(meta.Color, metaColor),
-				Hidden:      meta.Hidden,
-			},
-		})
-	}
-
-	return out, nil
-}
-
-func findCalendarConfig(src config.Source, name string) config.CalendarConfig {
-	for _, cal := range src.Calendars {
-		if cal.Name == name {
-			return cal
-		}
-	}
-	return config.CalendarConfig{Name: name}
 }
 
 func readCalendarMeta(path string) (displayName string, color string) {
@@ -738,25 +621,19 @@ func componentToTodo(comp *ical.Component, src calendarSource, filePath string) 
 
 func (s *Store) loadAddressBook(path string, sourceName string) ([]Event, error) {
 	out := make([]Event, 0, 128)
-	err := filepath.WalkDir(path, func(fullPath string, d os.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return nil
-		}
-		if d.IsDir() {
-			return nil
-		}
-		if strings.ToLower(filepath.Ext(d.Name())) != ".vcf" {
-			return nil
-		}
-		events, err := readVCardFile(fullPath, sourceName, s.config)
-		if err != nil {
-			return nil
-		}
-		out = append(out, events...)
-		return nil
-	})
+	entries, err := os.ReadDir(path)
 	if err != nil {
 		return nil, err
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || strings.ToLower(filepath.Ext(entry.Name())) != ".vcf" {
+			continue
+		}
+		events, err := readVCardFile(filepath.Join(path, entry.Name()), sourceName, s.config)
+		if err != nil {
+			continue
+		}
+		out = append(out, events...)
 	}
 	return out, nil
 }
@@ -1124,7 +1001,8 @@ func (s *Store) FindCalendar(sourceName, calendarName string) (Calendar, error) 
 		return Calendar{}, err
 	}
 	for _, cal := range ds.Calendars {
-		if cal.Source == sourceName && cal.Name == calendarName {
+		if (sourceName == "" || cal.Source == sourceName || filepath.Base(cal.Source) == sourceName) &&
+			(calendarName == "" || cal.Name == calendarName || cal.Source == calendarName || filepath.Base(cal.Source) == calendarName) {
 			return cal, nil
 		}
 	}
@@ -1180,10 +1058,10 @@ func (s *Store) Contacts() ([]Contact, error) {
 	seen := map[string]bool{}
 	var out []Contact
 	for _, src := range s.config.Sources {
-		if strings.TrimSpace(src.AddressBook) == "" {
+		if strings.ToLower(strings.TrimSpace(src.Type)) != "addressbook" {
 			continue
 		}
-		contacts, err := readContacts(src.AddressBook)
+		contacts, err := readContacts(src.Path)
 		if err != nil {
 			continue
 		}
@@ -1207,15 +1085,18 @@ func (s *Store) Contacts() ([]Contact, error) {
 
 func readContacts(path string) ([]Contact, error) {
 	out := make([]Contact, 0, 128)
-	err := filepath.WalkDir(path, func(fullPath string, d os.DirEntry, walkErr error) error {
-		if walkErr != nil || d.IsDir() || strings.ToLower(filepath.Ext(d.Name())) != ".vcf" {
-			return nil
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		return nil, err
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || strings.ToLower(filepath.Ext(entry.Name())) != ".vcf" {
+			continue
 		}
-		f, err := os.Open(fullPath)
+		f, err := os.Open(filepath.Join(path, entry.Name()))
 		if err != nil {
-			return nil
+			continue
 		}
-		defer f.Close()
 		dec := vcard.NewDecoder(f)
 		for {
 			card, err := dec.Decode()
@@ -1223,7 +1104,8 @@ func readContacts(path string) ([]Contact, error) {
 				break
 			}
 			if err != nil {
-				return nil
+				f.Close()
+				return nil, err
 			}
 			name := strings.TrimSpace(card.Value(vcard.FieldFormattedName))
 			if name == "" {
@@ -1243,9 +1125,9 @@ func readContacts(path string) ([]Contact, error) {
 				out = append(out, Contact{Name: contactName, Email: email})
 			}
 		}
-		return nil
-	})
-	return out, err
+		f.Close()
+	}
+	return out, nil
 }
 
 func (s *Store) DeleteTodo(uid string) error {
@@ -2290,82 +2172,68 @@ func (s *Store) SetCalendarHidden(sourceName, calendarName string, hidden bool) 
 	if s.config == nil {
 		return errors.New("missing config")
 	}
-	src := s.config.SourceByName(sourceName)
-	if src == nil {
-		return fmt.Errorf("source %q not found", sourceName)
+	for i := range s.config.Sources {
+		src := &s.config.Sources[i]
+		if strings.ToLower(strings.TrimSpace(src.Type)) != "calendar" {
+			continue
+		}
+		if sourceMatches(*src, sourceName, calendarName) {
+			src.Hidden = hidden
+			return nil
+		}
 	}
-	src.UpsertCalendar(config.CalendarConfig{Name: calendarName, Hidden: hidden})
-	return nil
+	return fmt.Errorf("calendar %s/%s not found", sourceName, calendarName)
 }
 
 func (s *Store) findWritableCalendar(sourceName, calendarName string) (Calendar, *time.Location, error) {
-	if len(s.config.Sources) == 0 {
-		return Calendar{}, nil, errors.New("no sources configured")
-	}
-
-	selectedSource := s.config.Sources[0]
-	if sourceName != "" {
-		src := s.config.SourceByName(sourceName)
-		if src == nil {
-			return Calendar{}, nil, fmt.Errorf("source %q not found", sourceName)
+	for _, src := range s.config.Sources {
+		if strings.ToLower(strings.TrimSpace(src.Type)) != "calendar" {
+			continue
 		}
-		selectedSource = *src
-	}
-
-	loc := time.Local
-	if selectedSource.DefaultTZName != "" {
-		if srcLoc, err := time.LoadLocation(selectedSource.DefaultTZName); err == nil {
-			loc = srcLoc
+		if sourceName != "" && !sourceMatches(src, sourceName, calendarName) {
+			continue
+		}
+		resolved := s.resolveCalendarSource(src)
+		if calendarName == "" || resolved.calendar.Name == calendarName {
+			return resolved.calendar, time.Local, nil
 		}
 	}
-
-	resolved, err := s.resolveCalendarSources(selectedSource)
-	if err != nil {
-		return Calendar{}, nil, err
-	}
-	if len(resolved) == 0 {
-		return Calendar{}, nil, fmt.Errorf("source %q has no writable calendar", selectedSource.Name)
-	}
-
-	if calendarName == "" {
-		return resolved[0].calendar, loc, nil
-	}
-	for _, cal := range resolved {
-		if cal.calendar.Name == calendarName {
-			return cal.calendar, loc, nil
-		}
-	}
-	return Calendar{}, nil, fmt.Errorf("calendar %q not found in source %q", calendarName, selectedSource.Name)
+	return Calendar{}, nil, fmt.Errorf("calendar %s/%s not found", sourceName, calendarName)
 }
 
 func (s *Store) calendarUserEmail(sourceName, calendarName string) string {
 	if s == nil || s.config == nil {
 		return ""
 	}
-	src := s.config.SourceByName(sourceName)
-	if src == nil {
-		return ""
-	}
-	for _, cal := range src.Calendars {
-		name := cal.Name
-		if name == "" && cal.Path != "" {
-			name = filepath.Base(cal.Path)
+	for _, src := range s.config.Sources {
+		if strings.ToLower(strings.TrimSpace(src.Type)) != "calendar" {
+			continue
 		}
-		if name == calendarName {
-			return calendarEmail(*src, cal, name)
-		}
-	}
-	return calendarEmail(*src, config.CalendarConfig{Name: calendarName}, calendarName)
-}
-
-func calendarEmail(src config.Source, cal config.CalendarConfig, calendarName string) string {
-	for _, candidate := range []string{cal.Email, src.Email, calendarName, cal.Name, src.Name} {
-		candidate = strings.TrimSpace(candidate)
-		if strings.Contains(candidate, "@") {
-			return normalizeEmail(candidate)
+		if sourceMatches(src, sourceName, calendarName) {
+			return normalizeEmail(src.Email)
 		}
 	}
 	return ""
+}
+
+func sourceID(src config.Source) string {
+	return filepath.Clean(src.Path)
+}
+
+func sourceBaseName(src config.Source) string {
+	return filepath.Base(filepath.Clean(src.Path))
+}
+
+func sourceMatches(src config.Source, sourceName, calendarName string) bool {
+	id := sourceID(src)
+	name := sourceBaseName(src)
+	if sourceName != "" && sourceName != id && sourceName != name {
+		return calendarName != "" && (calendarName == name || calendarName == id)
+	}
+	if calendarName != "" && calendarName != name && calendarName != id {
+		return false
+	}
+	return true
 }
 
 func sameEmail(a, b string) bool {

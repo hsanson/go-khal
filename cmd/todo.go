@@ -88,7 +88,12 @@ func newTodoNewCommand() *cobra.Command {
 				return err
 			}
 			if sourceName == "" && len(cfg.Sources) > 0 {
-				sourceName = cfg.Sources[0].Name
+				for _, src := range cfg.Sources {
+					if strings.EqualFold(src.Type, "calendar") {
+						sourceName = src.Path
+						break
+					}
+				}
 			}
 
 			if !nonInteractive && strings.TrimSpace(summary) == "" {
@@ -128,8 +133,8 @@ func newTodoNewCommand() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&sourceName, "source", "", "source name")
-	cmd.Flags().StringVar(&calendarName, "calendar", "", "calendar name inside source")
+	cmd.Flags().StringVar(&sourceName, "source", "", "calendar source path")
+	cmd.Flags().StringVar(&calendarName, "calendar", "", "calendar folder name")
 	cmd.Flags().StringVar(&summary, "summary", "", "todo summary")
 	cmd.Flags().StringVar(&description, "description", "", "todo description")
 	cmd.Flags().StringVar(&startStr, "start", "", "start datetime (RFC3339 or YYYY-MM-DD HH:MM)")

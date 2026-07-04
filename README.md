@@ -19,7 +19,7 @@ This project is fully vibe coded using Codex.
 - Itemized event and task editors with compact popup controls
 - Event attendees, notifications, recurrence, all-day, URL, location, and description editing
 - VTODO list/show/create/edit support from the CLI
-- Configurable multiple sources as either account parent folder or single calendar folder
+- Configurable calendar and addressbook sources that point directly at vdir folders
 - Per-calendar metadata (display name, color) including discovery from `displayname`/`color` files
 - Per-calendar show/hide controls to include/exclude all events and todos
 - iCalendar parsing/writing via `github.com/emersion/go-ical`
@@ -49,16 +49,23 @@ Initialize config:
 go run . config init
 ```
 
-Add a vdir source (account folder containing multiple calendar folders):
+Generate config sources from local vdirsyncer storages:
 
 ```bash
-go run . config add-source --name personal --path /path/to/vdir/account --address-book /path/to/vdir/contacts
+go run . config from-vdirsyncer
 ```
 
-Add or override one specific calendar config:
+Pass a config path when vdirsyncer uses a non-default location:
 
 ```bash
-go run . config add-calendar --source personal --name birthdays --display-name "Birthdays" --color "#ff9800"
+go run . config from-vdirsyncer /path/to/vdirsyncer/config
+```
+
+Add a calendar or addressbook source manually:
+
+```bash
+go run . config add-source --path /path/to/vdir/calendar --type calendar --display-name "Personal" --color "#4caf50" --email user@example.com
+go run . config add-source --path /path/to/vdir/addressbook --type addressbook --display-name "Contacts"
 ```
 
 List calendars and visibility:
@@ -70,8 +77,8 @@ go run . config list-calendars
 Hide/show one calendar:
 
 ```bash
-go run . config hide-calendar --source personal --name birthdays
-go run . config show-calendar --source personal --name birthdays
+go run . config hide-calendar --path /path/to/vdir/calendar
+go run . config show-calendar --path /path/to/vdir/calendar
 ```
 
 Show agenda:
@@ -120,29 +127,23 @@ Example:
 {
   "sources": [
     {
-      "name": "personal",
       "path": "/home/user/.local/share/calendars/personal",
-      "email": "user@example.com",
-      "address_book": "/home/user/.local/share/contacts/personal",
-      "default_timezone": "Europe/Paris",
-      "calendars": [
-        {
-          "name": "birthdays",
-          "display_name": "Birthdays",
-          "color": "#ff9800",
-          "hidden": true
-        },
-        {
-          "name": "calendar",
-          "email": "user@example.com",
-          "display_name": "Personal",
-          "color": "#4caf50"
-        }
-      ]
+      "type": "calendar",
+      "display_name": "Personal",
+      "color": "#4caf50",
+      "email": "user@example.com"
     },
     {
-      "name": "work",
-      "path": "/home/user/.local/share/calendars/work"
+      "path": "/home/user/.local/share/calendars/birthdays",
+      "type": "calendar",
+      "display_name": "Birthdays",
+      "color": "#ff9800",
+      "hidden": true
+    },
+    {
+      "path": "/home/user/.local/share/contacts/personal",
+      "type": "addressbook",
+      "display_name": "Contacts"
     }
   ],
   "default_view": "agenda",
@@ -168,7 +169,7 @@ Event editing supports:
 - Recurrence: daily, weekly, monthly, yearly, interval, weekdays, monthly mode, until date, and fixed count
 - All-day and timed start/end values
 
-When an event has attendees, go-khal uses the configured source/calendar `email` as the iCalendar `ORGANIZER`. If `email` is omitted, calendar/source names that look like email addresses are used as a fallback. Events where the configured email is an attendee but not the organizer are treated as attendee-owned: only local calendar placement, RSVP, availability/visibility, and notifications are editable.
+When an event has attendees, go-khal uses the calendar source `email` as the iCalendar `ORGANIZER`. If `email` is omitted, calendar names that look like email addresses are used as a fallback. Events where the configured email is an attendee but not the organizer are treated as attendee-owned: only local calendar placement, RSVP, availability/visibility, and notifications are editable.
 
 Task editing supports title, calendar, description, location, start/due times, completion, and priority.
 
@@ -176,8 +177,9 @@ In description popups, `ctrl+e` opens `$EDITOR`/`$VISUAL` for larger edits. In m
 
 ## Notes
 
-- If a source path has calendar subfolders, each subfolder is treated as a separate calendar.
-- If a source path contains `.ics` files directly, it is treated as a single calendar.
+- Source paths must be absolute paths to folders that directly contain `.ics` or `.vcf` files.
+- go-khal does not recurse into source subfolders. Configure each concrete calendar or addressbook folder as its own source.
+- `go-khal config from-vdirsyncer` reads vdirsyncer local filesystem storages and adds each discovered concrete vdir folder as a source.
 - Calendar display name/color are read from `displayname` or `.displayname`, and `color` or `.color` when present.
 - Hidden calendars are excluded from agenda, details, editor lists, and todo listings.
 - VEVENT and VTODO entries are created/updated/deleted directly in source `.ics` files.
