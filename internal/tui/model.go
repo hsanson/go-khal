@@ -1883,75 +1883,44 @@ func (m Model) renderEventDetailsPane(width, height int) string {
 }
 
 func (m Model) renderEventDetailsFor(ev calendar.Event, width, height int) string {
-	calendarName := ev.DisplayName
-	if calendarName == "" {
-		calendarName = ev.Calendar
-	}
-	lines := []string{
-		m.styles.Title.Render("Event Details"),
-		"",
-		"Title: " + ev.Summary,
-		"Calendar: " + calendarName,
-		"When: " + ev.Start.Format("2006-01-02 15:04") + " - " + ev.End.Format("2006-01-02 15:04"),
+	meta := []string{
+		detailLine("󰉢", "Title", ev.Summary, width),
 	}
 	if ev.Organizer != "" {
-		lines = append(lines, "Organizer: "+ev.Organizer)
+		meta = append(meta, detailLine("", "Organizer", ev.Organizer, width))
 	}
 	if m.store != nil {
 		if role := eventUserRoleDisplay(m.store.EventUserRole(ev)); role != "" {
-			lines = append(lines, "Role: "+role)
+			meta = append(meta, detailLine("", "Role", role, width))
 		}
+	}
+	if ev.Location != "" || ev.URL != "" {
+		meta = append(meta, "")
 	}
 	if ev.Location != "" {
-		lines = append(lines, "Location: "+ev.Location)
+		meta = append(meta, detailLine("", "Location", ev.Location, width))
+	}
+	if ev.URL != "" {
+		meta = append(meta, detailLine("", "URL", ev.URL, width))
 	}
 	if len(ev.Attendees) > 0 {
-		lines = append(lines, "Attendees: "+formatAttendees(ev.Attendees))
+		meta = append(meta, "", detailLine("", "Attendees", fmt.Sprintf("%d total", len(ev.Attendees)), width))
+		meta = append(meta, detailAttendeeLines(ev.Attendees, width, 5)...)
 	}
-	lines = append(lines,
-		"RSVP: "+attendeeRSVPDisplay(ev.Attendees),
-		"Availability: "+eventAvailabilityDisplay(ev.Availability),
-		"Visibility: "+eventVisibilityDisplay(ev.Visibility),
-	)
+	meta = append(meta, "", detailLine("󰥔", "All-day", yesNo(ev.AllDay), width))
+	meta = append(meta, detailLine("", "When", ev.Start.Format("2006-01-02 15:04")+" - "+ev.End.Format("2006-01-02 15:04"), width))
 	if ev.Recurrence != nil {
-		lines = append(lines, "Repeats: "+formatRecurrence(ev.Recurrence))
+		meta = append(meta, "", detailLine("󰑖", "Repeat", formatRecurrence(ev.Recurrence), width))
 	} else if ev.Recurring {
-		lines = append(lines, "Repeats: yes")
+		meta = append(meta, "", detailLine("󰑖", "Repeat", "yes", width))
 	}
 	if len(ev.Alarms) > 0 {
-		lines = append(lines, "Notifications: "+formatAlarms(ev.Alarms))
+		meta = append(meta, "", detailLine("󰀠", "Notifications", formatAlarms(ev.Alarms), width))
 	}
-	if ev.Description != "" {
-		lines = append(lines, "", "Description:")
-		for _, raw := range strings.Split(ev.Description, "\n") {
-			lines = append(lines, wrapLine(raw, max(10, width-4))...)
-		}
-	}
-	for i := range lines {
-		lines[i] = truncate(lines[i], max(10, width-2))
-	}
-
-	scroll := m.detailScroll
-	if scroll > len(lines)-1 {
-		scroll = len(lines) - 1
-	}
-	if scroll > 0 {
-		lines = lines[scroll:]
-	}
-	if len(lines) > height {
-		lines = lines[:height]
-	}
-	prefix := "Details"
-	body := strings.Join(lines, "\n")
-	block := lipgloss.JoinVertical(lipgloss.Left, m.styles.Subtle.Render(prefix), body)
-	return lipgloss.NewStyle().Width(width).Height(height).MaxHeight(height).Render(block)
+	return m.renderGroupedDetails("Details", meta, ev.Description, width, height)
 }
 
 func (m Model) renderTodoDetailsFor(todo calendar.Todo, mode string, width, height int) string {
-	calendarName := todo.DisplayName
-	if calendarName == "" {
-		calendarName = todo.Calendar
-	}
 	status := strings.TrimSpace(todo.Status)
 	if status == "" {
 		status = "NEEDS-ACTION"
@@ -1971,58 +1940,142 @@ func (m Model) renderTodoDetailsFor(todo calendar.Todo, mode string, width, heig
 			when = "due " + todo.Due.Format("2006-01-02 15:04")
 		}
 	}
-	lines := []string{
-		m.styles.Title.Render("Task Details"),
-		"",
-		"Title: " + todo.Summary,
-		"Calendar: " + calendarName,
-		"Status: " + status,
-		"When: " + when,
-	}
-	if todo.Percent > 0 {
-		lines = append(lines, fmt.Sprintf("Progress: %d%%", todo.Percent))
+	meta := []string{
+		detailLine("󰉢", "Title", todo.Summary, width),
 	}
 	if strings.TrimSpace(todo.Location) != "" {
-		lines = append(lines, "Location: "+todo.Location)
+		meta = append(meta, "", detailLine("", "Location", todo.Location, width))
+	}
+	meta = append(meta, "", detailLine("󰥔", "When", when, width))
+	meta = append(meta, "", detailLine("󰄬", "Status", strings.ToLower(status), width))
+	if todo.Percent > 0 {
+		meta = append(meta, detailLine("", "Progress", fmt.Sprintf("%d%%", todo.Percent), width))
 	}
 	if todo.Priority > 0 {
 		priorityLabel := todoPriorityLabel(todo.Priority)
 		if strings.EqualFold(priorityLabel, "high") {
 			priorityLabel = lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Render(priorityLabel)
 		}
-		lines = append(lines, "Priority: "+priorityLabel)
+		meta = append(meta, detailLine("", "Priority", priorityLabel, width))
 	}
-	if todo.Description != "" {
-		lines = append(lines, "", "Description:")
-		for _, raw := range strings.Split(todo.Description, "\n") {
-			lines = append(lines, wrapLine(raw, max(10, width-4))...)
-		}
-	}
-	for i := range lines {
-		lines[i] = truncate(lines[i], max(10, width-2))
+	return m.renderGroupedDetails("Details", meta, todo.Description, width, height)
+}
+
+func (m Model) renderGroupedDetails(title string, meta []string, description string, width, height int) string {
+	width = max(10, width)
+	height = max(1, height)
+	header := m.styles.Subtle.Render(title)
+	bodyHeight := max(0, height-1)
+	if bodyHeight == 0 {
+		return lipgloss.NewStyle().Width(width).Height(height).Render(header)
 	}
 
-	scroll := m.detailScroll
-	if scroll > len(lines)-1 {
-		scroll = len(lines) - 1
+	meta = compactBlankLines(meta)
+	descLines := detailDescriptionLines(description, width)
+	if len(descLines) > 0 {
+		meta = compactBlankLines(append(meta, append([]string{""}, descLines...)...))
 	}
+	metaView := renderScrolledLines(meta, m.detailScroll, bodyHeight)
+	block := lipgloss.JoinVertical(lipgloss.Left, header, metaView)
+	return lipgloss.NewStyle().Width(width).Height(height).MaxHeight(height).Render(block)
+}
+
+func detailLine(glyph, label, value string, width int) string {
+	iconWidth := 2
+	labelWidth := 13
+	icon := strings.Repeat(" ", iconWidth)
+	if glyph != "" {
+		icon = lipgloss.NewStyle().Foreground(lipgloss.Color("117")).Bold(true).Render(glyph)
+		icon += strings.Repeat(" ", max(0, iconWidth-lipgloss.Width(icon)))
+	}
+	labelText := padRight(label, labelWidth)
+	prefix := icon + " " + lipgloss.NewStyle().Foreground(lipgloss.Color("117")).Bold(true).Render(labelText) + lipgloss.NewStyle().Foreground(lipgloss.Color("244")).Render(": ")
+	valueBudget := max(1, width-lipgloss.Width(prefix))
+	return prefix + lipgloss.NewStyle().Foreground(lipgloss.Color("252")).Render(truncate(value, valueBudget))
+}
+
+func detailAttendeeLines(attendees []calendar.Attendee, width, limit int) []string {
+	if len(attendees) == 0 || limit <= 0 {
+		return nil
+	}
+	out := make([]string, 0, min(limit, len(attendees)))
+	prefix := strings.Repeat(" ", 16)
+	for _, attendee := range attendees[:min(limit, len(attendees))] {
+		glyphColor := lipgloss.Color("65")
+		if attendeeIsOptional(attendee) {
+			glyphColor = lipgloss.Color("244")
+		}
+		icon := lipgloss.NewStyle().Foreground(glyphColor).Bold(true).Render("")
+		label := attendeeBaseLabel(attendee)
+		valueBudget := max(1, width-lipgloss.Width(prefix)-lipgloss.Width(icon)-1)
+		out = append(out, prefix+icon+" "+lipgloss.NewStyle().Foreground(lipgloss.Color("252")).Render(truncate(label, valueBudget)))
+	}
+	return out
+}
+
+func detailDescriptionLines(description string, width int) []string {
+	description = strings.TrimSpace(description)
+	if description == "" {
+		return nil
+	}
+	lines := []string{detailLine("󰦨", "Description", "", width)}
+	for _, raw := range strings.Split(description, "\n") {
+		wrapped := wrapLine(raw, max(10, width-4))
+		for _, line := range wrapped {
+			lines = append(lines, strings.Repeat(" ", 3)+truncate(line, max(10, width-4)))
+		}
+	}
+	return lines
+}
+
+func renderScrolledLines(lines []string, scroll, height int) string {
+	if height <= 0 {
+		return ""
+	}
+	if len(lines) == 0 {
+		return lipgloss.NewStyle().Height(height).MaxHeight(height).Render("")
+	}
+	scroll = clamp(scroll, 0, max(0, len(lines)-1))
 	if scroll > 0 {
 		lines = lines[scroll:]
 	}
 	if len(lines) > height {
 		lines = lines[:height]
 	}
-	prefix := "Details"
-	body := strings.Join(lines, "\n")
-	block := lipgloss.JoinVertical(lipgloss.Left, m.styles.Subtle.Render(prefix), body)
-	return lipgloss.NewStyle().Width(width).Height(height).MaxHeight(height).Render(block)
+	return lipgloss.NewStyle().Height(height).MaxHeight(height).Render(strings.Join(lines, "\n"))
+}
+
+func compactBlankLines(lines []string) []string {
+	out := make([]string, 0, len(lines))
+	lastBlank := true
+	for _, line := range lines {
+		blank := strings.TrimSpace(line) == ""
+		if blank && lastBlank {
+			continue
+		}
+		out = append(out, line)
+		lastBlank = blank
+	}
+	for len(out) > 0 && strings.TrimSpace(out[len(out)-1]) == "" {
+		out = out[:len(out)-1]
+	}
+	return out
+}
+
+func padRight(value string, width int) string {
+	if lipgloss.Width(value) >= width {
+		return value
+	}
+	return value + strings.Repeat(" ", width-lipgloss.Width(value))
 }
 
 func (m *Model) moveEventCursor(delta int) {
+	before := m.selectedAgendaItemKey()
 	items := m.agendaItems()
 	if len(items) == 0 {
 		m.eventCursor = 0
 		m.eventListOffset = 0
+		m.resetDetailScrollIfSelectionChanged(before)
 		return
 	}
 	target := m.eventCursor + delta
@@ -2033,6 +2086,7 @@ func (m *Model) moveEventCursor(delta int) {
 		if len(items) == 0 {
 			m.eventCursor = 0
 			m.eventListOffset = 0
+			m.resetDetailScrollIfSelectionChanged(before)
 			return
 		}
 		target = prepended - needed
@@ -2048,6 +2102,7 @@ func (m *Model) moveEventCursor(delta int) {
 	m.selected = dayStart(items[m.eventCursor].Day)
 	m.scrollForSelection()
 	m.ensureEventCursorVisible()
+	m.resetDetailScrollIfSelectionChanged(before)
 }
 
 func (m *Model) moveAgendaWindowBackward(needed int) int {
@@ -2430,10 +2485,12 @@ func (m Model) calendarPaneHeight() int {
 }
 
 func (m *Model) ensureEventSelectionValid() {
+	before := m.selectedAgendaItemKey()
 	items := m.agendaItems()
 	if len(items) == 0 {
 		m.eventCursor = 0
 		m.eventListOffset = 0
+		m.resetDetailScrollIfSelectionChanged(before)
 		return
 	}
 	if m.eventCursor < 0 {
@@ -2445,6 +2502,7 @@ func (m *Model) ensureEventSelectionValid() {
 	m.ensureEventCursorVisible()
 	m.selected = dayStart(items[m.eventCursor].Day)
 	m.scrollForSelection()
+	m.resetDetailScrollIfSelectionChanged(before)
 }
 
 func (m *Model) ensureEventCursorVisible() {
@@ -2474,6 +2532,30 @@ func (m *Model) ensureEventCursorVisible() {
 			break
 		}
 		m.eventListOffset--
+	}
+}
+
+func (m Model) selectedAgendaItemKey() string {
+	items := m.agendaItems()
+	if len(items) == 0 || m.eventCursor < 0 || m.eventCursor >= len(items) {
+		return ""
+	}
+	it := items[m.eventCursor]
+	switch {
+	case it.Event != nil:
+		return "event:" + it.Event.UID + ":" + it.Event.Start.Format(time.RFC3339Nano)
+	case it.Todo != nil:
+		return "todo:" + it.Todo.UID + ":" + it.Mode
+	case it.IsFree:
+		return "free:" + it.Start.Format(time.RFC3339Nano) + ":" + it.End.Format(time.RFC3339Nano)
+	default:
+		return fmt.Sprintf("item:%s:%s:%d", it.Mode, it.Day.Format("2006-01-02"), it.Start.UnixNano())
+	}
+}
+
+func (m *Model) resetDetailScrollIfSelectionChanged(before string) {
+	if before != m.selectedAgendaItemKey() {
+		m.detailScroll = 0
 	}
 }
 

@@ -107,3 +107,22 @@ func TestAgendaCursorPageBackExtendsWindow(t *testing.T) {
 		t.Fatalf("expected cursor to land on prepended first page item, got %d", m.eventCursor)
 	}
 }
+
+func TestMoveEventCursorResetsDetailScroll(t *testing.T) {
+	start := dayStart(time.Date(2026, time.July, 3, 10, 0, 0, 0, time.Local))
+	events := []calendar.Event{
+		{UID: "one", Summary: "One", Start: start.Add(9 * time.Hour), End: start.Add(10 * time.Hour)},
+		{UID: "two", Summary: "Two", Start: start.Add(11 * time.Hour), End: start.Add(12 * time.Hour)},
+	}
+	m := NewModel(&config.Config{SidebarWidth: 30}, calendar.Dataset{Events: events}, nil)
+	m.selected = start
+	m.agendaStart = start
+	m.eventCursor = 0
+	m.detailScroll = 4
+
+	m.moveEventCursor(1)
+
+	if m.detailScroll != 0 {
+		t.Fatalf("expected detail scroll reset after changing event, got %d", m.detailScroll)
+	}
+}
