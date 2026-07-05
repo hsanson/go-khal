@@ -102,28 +102,6 @@ func (s *Store) Load() (Dataset, error) {
 	return out, nil
 }
 
-func onlyVisibleEvents(events []Event) []Event {
-	out := make([]Event, 0, len(events))
-	for _, ev := range events {
-		if ev.Hidden {
-			continue
-		}
-		out = append(out, ev)
-	}
-	return out
-}
-
-func onlyVisibleTodos(todos []Todo) []Todo {
-	out := make([]Todo, 0, len(todos))
-	for _, todo := range todos {
-		if todo.Hidden {
-			continue
-		}
-		out = append(out, todo)
-	}
-	return out
-}
-
 func (s *Store) resolveCalendarSource(src config.Source) calendarSource {
 	metaDisplay, metaColor := readCalendarMeta(src.Path)
 	name := filepath.Base(filepath.Clean(src.Path))
@@ -194,7 +172,7 @@ func (s *Store) loadICSFile(src calendarSource, filePath string) ([]Event, []Tod
 	if err != nil {
 		return nil, nil, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	dec := ical.NewDecoder(f)
 
@@ -643,7 +621,7 @@ func readVCardFile(path string, sourceName string, cfg *config.Config) ([]Event,
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	dec := vcard.NewDecoder(f)
 	out := make([]Event, 0, 8)
@@ -790,9 +768,10 @@ func makeBirthdayInstances(uidBase, summary, kind, filePath string, month time.M
 		if hasYear && originalYear > 0 {
 			years := year - originalYear
 			if years > 0 {
-				if kind == EventKindBirthday {
+				switch kind {
+				case EventKindBirthday:
 					eventSummary = strings.TrimSuffix(summary, " Birthday") + " " + ordinal(years) + " Birthday"
-				} else if kind == EventKindAnniversary {
+				case EventKindAnniversary:
 					eventSummary = strings.TrimSuffix(summary, " Anniversary") + " " + ordinal(years) + " Anniversary"
 				}
 			}
@@ -885,11 +864,11 @@ func (s *Store) CreateTodo(sourceName, calendarName string, t Todo) error {
 	if err != nil {
 		return fmt.Errorf("create todo file: %w", err)
 	}
-	defer f.Close()
 	if err := ical.NewEncoder(f).Encode(newCal); err != nil {
+		_ = f.Close()
 		return fmt.Errorf("encode todo: %w", err)
 	}
-	return nil
+	return f.Close()
 }
 
 func (s *Store) UpdateTodo(uid string, update TodoUpdate) error {
@@ -904,9 +883,12 @@ func (s *Store) UpdateTodo(uid string, update TodoUpdate) error {
 	}
 	dec := ical.NewDecoder(f)
 	cal, err := dec.Decode()
-	f.Close()
+	closeErr := f.Close()
 	if err != nil {
 		return err
+	}
+	if closeErr != nil {
+		return closeErr
 	}
 
 	for _, child := range cal.Children {
@@ -963,8 +945,11 @@ func (s *Store) UpdateTodo(uid string, update TodoUpdate) error {
 	if err != nil {
 		return err
 	}
-	defer out.Close()
-	return ical.NewEncoder(out).Encode(cal)
+	if err := ical.NewEncoder(out).Encode(cal); err != nil {
+		_ = out.Close()
+		return err
+	}
+	return out.Close()
 }
 
 func (s *Store) MoveTodo(uid, sourceName, calendarName string) error {
@@ -1104,7 +1089,7 @@ func readContacts(path string) ([]Contact, error) {
 				break
 			}
 			if err != nil {
-				f.Close()
+				_ = f.Close()
 				return nil, err
 			}
 			name := strings.TrimSpace(card.Value(vcard.FieldFormattedName))
@@ -1125,7 +1110,9 @@ func readContacts(path string) ([]Contact, error) {
 				out = append(out, Contact{Name: contactName, Email: email})
 			}
 		}
-		f.Close()
+		if err := f.Close(); err != nil {
+			return nil, err
+		}
 	}
 	return out, nil
 }
@@ -1295,11 +1282,11 @@ func (s *Store) CreateEvent(sourceName, calendarName string, e Event) error {
 	if err != nil {
 		return fmt.Errorf("create event file: %w", err)
 	}
-	defer f.Close()
 	if err := ical.NewEncoder(f).Encode(newCal); err != nil {
+		_ = f.Close()
 		return fmt.Errorf("encode event: %w", err)
 	}
-	return nil
+	return f.Close()
 }
 
 func (s *Store) UpdateEvent(uid string, update EventUpdate) error {
@@ -1391,9 +1378,12 @@ func (s *Store) updateEventAll(ev Event, update EventUpdate) error {
 	}
 	dec := ical.NewDecoder(f)
 	cal, err := dec.Decode()
-	f.Close()
+	closeErr := f.Close()
 	if err != nil {
 		return err
+	}
+	if closeErr != nil {
+		return closeErr
 	}
 
 	updated := false
@@ -1422,8 +1412,11 @@ func (s *Store) updateEventAll(ev Event, update EventUpdate) error {
 	if err != nil {
 		return err
 	}
-	defer out.Close()
-	return ical.NewEncoder(out).Encode(cal)
+	if err := ical.NewEncoder(out).Encode(cal); err != nil {
+		_ = out.Close()
+		return err
+	}
+	return out.Close()
 }
 
 func (s *Store) updateEventOccurrence(ev Event, update EventUpdate) error {
@@ -2016,7 +2009,7 @@ func readCalendarFile(path string) (*ical.Calendar, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	cal, err := ical.NewDecoder(f).Decode()
 	if err != nil {
 		return nil, err
@@ -2029,8 +2022,11 @@ func writeCalendarFile(path string, cal *ical.Calendar) error {
 	if err != nil {
 		return err
 	}
-	defer out.Close()
-	return ical.NewEncoder(out).Encode(cal)
+	if err := ical.NewEncoder(out).Encode(cal); err != nil {
+		_ = out.Close()
+		return err
+	}
+	return out.Close()
 }
 
 func moveCalendarComponents(sourcePath, targetDir, componentName, uid string) error {

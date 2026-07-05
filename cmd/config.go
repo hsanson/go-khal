@@ -317,7 +317,7 @@ func parseVdirsyncerStorages(path string) ([]vdirsyncerStorage, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open vdirsyncer config: %w", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	var out []vdirsyncerStorage
 	var current *vdirsyncerStorage

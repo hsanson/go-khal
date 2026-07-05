@@ -171,40 +171,6 @@ type todoFormSnapshot struct {
 	priorityLabel string
 }
 
-var eventFormFieldOrder = []string{
-	"title",
-	"calendar",
-	"location",
-	"description",
-	"url",
-	"attendees",
-	"alarms",
-	"recur",
-	"recur-freq",
-	"recur-every",
-	"recur-end",
-	"recur-until",
-	"recur-count",
-	"all-day",
-	"from-date",
-	"from-time",
-	"to-date",
-	"to-time",
-}
-
-var todoFormFieldOrder = []string{
-	"summary",
-	"description",
-	"location",
-	"calendar",
-	"start-date",
-	"start-time",
-	"due-date",
-	"due-time",
-	"completed",
-	"priority",
-}
-
 func NewModel(cfg *config.Config, data calendar.Dataset, store *calendar.Store) Model {
 	vis := map[string]bool{}
 	order := make([]string, 0, len(data.Calendars))
@@ -2354,14 +2320,6 @@ func yesNo(v bool) string {
 	return "no"
 }
 
-func singleLineValue(v string) string {
-	v = strings.TrimSpace(strings.ReplaceAll(v, "\n", " "))
-	if v == "" {
-		return "-"
-	}
-	return v
-}
-
 func multilineValue(v string) string {
 	v = strings.TrimSpace(v)
 	if v == "" {
@@ -2598,14 +2556,6 @@ func (m *Model) resetDetailScrollIfSelectionChanged(before string) {
 	}
 }
 
-func (m Model) agendaEvents() []calendar.Event {
-	start := m.agendaStart
-	if start.IsZero() {
-		start = dayStart(m.selected)
-	}
-	return agendaEventsFromDay(start, filteredEvents(m.data.Events, m.calendarVisibility, m.showAllMode))
-}
-
 func (m Model) agendaItems() []AgendaListItem {
 	start := m.agendaStart
 	if start.IsZero() {
@@ -2630,18 +2580,6 @@ func (m Model) agendaItems() []AgendaListItem {
 		out = append(out, it)
 	}
 	return out
-}
-
-func (m Model) currentSelectionHasDetails() bool {
-	items := m.agendaItems()
-	if len(items) == 0 || m.eventCursor < 0 || m.eventCursor >= len(items) {
-		return false
-	}
-	it := items[m.eventCursor]
-	if it.IsFree {
-		return false
-	}
-	return it.Event != nil || it.Todo != nil
 }
 
 func (m *Model) openEventFormNew() {
@@ -3613,33 +3551,6 @@ func eventRSVPDisplayValue(rsvp string) string {
 	}
 }
 
-func attendeeRSVPDisplay(attendees []calendar.Attendee) string {
-	counts := map[string]int{}
-	for _, attendee := range attendees {
-		status := normalizeRSVPValue(attendee.Status)
-		if status == "" {
-			status = "needs-action"
-		}
-		counts[status]++
-	}
-	if len(counts) == 0 {
-		return "-"
-	}
-	if len(counts) == 1 {
-		for status := range counts {
-			return eventRSVPDisplayValue(status)
-		}
-	}
-	order := []string{"yes", "no", "maybe", "needs-action"}
-	parts := make([]string, 0, len(counts))
-	for _, status := range order {
-		if n := counts[status]; n > 0 {
-			parts = append(parts, fmt.Sprintf("%s %d", eventRSVPDisplayValue(status), n))
-		}
-	}
-	return strings.Join(parts, ", ")
-}
-
 func normalizeRSVPValue(rsvp string) string {
 	switch strings.ToLower(strings.TrimSpace(rsvp)) {
 	case "yes", "accepted":
@@ -3971,20 +3882,6 @@ func splitListInput(raw string) []string {
 	return out
 }
 
-func formatAttendees(attendees []calendar.Attendee) string {
-	return truncate(strings.Join(attendeeLabels(attendees), ", "), 160)
-}
-
-func attendeeLabels(attendees []calendar.Attendee) []string {
-	out := make([]string, 0, len(attendees))
-	for _, attendee := range attendees {
-		if label := attendeeLabel(attendee); label != "" {
-			out = append(out, label)
-		}
-	}
-	return out
-}
-
 func attendeeLabel(attendee calendar.Attendee) string {
 	label := attendeeBaseLabel(attendee)
 	if label == "" {
@@ -4191,50 +4088,6 @@ func todoPriorityLabel(v int) string {
 		return "low"
 	}
 	return "mid"
-}
-
-func (m *Model) isTodoFormFocusedFirstField() bool {
-	if m.todoForm == nil || m.todoForm.form == nil || len(todoFormFieldOrder) == 0 {
-		return false
-	}
-	f := m.todoForm.form.GetFocusedField()
-	if f == nil {
-		return false
-	}
-	return f.GetKey() == todoFormFieldOrder[0]
-}
-
-func (m *Model) isTodoFormFocusedLastField() bool {
-	if m.todoForm == nil || m.todoForm.form == nil || len(todoFormFieldOrder) == 0 {
-		return false
-	}
-	f := m.todoForm.form.GetFocusedField()
-	if f == nil {
-		return false
-	}
-	return f.GetKey() == todoFormFieldOrder[len(todoFormFieldOrder)-1]
-}
-
-func (m *Model) isEventFormFocusedFirstField() bool {
-	if m.eventForm == nil || m.eventForm.form == nil || len(eventFormFieldOrder) == 0 {
-		return false
-	}
-	f := m.eventForm.form.GetFocusedField()
-	if f == nil {
-		return false
-	}
-	return f.GetKey() == eventFormFieldOrder[0]
-}
-
-func (m *Model) isEventFormFocusedLastField() bool {
-	if m.eventForm == nil || m.eventForm.form == nil || len(eventFormFieldOrder) == 0 {
-		return false
-	}
-	f := m.eventForm.form.GetFocusedField()
-	if f == nil {
-		return false
-	}
-	return f.GetKey() == eventFormFieldOrder[len(eventFormFieldOrder)-1]
 }
 
 func filteredTodos(todos []calendar.Todo, vis map[string]bool) []calendar.Todo {
