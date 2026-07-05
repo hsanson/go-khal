@@ -197,36 +197,16 @@ func renderAgendaFromItems(items []AgendaListItem, width, maxLines int, timeFmt 
 	}
 }
 
-func buildAgendaItems(startDay time.Time, events []calendar.Event, todos []calendar.Todo, days int, includeFree bool, includeDoneTodos bool) []AgendaListItem {
+func buildAgendaItems(startDay time.Time, events []calendar.Event, days int, includeFree bool) []AgendaListItem {
 	if days < 1 {
 		days = 1
 	}
 	out := make([]AgendaListItem, 0, days*8)
-	endDay := startDay.AddDate(0, 0, days)
-
-	todosByDay := map[string][]AgendaListItem{}
-	today := dayStart(time.Now().In(startDay.Location()))
-	for i := range todos {
-		t := todos[i]
-		if !includeDoneTodos && isTodoDone(t) {
-			continue
-		}
-		item, ok := agendaItemFromTodo(t, today)
-		if !ok {
-			continue
-		}
-		if item.Day.Before(startDay) || !item.Day.Before(endDay) {
-			continue
-		}
-		k := item.Day.Format("2006-01-02")
-		todosByDay[k] = append(todosByDay[k], item)
-	}
 
 	for d := 0; d < days; d++ {
 		day := startDay.AddDate(0, 0, d)
 		dayEnd := day.Add(24 * time.Hour)
 		dayEvents := calendar.EventsOnDay(events, day)
-		dayTodos := todosByDay[day.Format("2006-01-02")]
 
 		allDay := make([]AgendaListItem, 0)
 		timed := make([]AgendaListItem, 0)
@@ -236,13 +216,6 @@ func buildAgendaItems(startDay time.Time, events []calendar.Event, todos []calen
 				allDay = append(allDay, item)
 			} else {
 				timed = append(timed, item)
-			}
-		}
-		for _, td := range dayTodos {
-			if td.Mode == "todo-all-day" {
-				allDay = append(allDay, td)
-			} else {
-				timed = append(timed, td)
 			}
 		}
 		sort.Slice(timed, func(i, j int) bool {
@@ -287,6 +260,73 @@ func buildAgendaItems(startDay time.Time, events []calendar.Event, todos []calen
 	return out
 }
 
+func buildTaskItems(todos []calendar.Todo, includeDoneTodos bool, loc *time.Location) []AgendaListItem {
+	if loc == nil {
+		loc = time.Local
+	}
+	today := dayStart(time.Now().In(loc))
+	out := make([]AgendaListItem, 0, len(todos))
+	for i := range todos {
+		t := todos[i]
+		if !includeDoneTodos && isTodoDone(t) {
+			continue
+		}
+		item, ok := taskListItemFromTodo(t, today)
+		if !ok {
+			continue
+		}
+		out = append(out, item)
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].Start.Equal(out[j].Start) {
+			pi := todoSortPriority(out[i].Todo)
+			pj := todoSortPriority(out[j].Todo)
+			if pi == pj {
+				return agendaItemSummary(out[i]) < agendaItemSummary(out[j])
+			}
+			return pi < pj
+		}
+		return out[i].Start.Before(out[j].Start)
+	})
+	return out
+}
+
+func todoSortPriority(todo *calendar.Todo) int {
+	if todo == nil || todo.Priority <= 0 {
+		return 10
+	}
+	return todo.Priority
+}
+
+func taskListItemFromTodo(todo calendar.Todo, today time.Time) (AgendaListItem, bool) {
+	if todo.Due != nil {
+		return AgendaListItem{
+			Day:   dayStart(*todo.Due),
+			Start: *todo.Due,
+			End:   *todo.Due,
+			Todo:  &todo,
+			Mode:  "todo-end",
+		}, true
+	}
+	if todo.Start != nil {
+		return AgendaListItem{
+			Day:   dayStart(*todo.Start),
+			Start: *todo.Start,
+			End:   todo.Start.Add(time.Hour),
+			Todo:  &todo,
+			Mode:  "todo-start",
+		}, true
+	}
+	day := dayStart(today)
+	return AgendaListItem{
+		Day:   day,
+		Start: day,
+		End:   day.Add(24 * time.Hour),
+		Todo:  &todo,
+		Mode:  "todo-all-day",
+	}, true
+}
+
 func agendaItemSummary(it AgendaListItem) string {
 	if it.Event != nil {
 		return it.Event.Summary
@@ -295,36 +335,6 @@ func agendaItemSummary(it AgendaListItem) string {
 		return it.Todo.Summary
 	}
 	return ""
-}
-
-func agendaItemFromTodo(todo calendar.Todo, today time.Time) (AgendaListItem, bool) {
-	it := AgendaListItem{Todo: &todo, Mode: "todo-all-day"}
-	if todo.Start != nil && todo.Due != nil {
-		it.Day = dayStart(*todo.Start)
-		it.Start = *todo.Start
-		it.End = *todo.Due
-		it.Mode = "todo-range"
-		return it, true
-	}
-	if todo.Start != nil {
-		it.Day = dayStart(*todo.Start)
-		it.Start = *todo.Start
-		it.End = todo.Start.Add(time.Hour)
-		it.Mode = "todo-start"
-		return it, true
-	}
-	if todo.Due != nil {
-		it.Day = dayStart(*todo.Due)
-		it.End = *todo.Due
-		it.Start = todo.Due.Add(-time.Hour)
-		it.Mode = "todo-end"
-		return it, true
-	}
-	it.Day = dayStart(today)
-	it.Start = it.Day
-	it.End = it.Day.Add(24 * time.Hour)
-	it.Mode = "todo-all-day"
-	return it, true
 }
 
 func isTodoDone(todo calendar.Todo) bool {

@@ -16,7 +16,10 @@ import (
 func newTodoCommand() *cobra.Command {
 	todoCmd := &cobra.Command{
 		Use:   "todo",
-		Short: "Manage tasks",
+		Short: "Open task mode",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runTUIWithTaskMode(true)
+		},
 	}
 	todoCmd.AddCommand(newTodoListCommand())
 	todoCmd.AddCommand(newTodoShowCommand())

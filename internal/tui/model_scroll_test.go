@@ -276,3 +276,82 @@ func TestAgendaShowsDeclinedEventsOnlyInShowAllMode(t *testing.T) {
 		t.Fatal("declined event should be visible in show-all mode")
 	}
 }
+
+func TestAgendaModeDoesNotShowTasks(t *testing.T) {
+	start := dayStart(time.Date(2026, time.July, 3, 10, 0, 0, 0, time.Local))
+	cal := calendar.Calendar{Source: "src", Name: "cal"}
+	todos := []calendar.Todo{
+		{UID: "task", Summary: "Task", Source: "src", Calendar: "cal", Start: &start, Priority: 1},
+	}
+	m := NewModel(&config.Config{SidebarWidth: 30}, calendar.Dataset{Calendars: []calendar.Calendar{cal}, Todos: todos}, nil)
+	m.selected = start
+	m.agendaStart = start
+
+	for _, item := range m.agendaItems() {
+		if item.Todo != nil {
+			t.Fatalf("agenda mode should not show task %q", item.Todo.UID)
+		}
+	}
+
+	m.showAllMode = true
+	for _, item := range m.agendaItems() {
+		if item.Todo != nil {
+			t.Fatalf("agenda show-all should not show task %q", item.Todo.UID)
+		}
+	}
+}
+
+func TestTaskModeShowsPastDuePendingTasksAndClampsNavigation(t *testing.T) {
+	now := dayStart(time.Now())
+	past := now.AddDate(0, 0, -14)
+	pastStart := now.AddDate(0, 0, 1)
+	future := now.AddDate(0, 0, 2)
+	cal := calendar.Calendar{Source: "src", Name: "cal"}
+	todos := []calendar.Todo{
+		{UID: "future", Summary: "Future", Source: "src", Calendar: "cal", Start: &future, Priority: 5},
+		{UID: "past", Summary: "Past due", Source: "src", Calendar: "cal", Start: &pastStart, Due: &past, Priority: 1},
+	}
+	m := NewTaskModeModel(&config.Config{SidebarWidth: 30}, calendar.Dataset{Calendars: []calendar.Calendar{cal}, Todos: todos}, nil)
+
+	items := m.agendaItems()
+	if len(items) != 2 {
+		t.Fatalf("expected both pending tasks in task mode, got %d", len(items))
+	}
+	if items[0].Todo == nil || items[0].Todo.UID != "past" {
+		t.Fatalf("expected past due task first, got %#v", items[0].Todo)
+	}
+	if !items[0].Day.Equal(dayStart(past)) {
+		t.Fatalf("expected past due task to be anchored on due date %v, got %v", dayStart(past), items[0].Day)
+	}
+	if m.eventCursor != 0 {
+		t.Fatalf("expected task cursor at top, got %d", m.eventCursor)
+	}
+
+	m.moveEventCursor(-1)
+	if m.eventCursor != 0 {
+		t.Fatalf("expected task cursor to clamp at top, got %d", m.eventCursor)
+	}
+
+	m.moveEventCursor(20)
+	if m.eventCursor != len(items)-1 {
+		t.Fatalf("expected task cursor to clamp at bottom, got %d", m.eventCursor)
+	}
+}
+
+func TestTaskModeShowAllControlsCompletedTasks(t *testing.T) {
+	now := dayStart(time.Now())
+	cal := calendar.Calendar{Source: "src", Name: "cal"}
+	todos := []calendar.Todo{
+		{UID: "pending", Summary: "Pending", Source: "src", Calendar: "cal", Start: &now, Status: "NEEDS-ACTION"},
+		{UID: "done", Summary: "Done", Source: "src", Calendar: "cal", Start: &now, Status: "COMPLETED"},
+	}
+	m := NewTaskModeModel(&config.Config{SidebarWidth: 30}, calendar.Dataset{Calendars: []calendar.Calendar{cal}, Todos: todos}, nil)
+
+	if got := len(m.agendaItems()); got != 1 {
+		t.Fatalf("expected only pending tasks by default, got %d", got)
+	}
+	m.showAllMode = true
+	if got := len(m.agendaItems()); got != 2 {
+		t.Fatalf("expected completed tasks in task show-all mode, got %d", got)
+	}
+}

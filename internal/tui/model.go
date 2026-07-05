@@ -209,9 +209,14 @@ func NewModel(cfg *config.Config, data calendar.Dataset, store *calendar.Store) 
 	return m
 }
 
-func NewTodoCreateModel(cfg *config.Config, data calendar.Dataset, store *calendar.Store, todo calendar.Todo) Model {
+func NewTaskModeModel(cfg *config.Config, data calendar.Dataset, store *calendar.Store) Model {
 	m := NewModel(cfg, data, store)
-	m.showTasksMode = true
+	m.enterTaskMode()
+	return m
+}
+
+func NewTodoCreateModel(cfg *config.Config, data calendar.Dataset, store *calendar.Store, todo calendar.Todo) Model {
+	m := NewTaskModeModel(cfg, data, store)
 	m.openTodoFormNewWith(todo)
 	return m
 }
@@ -351,24 +356,36 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.detailScroll--
 			}
 		case "h", "left":
+			if m.showTasksMode {
+				break
+			}
 			m.selected = m.selected.AddDate(0, 0, -1)
 			m.agendaStart = dayStart(m.selected)
 			m.eventCursor = 0
 			m.eventListOffset = 0
 			m.scrollForSelection()
 		case "l", "right":
+			if m.showTasksMode {
+				break
+			}
 			m.selected = m.selected.AddDate(0, 0, 1)
 			m.agendaStart = dayStart(m.selected)
 			m.eventCursor = 0
 			m.eventListOffset = 0
 			m.scrollForSelection()
 		case "ctrl+h":
+			if m.showTasksMode {
+				break
+			}
 			m.selected = m.selected.AddDate(0, 0, -7)
 			m.agendaStart = dayStart(m.selected)
 			m.eventCursor = 0
 			m.eventListOffset = 0
 			m.scrollForSelection()
 		case "ctrl+l":
+			if m.showTasksMode {
+				break
+			}
 			m.selected = m.selected.AddDate(0, 0, 7)
 			m.agendaStart = dayStart(m.selected)
 			m.eventCursor = 0
@@ -400,10 +417,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.eventListOffset = 0
 			m.ensureEventSelectionValid()
 		case "m":
-			m.showTasksMode = !m.showTasksMode
-			m.eventCursor = 0
-			m.eventListOffset = 0
-			m.ensureEventSelectionValid()
+			if m.showTasksMode {
+				m.exitTaskMode()
+			} else {
+				m.enterTaskMode()
+			}
 		case "t":
 			now := time.Now().In(m.selected.Location())
 			m.selected = now
@@ -411,8 +429,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.weekViewportStart = calendar.StartOfWeek(now, m.weekStart())
 			m.focusMain = false
 			m.focusDetails = false
-			m.eventCursor = 0
-			m.eventListOffset = 0
+			if m.showTasksMode {
+				m.jumpTaskCursorToToday(now)
+			} else {
+				m.eventCursor = 0
+				m.eventListOffset = 0
+			}
 			m.detailScroll = 0
 		case "enter":
 			m.detailScroll = 0
@@ -512,7 +534,7 @@ func (m Model) renderMainPanel(width int) string {
 	detail := m.renderEventDetailsPane(width-2, bottomHeight)
 	header := m.styles.PanelTitle.Render(fmt.Sprintf("Agenda from %s", m.agendaStart.Format("Mon Jan 2, 2006")))
 	if m.showTasksMode {
-		header += m.styles.Subtle.Render(" [TASKS]")
+		header = m.styles.PanelTitle.Render("Tasks")
 	}
 	if m.showAllMode {
 		header += m.styles.Subtle.Render(" [SHOW-ALL]")
@@ -2077,6 +2099,13 @@ func (m *Model) moveEventCursor(delta int) {
 		return
 	}
 	target := m.eventCursor + delta
+	if m.showTasksMode {
+		target = clamp(target, 0, len(items)-1)
+		m.eventCursor = target
+		m.ensureEventCursorVisible()
+		m.resetDetailScrollIfSelectionChanged(before)
+		return
+	}
 	if target < 0 {
 		needed := -target
 		prepended := m.moveAgendaWindowBackward(needed)
@@ -2429,12 +2458,18 @@ func (m Model) renderHelpOverlay(width, height int) string {
 		"t           Today",
 		"enter, spc  Focus / unfocus details",
 		"ctrl+j/k    Scroll details down/up",
-		"f           Toggle show-all mode",
-		"m           Toggle tasks-only mode",
+		"f           Toggle show-all free/declined",
+		"m           Toggle task mode",
 		"c           Open calendars toggle pane",
 		"n           New event / task",
 		"e           Edit selected item",
 		"ctrl+d      Delete selected item",
+		"",
+		"Task mode:",
+		"j/k, ↑/↓    Move within task list",
+		"ctrl+f/b    Page within task list",
+		"f           Toggle completed tasks",
+		"t           Jump to current date",
 		"",
 		"Calendar pane:",
 		"j/k, ↑/↓    Move calendar cursor",
@@ -2497,8 +2532,10 @@ func (m *Model) ensureEventSelectionValid() {
 		m.eventCursor = len(items) - 1
 	}
 	m.ensureEventCursorVisible()
-	m.selected = dayStart(items[m.eventCursor].Day)
-	m.scrollForSelection()
+	if !m.showTasksMode {
+		m.selected = dayStart(items[m.eventCursor].Day)
+		m.scrollForSelection()
+	}
 	m.resetDetailScrollIfSelectionChanged(before)
 }
 
@@ -2557,29 +2594,58 @@ func (m *Model) resetDetailScrollIfSelectionChanged(before string) {
 }
 
 func (m Model) agendaItems() []AgendaListItem {
+	if m.showTasksMode {
+		return buildTaskItems(
+			filteredTodos(m.data.Todos, m.calendarVisibility),
+			m.showAllMode,
+			m.selected.Location(),
+		)
+	}
 	start := m.agendaStart
 	if start.IsZero() {
 		start = dayStart(m.selected)
 	}
-	items := buildAgendaItems(
+	return buildAgendaItems(
 		start,
 		filteredEvents(m.data.Events, m.calendarVisibility, m.showAllMode),
-		filteredTodos(m.data.Todos, m.calendarVisibility),
 		90,
 		m.showAllMode,
-		m.showAllMode,
 	)
-	if !m.showTasksMode {
-		return items
+}
+
+func (m *Model) enterTaskMode() {
+	m.showTasksMode = true
+	m.eventCursor = 0
+	m.eventListOffset = 0
+	m.detailScroll = 0
+	m.ensureEventSelectionValid()
+}
+
+func (m *Model) exitTaskMode() {
+	m.showTasksMode = false
+	m.eventCursor = 0
+	m.eventListOffset = 0
+	m.detailScroll = 0
+	m.ensureEventSelectionValid()
+}
+
+func (m *Model) jumpTaskCursorToToday(now time.Time) {
+	items := m.agendaItems()
+	if len(items) == 0 {
+		m.eventCursor = 0
+		m.eventListOffset = 0
+		return
 	}
-	out := make([]AgendaListItem, 0, len(items))
-	for _, it := range items {
-		if it.IsFree || it.Todo == nil {
-			continue
+	today := dayStart(now)
+	target := 0
+	for i, item := range items {
+		target = i
+		if !item.Day.Before(today) {
+			break
 		}
-		out = append(out, it)
 	}
-	return out
+	m.eventCursor = target
+	m.ensureEventCursorVisible()
 }
 
 func (m *Model) openEventFormNew() {

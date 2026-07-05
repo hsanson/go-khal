@@ -21,11 +21,21 @@ func newTUICommand() *cobra.Command {
 }
 
 func runTUI() error {
+	return runTUIWithTaskMode(false)
+}
+
+func runTUIWithTaskMode(taskMode bool) error {
 	cfg, _, ds, err := loadStore()
 	if err != nil {
 		return err
 	}
-	model := tui.NewModel(cfg, ds, calendar.NewStore(cfg))
+	store := calendar.NewStore(cfg)
+	var model tui.Model
+	if taskMode {
+		model = tui.NewTaskModeModel(cfg, ds, store)
+	} else {
+		model = tui.NewModel(cfg, ds, store)
+	}
 	if _, err := tea.NewProgram(model, tea.WithAltScreen()).Run(); err != nil {
 		return fmt.Errorf("run tui: %w", err)
 	}

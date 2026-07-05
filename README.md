@@ -12,7 +12,7 @@ This project is fully vibe coded using Codex.
 ## Features
 
 - Keyboard-driven terminal calendar with agenda, week overview, details pane, and calendar toggles
-- Infinite backward/forward agenda navigation, page movement, tasks-only mode, and show-all mode
+- Separate agenda and task modes, agenda page movement, and show-all mode
 - Event and task create/edit/delete support from the interactive calendar
 - Itemized event and task editors with compact popup controls
 - Event attendees, notifications, recurrence, all-day, URL, location, and description editing
@@ -122,12 +122,18 @@ Keyboard shortcuts:
 - `t`: jump to today
 - `enter`, `space`: focus/unfocus details
 - `ctrl+j`, `ctrl+k`: scroll details down/up
-- `f`: toggle show-all mode with free slots, completed tasks, and declined events
-- `m`: toggle tasks-only mode
+- `f`: toggle show-all mode with free slots and declined events in agenda mode; completed tasks in task mode
+- `m`: toggle task mode
 - `c`: open the calendar visibility pane
-- `n`: create a new event, or a new task when tasks-only mode is active
+- `n`: create a new event, or a new task when task mode is active
 - `e`: edit the selected event or task
 - `ctrl+d`: delete the selected event or task
+
+Open directly in task mode:
+
+```bash
+go-khal todo
+```
 
 Create a task directly in the same editor used by the interactive calendar:
 
@@ -135,7 +141,7 @@ Create a task directly in the same editor used by the interactive calendar:
 go-khal todo new
 ```
 
-Use `j/k` to move between task fields, `enter` to edit the selected field, `ctrl+s` to save, and `esc`, `q`, or `ctrl+c` to cancel. After saving or canceling, go-khal returns to the agenda.
+Use `j/k` to move between task fields, `enter` to edit the selected field, `ctrl+s` to save, and `esc`, `q`, or `ctrl+c` to cancel. After saving or canceling, go-khal remains in task mode so the created task can be reviewed or edited.
 
 ## Configuration
 
