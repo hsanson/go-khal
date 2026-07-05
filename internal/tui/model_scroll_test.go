@@ -372,3 +372,28 @@ func TestTaskModeShowAllControlsCompletedTasks(t *testing.T) {
 		t.Fatalf("expected completed tasks in task show-all mode, got %d", got)
 	}
 }
+
+func TestCalendarPaneQAndEscReturnToMainList(t *testing.T) {
+	cal := calendar.Calendar{Source: "src", Name: "cal"}
+	for _, key := range []string{"q", "esc"} {
+		m := NewModel(&config.Config{SidebarWidth: 30}, calendar.Dataset{Calendars: []calendar.Calendar{cal}}, nil)
+		m.focusCalendarPane = true
+
+		msg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(key)}
+		if key == "esc" {
+			msg = tea.KeyMsg{Type: tea.KeyEsc}
+		}
+		updated, cmd := m.Update(msg)
+		next := updated.(Model)
+
+		if cmd != nil {
+			t.Fatalf("%s in calendar pane should not quit or run a command", key)
+		}
+		if next.focusCalendarPane {
+			t.Fatalf("%s should close calendar pane focus", key)
+		}
+		if !next.focusMain {
+			t.Fatalf("%s should return focus to main list", key)
+		}
+	}
+}
