@@ -241,7 +241,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
-		if (msg.String() == "q" || msg.String() == "ctrl+c") && m.eventForm == nil && m.todoForm == nil && m.deleteConfirm == nil {
+		if (msg.String() == "q" || msg.String() == "ctrl+c") && m.eventForm == nil && m.todoForm == nil && m.deleteConfirm == nil && !m.focusCalendarPane {
 			return m, tea.Quit
 		}
 
@@ -334,8 +334,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.calendarVisibility[key] = !m.calendarVisibility[key]
 					m.ensureEventSelectionValid()
 				}
-			case "esc", "h":
+			case "esc", "q", "h":
 				m.focusCalendarPane = false
+				m.focusMain = true
 			}
 			m.ensureCalendarCursorVisible(m.calendarPaneHeight())
 			return m, nil
