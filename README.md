@@ -26,11 +26,32 @@ This project is fully vibe coded using Codex.
 
 Requirements:
 
-- Go 1.24.2 or newer
 - Local vdir calendar/task data, commonly synced by `vdirsyncer`
 - A terminal that supports color and alternate screen applications
 - A Nerd Font-compatible terminal font is recommended
 - `$EDITOR` or `$VISUAL` is used for description editing with `ctrl+e`; if neither is set, `nano` is used
+
+### Install From Release Binaries
+
+Download the archive for your platform from the [GitHub releases page](https://github.com/hsanson/go-khal/releases).
+
+Release artifacts are named by version, OS, and CPU architecture, for example `go-khal_v0.0.1_linux_amd64.tar.gz`, `go-khal_v0.0.1_darwin_arm64.tar.gz`, and `go-khal_v0.0.1_windows_amd64.zip`.
+
+Linux x86_64 example:
+
+```bash
+curl -LO https://github.com/hsanson/go-khal/releases/download/v0.0.1/go-khal_v0.0.1_linux_amd64.tar.gz
+curl -LO https://github.com/hsanson/go-khal/releases/download/v0.0.1/SHA256SUMS
+sha256sum -c SHA256SUMS --ignore-missing
+tar -xzf go-khal_v0.0.1_linux_amd64.tar.gz
+install -m 0755 go-khal ~/.local/bin/go-khal
+```
+
+Replace `v0.0.1` with the release version you want. Release pages include checksums in `SHA256SUMS` for verification.
+
+### Install From Source
+
+Source installs require Go 1.24.2 or newer.
 
 ```bash
 go install github.com/hsanson/go-khal@latest
