@@ -8,26 +8,49 @@ import (
 	"github.com/hsanson/go-khal/internal/calendar"
 )
 
-func RenderAgenda(events []calendar.Event, now time.Time, timeFmt string, styles Styles) string {
+const agendaEllipsisGlyph = "\uf141"
+
+func RenderAgenda(events []calendar.Event, now time.Time, weekStart time.Weekday, timeFmt string, styles Styles, maxLength int) string {
 	var b strings.Builder
-	b.WriteString(styles.Title.Render("Agenda"))
-	b.WriteString("\n")
 	for _, ev := range events {
-		if ev.End.Before(now) {
-			continue
-		}
-		cal := ev.DisplayName
-		if cal == "" {
-			cal = ev.Calendar
-		}
-		if ev.Color != "" {
-			cal = fmt.Sprintf("%s %s", cal, ev.Color)
-		}
-		line := fmt.Sprintf("%s  %s  [%s]", ev.Start.Format("2006-01-02 "+timeFmt), ev.Summary, cal)
+		line := fmt.Sprintf("%s %s", agendaTimePrefix(ev.Start, now, weekStart, timeFmt), ev.Summary)
+		line = truncateAgendaLine(line, maxLength)
 		b.WriteString(styles.Event.Render(line))
 		b.WriteString("\n")
 	}
 	return strings.TrimRight(b.String(), "\n")
+}
+
+func agendaTimePrefix(start time.Time, now time.Time, weekStart time.Weekday, timeFmt string) string {
+	if sameDay(start, now) {
+		return start.Format(timeFmt)
+	}
+	weekStartDate := calendar.StartOfWeek(now, weekStart)
+	weekEndDate := weekStartDate.AddDate(0, 0, 7)
+	if !start.Before(weekStartDate) && start.Before(weekEndDate) {
+		return fmt.Sprintf("(%s) %s", start.Format("Mon")[:2], start.Format(timeFmt))
+	}
+	return start.Format("Jan 2")
+}
+
+func sameDay(a time.Time, b time.Time) bool {
+	ay, am, ad := a.Date()
+	by, bm, bd := b.Date()
+	return ay == by && am == bm && ad == bd
+}
+
+func truncateAgendaLine(line string, maxLength int) string {
+	if maxLength < 1 {
+		return line
+	}
+	runes := []rune(line)
+	if len(runes) <= maxLength {
+		return line
+	}
+	if maxLength == 1 {
+		return agendaEllipsisGlyph
+	}
+	return string(runes[:maxLength-1]) + agendaEllipsisGlyph
 }
 
 func RenderDayTimeline(events []calendar.Event, day time.Time, timeFmt string, styles Styles) string {

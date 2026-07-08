@@ -103,6 +103,9 @@ Show agenda in plain text:
 
 ```bash
 go-khal agenda
+go-khal agenda 10
+go-khal agenda --birthdays 10
+go-khal agenda --max-length 80
 ```
 
 Launch the interactive calendar:
