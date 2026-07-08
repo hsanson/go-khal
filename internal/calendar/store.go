@@ -1144,7 +1144,7 @@ func (s *Store) DeleteTodo(uid string) error {
 		return fmt.Errorf("todo with uid %q not found", uid)
 	}
 	cal.Children = children
-	if len(cal.Children) == 0 {
+	if !hasCalendarObjectComponents(cal.Children) {
 		return os.Remove(todo.FilePath)
 	}
 	return writeCalendarFile(todo.FilePath, cal)
@@ -1211,7 +1211,7 @@ func (s *Store) DeleteEvent(ev Event, scope DeleteRecurringScope) error {
 			children = append(children, child)
 		}
 		cal.Children = children
-		if len(cal.Children) == 0 {
+		if !hasCalendarObjectComponents(cal.Children) {
 			return os.Remove(current.FilePath)
 		}
 	}
@@ -2083,10 +2083,23 @@ func moveCalendarComponents(sourcePath, targetDir, componentName, uid string) er
 	}
 
 	sourceCal.Children = remaining
-	if len(sourceCal.Children) == 0 {
+	if !hasCalendarObjectComponents(sourceCal.Children) {
 		return os.Remove(sourcePath)
 	}
 	return writeCalendarFile(sourcePath, sourceCal)
+}
+
+func hasCalendarObjectComponents(children []*ical.Component) bool {
+	for _, child := range children {
+		if child == nil {
+			continue
+		}
+		switch child.Name {
+		case ical.CompEvent, ical.CompToDo, ical.CompJournal:
+			return true
+		}
+	}
+	return false
 }
 
 func cloneCalendarShell(cal *ical.Calendar) *ical.Calendar {

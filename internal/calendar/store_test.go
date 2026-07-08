@@ -223,6 +223,30 @@ func TestDeleteTodoRemovesFile(t *testing.T) {
 	}
 }
 
+func TestDeleteTodoRemovesFileWithOnlyTimezoneRemaining(t *testing.T) {
+	store, _, calDir := testStore(t)
+	path := filepath.Join(calDir, "todo-delete-timezone@example.test.ics")
+	writeICSFile(t, path, `BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//go-khal test//EN
+BEGIN:VTIMEZONE
+TZID:Asia/Tokyo
+END:VTIMEZONE
+BEGIN:VTODO
+UID:todo-delete-timezone@example.test
+SUMMARY:Remove me
+END:VTODO
+END:VCALENDAR
+`)
+
+	if err := store.DeleteTodo("todo-delete-timezone@example.test"); err != nil {
+		t.Fatalf("DeleteTodo: %v", err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("expected todo file to be removed, stat err=%v", err)
+	}
+}
+
 func TestMoveEventMovesFileToTargetCalendar(t *testing.T) {
 	store, root, calDir := testStore(t)
 	targetDir := filepath.Join(root, "work")
@@ -265,6 +289,47 @@ func TestMoveEventMovesFileToTargetCalendar(t *testing.T) {
 	}
 	if moved.Calendar != "work" || moved.CalendarDir != targetDir {
 		t.Fatalf("expected moved event in work calendar, got %s %s", moved.Calendar, moved.CalendarDir)
+	}
+}
+
+func TestMoveEventRemovesSourceFileWithOnlyTimezoneRemaining(t *testing.T) {
+	store, root, calDir := testStore(t)
+	targetDir := filepath.Join(root, "work")
+	if err := os.MkdirAll(targetDir, 0o755); err != nil {
+		t.Fatalf("mkdir target calendar: %v", err)
+	}
+	store.config.Sources = append(store.config.Sources, config.Source{Path: targetDir, Type: "calendar"})
+
+	start := time.Now().Truncate(time.Minute)
+	path := filepath.Join(calDir, "move-event-timezone@example.test.ics")
+	writeICSFile(t, path, `BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//go-khal test//EN
+BEGIN:VTIMEZONE
+TZID:Asia/Tokyo
+END:VTIMEZONE
+BEGIN:VEVENT
+UID:move-event-timezone@example.test
+SUMMARY:Move me
+DTSTAMP:`+start.UTC().Format("20060102T150405Z")+`
+DTSTART:`+start.UTC().Format("20060102T150405Z")+`
+DTEND:`+start.Add(time.Hour).UTC().Format("20060102T150405Z")+`
+END:VEVENT
+END:VCALENDAR
+`)
+
+	ev, err := store.FindEvent("move-event-timezone@example.test")
+	if err != nil {
+		t.Fatalf("FindEvent: %v", err)
+	}
+	if err := store.MoveEvent(ev, "src", "work"); err != nil {
+		t.Fatalf("MoveEvent: %v", err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("expected source event file removed, stat err=%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(targetDir, "move-event-timezone@example.test.ics")); err != nil {
+		t.Fatalf("expected target event file: %v", err)
 	}
 }
 
@@ -481,6 +546,14 @@ func readEventFile(t *testing.T, path string) string {
 		t.Fatalf("read event file: %v", err)
 	}
 	return string(raw)
+}
+
+func writeICSFile(t *testing.T, path, raw string) {
+	t.Helper()
+	raw = strings.ReplaceAll(raw, "\n", "\r\n")
+	if err := os.WriteFile(path, []byte(raw), 0o644); err != nil {
+		t.Fatalf("write ics file: %v", err)
+	}
 }
 
 func TestFormatICalDurationGoogleCompatible(t *testing.T) {
