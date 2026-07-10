@@ -819,7 +819,7 @@ func ordinal(n int) string {
 }
 
 func (s *Store) CreateTodo(sourceName, calendarName string, t Todo) error {
-	cal, loc, err := s.findWritableCalendar(sourceName, calendarName)
+	cal, _, err := s.findWritableCalendar(sourceName, calendarName)
 	if err != nil {
 		return err
 	}
@@ -845,10 +845,13 @@ func (s *Store) CreateTodo(sourceName, calendarName string, t Todo) error {
 		comp.Props.Set(propPriority)
 	}
 	if t.Start != nil {
-		comp.Props.SetDateTime(ical.PropDateTimeStart, t.Start.In(loc))
+		comp.Props.SetDateTime(ical.PropDateTimeStart, t.Start.UTC())
 	}
 	if t.Due != nil {
-		comp.Props.SetDateTime(ical.PropDue, t.Due.In(loc))
+		comp.Props.SetDateTime(ical.PropDue, t.Due.UTC())
+	}
+	if t.Completed != nil {
+		comp.Props.SetDateTime(ical.PropCompleted, t.Completed.UTC())
 	}
 	propPercent := ical.NewProp(ical.PropPercentComplete)
 	propPercent.Value = fmt.Sprintf("%d", t.Percent)
@@ -925,13 +928,13 @@ func (s *Store) UpdateTodo(uid string, update TodoUpdate) error {
 		if update.Start != nil {
 			child.Props.Del(ical.PropDateTimeStart)
 			if *update.Start != nil {
-				child.Props.SetDateTime(ical.PropDateTimeStart, **update.Start)
+				child.Props.SetDateTime(ical.PropDateTimeStart, (**update.Start).UTC())
 			}
 		}
 		if update.Due != nil {
 			child.Props.Del(ical.PropDue)
 			if *update.Due != nil {
-				child.Props.SetDateTime(ical.PropDue, **update.Due)
+				child.Props.SetDateTime(ical.PropDue, (**update.Due).UTC())
 			}
 		}
 		if update.Percent != nil {

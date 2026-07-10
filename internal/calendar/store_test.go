@@ -223,6 +223,41 @@ func TestDeleteTodoRemovesFile(t *testing.T) {
 	}
 }
 
+func TestCreateTodoWritesUTCDateTimes(t *testing.T) {
+	store, _, calDir := testStore(t)
+	loc, err := time.LoadLocation("Asia/Tokyo")
+	if err != nil {
+		t.Fatalf("load location: %v", err)
+	}
+	start := time.Date(2026, 7, 10, 9, 30, 0, 0, loc)
+	due := time.Date(2026, 7, 10, 10, 45, 0, 0, loc)
+	completed := time.Date(2026, 7, 10, 11, 0, 0, 0, loc)
+
+	if err := store.CreateTodo("src", "cal", Todo{
+		UID:       "todo-utc@example.test",
+		Summary:   "UTC task",
+		Start:     &start,
+		Due:       &due,
+		Completed: &completed,
+	}); err != nil {
+		t.Fatalf("CreateTodo: %v", err)
+	}
+
+	raw := readEventFile(t, filepath.Join(calDir, "todo-utc@example.test.ics"))
+	if strings.Contains(raw, "TZID") {
+		t.Fatalf("todo file should not contain TZID without VTIMEZONE:\n%s", raw)
+	}
+	for _, want := range []string{
+		"DTSTART:20260710T003000Z",
+		"DUE:20260710T014500Z",
+		"COMPLETED:20260710T020000Z",
+	} {
+		if !strings.Contains(raw, want) {
+			t.Fatalf("expected %q in todo file:\n%s", want, raw)
+		}
+	}
+}
+
 func TestDeleteTodoRemovesFileWithOnlyTimezoneRemaining(t *testing.T) {
 	store, _, calDir := testStore(t)
 	path := filepath.Join(calDir, "todo-delete-timezone@example.test.ics")
