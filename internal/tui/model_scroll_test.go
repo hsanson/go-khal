@@ -40,6 +40,23 @@ func TestEventResponseDisplaysAvoidDefaultLabel(t *testing.T) {
 	}
 }
 
+func TestEventRSVPUsesCalendarOwnerInsteadOfCombiningAttendees(t *testing.T) {
+	ev := calendar.Event{
+		UserRSVP: "no",
+		Attendees: []calendar.Attendee{
+			{Email: "user@example.test", Status: "no"},
+			{Email: "other@example.test", Status: "yes"},
+		},
+	}
+
+	if got := eventRSVPValue(ev); got != "no" {
+		t.Fatalf("event RSVP = %q, want no", got)
+	}
+	if !eventRSVPIsNo(ev) {
+		t.Fatal("event should be recognized as declined")
+	}
+}
+
 func TestPreserveAttendeeRSVPKeepsExistingResponse(t *testing.T) {
 	attendees := []calendar.Attendee{
 		{Name: "Guest", Email: "guest@example.test"},

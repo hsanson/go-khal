@@ -524,6 +524,7 @@ func TestUpdateRecurringAllCanRemoveRecurrence(t *testing.T) {
 
 func TestGoogleOverrideUsesRecurrenceIDDateWhenStartWasFlattened(t *testing.T) {
 	store, _, calDir := testStore(t)
+	store.config.Sources[0].Email = "user@example.test"
 	path := filepath.Join(calDir, "override.ics")
 	ics := strings.ReplaceAll(`BEGIN:VCALENDAR
 VERSION:2.0
@@ -542,6 +543,8 @@ DTEND:20260706T040000Z
 RECURRENCE-ID;TZID=Asia/Tokyo:20260803T123000
 SUMMARY:Override test
 STATUS:CONFIRMED
+ATTENDEE;PARTSTAT=DECLINED:mailto:user@example.test
+ATTENDEE;PARTSTAT=ACCEPTED:mailto:other@example.test
 END:VEVENT
 END:VCALENDAR
 `, "\n", "\r\n")
@@ -568,9 +571,44 @@ END:VCALENDAR
 		if got := ev.Start.Format("2006-01-02 15:04"); got != "2026-08-03 12:00" {
 			t.Fatalf("unexpected recovered override start: %s", got)
 		}
+		if !ev.Recurring {
+			t.Fatal("RECURRENCE-ID override should remain marked recurring")
+		}
+		if ev.UserRSVP != "no" {
+			t.Fatalf("override user RSVP = %q, want no", ev.UserRSVP)
+		}
 	}
 	if !found {
 		t.Fatal("expected recovered override event")
+	}
+}
+
+func TestCalendarUserEmailFallsBackToEmailShapedDirectoryName(t *testing.T) {
+	root := t.TempDir()
+	calDir := filepath.Join(root, "user@example.test")
+	if err := os.MkdirAll(calDir, 0o755); err != nil {
+		t.Fatalf("mkdir calendar: %v", err)
+	}
+	store := NewStore(&config.Config{Sources: []config.Source{{Path: calDir, Type: "calendar"}}})
+
+	if got := store.CalendarUserEmail(calDir, "user@example.test"); got != "user@example.test" {
+		t.Fatalf("calendar user email = %q, want user@example.test", got)
+	}
+	ds, err := store.Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(ds.Calendars) != 1 || ds.Calendars[0].Email != "user@example.test" {
+		t.Fatalf("calendar fallback email not exposed: %+v", ds.Calendars)
+	}
+	role := store.EventUserRole(Event{
+		Source:    calDir,
+		Calendar:  "user@example.test",
+		Organizer: "organizer@example.test",
+		Attendees: []Attendee{{Email: "user@example.test", Status: "no"}},
+	})
+	if role != EventUserRoleAttendee {
+		t.Fatalf("event user role = %q, want attendee", role)
 	}
 }
 

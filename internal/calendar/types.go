@@ -10,6 +10,7 @@ type Event struct {
 	URL          string
 	Organizer    string
 	Attendees    []Attendee
+	UserRSVP     string
 	Availability string
 	Visibility   string
 	Recurrence   *Recurrence

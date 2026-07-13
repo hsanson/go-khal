@@ -113,7 +113,7 @@ func (s *Store) resolveCalendarSource(src config.Source) calendarSource {
 			Source:      id,
 			Name:        name,
 			Path:        src.Path,
-			Email:       normalizeEmail(src.Email),
+			Email:       sourceUserEmail(src),
 			DisplayName: emptyDefault(src.DisplayName, emptyDefault(metaDisplay, name)),
 			Color:       emptyDefault(src.Color, metaColor),
 			Hidden:      src.Hidden,
@@ -247,6 +247,7 @@ func (s *Store) componentToEvents(comp *ical.Component, src calendarSource, file
 	}
 	organizer := propEmail(comp.Props.Get(ical.PropOrganizer))
 	attendees := propsToAttendees(comp.Props)
+	userRSVP := attendeeStatusForEmail(attendees, src.calendar.Email)
 	availability := propsToAvailability(comp.Props)
 	visibility := propsToVisibility(comp.Props)
 	recurrence := propsToRecurrence(comp.Props)
@@ -288,12 +289,13 @@ func (s *Store) componentToEvents(comp *ical.Component, src calendarSource, file
 		URL:          urlText,
 		Organizer:    organizer,
 		Attendees:    attendees,
+		UserRSVP:     userRSVP,
 		Availability: availability,
 		Visibility:   visibility,
 		Recurrence:   recurrence,
 		Alarms:       alarms,
 		AllDay:       allDay,
-		Recurring:    recurring || recurrence != nil,
+		Recurring:    recurring || recurrence != nil || forceSingle,
 		HasAlarm:     hasAlarm || len(alarms) > 0,
 		Source:       src.sourceName,
 		Calendar:     src.calendar.Name,
@@ -433,6 +435,15 @@ func propsToAttendees(props ical.Props) []Attendee {
 		out = append(out, Attendee{Name: name, Email: email, Status: status, RSVP: rsvp, Role: role})
 	}
 	return out
+}
+
+func attendeeStatusForEmail(attendees []Attendee, email string) string {
+	for _, attendee := range attendees {
+		if sameEmail(attendee.Email, email) {
+			return attendee.Status
+		}
+	}
+	return ""
 }
 
 func propEmail(prop *ical.Prop) string {
@@ -2222,10 +2233,25 @@ func (s *Store) calendarUserEmail(sourceName, calendarName string) string {
 			continue
 		}
 		if sourceMatches(src, sourceName, calendarName) {
-			return normalizeEmail(src.Email)
+			return sourceUserEmail(src)
 		}
 	}
 	return ""
+}
+
+func sourceUserEmail(src config.Source) string {
+	if email := normalizeEmail(src.Email); email != "" {
+		return email
+	}
+	candidate := normalizeEmail(filepath.Base(filepath.Clean(src.Path)))
+	if strings.Count(candidate, "@") != 1 {
+		return ""
+	}
+	parts := strings.SplitN(candidate, "@", 2)
+	if parts[0] == "" || parts[1] == "" {
+		return ""
+	}
+	return candidate
 }
 
 func sourceID(src config.Source) string {
