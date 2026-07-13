@@ -14,6 +14,7 @@ type Event struct {
 	Availability string
 	Visibility   string
 	Recurrence   *Recurrence
+	RecurrenceID *time.Time
 	Alarms       []Alarm
 	Start        time.Time
 	End          time.Time
