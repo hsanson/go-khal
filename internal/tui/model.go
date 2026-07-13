@@ -1121,9 +1121,11 @@ func (m *Model) buildEventEditorForm(key string) *huh.Form {
 	case "rsvp":
 		value := s.rsvp
 		return huh.NewForm(huh.NewGroup(huh.NewSelect[string]().Key("value").Title("RSVP").Options(
+			huh.NewOption("Unspecified", ""),
 			huh.NewOption("Yes", "yes"),
 			huh.NewOption("No", "no"),
 			huh.NewOption("Maybe", "maybe"),
+			huh.NewOption("No response", "needs-action"),
 		).Value(&value))).WithShowHelp(true).WithShowErrors(true)
 	case "availability":
 		return huh.NewForm(huh.NewGroup(huh.NewSelect[string]().Key("value").Title("Availability").Options(
@@ -2301,7 +2303,7 @@ func filteredEvents(events []calendar.Event, vis map[string]bool, includeDecline
 }
 
 func eventRSVPIsNo(ev calendar.Event) bool {
-	return attendeeRSVPValue(ev.Attendees) == "no"
+	return eventRSVPValue(ev) == "no"
 }
 
 func dayStart(t time.Time) time.Time {
@@ -3044,7 +3046,7 @@ func (m *Model) newEventFormState(mode, targetUID string, ev calendar.Event) *ev
 		description:    ev.Description,
 		url:            ev.URL,
 		attendees:      attendeesInput(ev.Attendees),
-		rsvp:           attendeeRSVPValue(ev.Attendees),
+		rsvp:           eventRSVPValue(ev),
 		availability:   ev.Availability,
 		visibility:     eventVisibilityValue(ev.Visibility),
 		alarms:         alarmsInput(ev.Alarms),
@@ -3122,9 +3124,11 @@ func (m *Model) buildEventForm(s *eventFormState) *huh.Form {
 		huh.NewInput().Key("url").Title("URL").Value(&s.url),
 		huh.NewInput().Key("attendees").Title("Attendees").Description("Separate attendees with commas or semicolons").Value(&s.attendees).Suggestions(attendeeSuggestions),
 		huh.NewSelect[string]().Key("rsvp").Title("RSVP").Options(
+			huh.NewOption("Unspecified", ""),
 			huh.NewOption("Yes", "yes"),
 			huh.NewOption("No", "no"),
 			huh.NewOption("Maybe", "maybe"),
+			huh.NewOption("No response", "needs-action"),
 		).Value(&s.rsvp),
 		huh.NewSelect[string]().Key("availability").Title("Availability").Options(
 			huh.NewOption("Calendar default", ""),
@@ -3600,6 +3604,13 @@ func attendeeRSVPValue(attendees []calendar.Attendee) string {
 		}
 	}
 	return status
+}
+
+func eventRSVPValue(ev calendar.Event) string {
+	if status := normalizeRSVPValue(ev.UserRSVP); status != "" {
+		return status
+	}
+	return attendeeRSVPValue(ev.Attendees)
 }
 
 func eventRSVPDisplayValue(rsvp string) string {
