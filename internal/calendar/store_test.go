@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/emersion/go-ical"
 	"github.com/hsanson/go-khal/internal/config"
 )
 
@@ -486,8 +487,126 @@ func TestUpdateRecurringFutureSplitsSeries(t *testing.T) {
 	if strings.Count(raw, "RRULE:") != 2 {
 		t.Fatalf("expected both split components to have RRULEs\n%s", raw)
 	}
-	if !strings.Contains(raw, "UNTIL=") {
-		t.Fatalf("expected original series to be truncated with UNTIL\n%s", raw)
+	if !strings.Contains(raw, "COUNT=2") || !strings.Contains(raw, "COUNT=3") {
+		t.Fatalf("expected COUNT recurrence to be divided across the split series\n%s", raw)
+	}
+}
+
+func TestAttendeeRSVPOccurrenceUpdatesOnlyExistingOverride(t *testing.T) {
+	store, path := attendeeRecurringStore(t, false)
+	target := findEventOnDate(t, store, "2026-07-20")
+	attendees := attendeesWithUserStatus(target.Attendees, "user@example.test", "yes")
+
+	if err := store.UpdateEventScoped(target, EventUpdate{Attendees: &attendees}, EditRecurringOccurrence); err != nil {
+		t.Fatalf("UpdateEventScoped occurrence: %v", err)
+	}
+	raw := readEventFile(t, path)
+	if strings.Count(raw, "RRULE:") != 1 || strings.Count(raw, "RECURRENCE-ID") != 1 {
+		t.Fatalf("occurrence response should preserve master and override\n%s", raw)
+	}
+	if strings.Contains(raw, "PARTSTAT=DECLINED:mailto:user@example.test") {
+		t.Fatalf("occurrence response was not updated\n%s", raw)
+	}
+	updated := findEventOnDate(t, store, "2026-07-20")
+	if updated.UserRSVP != "yes" {
+		t.Fatalf("updated occurrence RSVP = %q, want yes", updated.UserRSVP)
+	}
+	master := findEventOnDate(t, store, "2026-07-13")
+	if master.UserRSVP != "yes" {
+		t.Fatalf("master occurrence RSVP changed unexpectedly: %q", master.UserRSVP)
+	}
+}
+
+func TestAttendeeRSVPAllUpdatesMasterAndOverridesWithoutChangingRecurrence(t *testing.T) {
+	store, path := attendeeRecurringStore(t, true)
+	target := findEventOnDate(t, store, "2026-07-20")
+	attendees := attendeesWithUserStatus(target.Attendees, "user@example.test", "yes")
+
+	if err := store.UpdateEventScoped(target, EventUpdate{Attendees: &attendees}, EditRecurringAll); err != nil {
+		t.Fatalf("UpdateEventScoped all: %v", err)
+	}
+	raw := readEventFile(t, path)
+	if strings.Count(raw, "RRULE:FREQ=WEEKLY;COUNT=4") != 1 {
+		t.Fatalf("all response changed the recurrence rule\n%s", raw)
+	}
+	if !strings.Contains(raw, "DTSTART;TZID=Asia/Tokyo:20260713T130000") {
+		t.Fatalf("all response changed the master start\n%s", raw)
+	}
+	if strings.Count(raw, "RECURRENCE-ID") != 2 {
+		t.Fatalf("all response should preserve organizer exceptions\n%s", raw)
+	}
+	if strings.Contains(raw, "PARTSTAT=DECLINED:mailto:user@example.test") {
+		t.Fatalf("all response left a declined owner exception\n%s", raw)
+	}
+	if !strings.Contains(raw, "PARTSTAT=TENTATIVE:mailto:other@example.test") {
+		t.Fatalf("all response changed another attendee's exception status\n%s", raw)
+	}
+	for _, date := range []string{"2026-07-13", "2026-07-20", "2026-07-27", "2026-08-03"} {
+		if got := findEventOnDate(t, store, date).UserRSVP; got != "yes" {
+			t.Fatalf("%s RSVP = %q, want yes", date, got)
+		}
+	}
+}
+
+func TestAttendeeRSVPFutureUsesRangeOverrideAndReconcilesExceptions(t *testing.T) {
+	store, path := attendeeRecurringStore(t, true)
+	target := findEventOnDate(t, store, "2026-07-20")
+	attendees := attendeesWithUserStatus(target.Attendees, "user@example.test", "yes")
+
+	if err := store.UpdateEventScoped(target, EventUpdate{Attendees: &attendees}, EditRecurringFuture); err != nil {
+		t.Fatalf("UpdateEventScoped future: %v", err)
+	}
+	raw := readEventFile(t, path)
+	if strings.Count(raw, "RRULE:FREQ=WEEKLY;COUNT=4") != 1 {
+		t.Fatalf("future RSVP should not split or truncate the organizer series\n%s", raw)
+	}
+	if !strings.Contains(raw, "RECURRENCE-ID;RANGE=THISANDFUTURE") {
+		t.Fatalf("future RSVP did not create a range override\n%s", raw)
+	}
+	if strings.Count(raw, "UID:rsvp-series@example.test") != 4 {
+		t.Fatalf("future RSVP should keep the organizer UID\n%s", raw)
+	}
+	if strings.Contains(raw, "PARTSTAT=DECLINED:mailto:user@example.test") {
+		t.Fatalf("future RSVP left a conflicting declined exception\n%s", raw)
+	}
+	if !strings.Contains(raw, "PARTSTAT=TENTATIVE:mailto:other@example.test") {
+		t.Fatalf("future RSVP changed another attendee's exception status\n%s", raw)
+	}
+	for _, date := range []string{"2026-07-20", "2026-07-27", "2026-08-03"} {
+		if got := findEventOnDate(t, store, date).UserRSVP; got != "yes" {
+			t.Fatalf("%s RSVP = %q, want yes", date, got)
+		}
+	}
+}
+
+func TestAttendeeUpdateDoesNotAddUserToExcludedOverride(t *testing.T) {
+	comp := ical.NewComponent(ical.CompEvent)
+	setEventAttendees(comp, []Attendee{{Email: "other@example.test", Status: "yes"}}, false)
+	attendees := []Attendee{{Email: "user@example.test", Status: "yes"}}
+
+	if applyAttendeeEventUpdate(comp, EventUpdate{Attendees: &attendees}, "user@example.test") {
+		t.Fatal("excluded attendee should not be added to an override")
+	}
+	if got := propsToAttendees(comp.Props); len(got) != 1 || got[0].Email != "other@example.test" {
+		t.Fatalf("override attendees changed unexpectedly: %+v", got)
+	}
+}
+
+func TestRecurringAllFromOverrideUsesMasterTimingAndRule(t *testing.T) {
+	store, path := attendeeRecurringStore(t, false)
+	store.config.Sources[0].Email = "organizer@example.test"
+	target := findEventOnDate(t, store, "2026-07-20")
+	summary := "Updated series"
+
+	if err := store.UpdateEventScoped(target, EventUpdate{Summary: &summary}, EditRecurringAll); err != nil {
+		t.Fatalf("UpdateEventScoped all: %v", err)
+	}
+	raw := readEventFile(t, path)
+	if !strings.Contains(raw, "RRULE:FREQ=WEEKLY;INTERVAL=1;COUNT=4") || !strings.Contains(raw, "DTSTART:20260713T040000Z") {
+		t.Fatalf("all edit did not retain master recurrence identity\n%s", raw)
+	}
+	if strings.Count(raw, "SUMMARY:Updated series") != 1 {
+		t.Fatalf("all edit should update the master component\n%s", raw)
 	}
 }
 
@@ -531,6 +650,7 @@ VERSION:2.0
 PRODID:-//go-khal test//EN
 BEGIN:VEVENT
 UID:override@example.test
+DTSTAMP:20260701T000000Z
 DTSTART;TZID=Asia/Tokyo:20260706T120000
 DTEND;TZID=Asia/Tokyo:20260706T130000
 SUMMARY:Override test
@@ -538,6 +658,7 @@ STATUS:CONFIRMED
 END:VEVENT
 BEGIN:VEVENT
 UID:override@example.test
+DTSTAMP:20260701T000000Z
 DTSTART:20260706T030000Z
 DTEND:20260706T040000Z
 RECURRENCE-ID;TZID=Asia/Tokyo:20260803T123000
@@ -557,6 +678,7 @@ END:VCALENDAR
 		t.Fatalf("Load: %v", err)
 	}
 	var found bool
+	var override Event
 	seen := map[string]bool{}
 	for _, ev := range ds.Events {
 		key := ev.UID + ev.Start.Format(time.RFC3339)
@@ -577,9 +699,18 @@ END:VCALENDAR
 		if ev.UserRSVP != "no" {
 			t.Fatalf("override user RSVP = %q, want no", ev.UserRSVP)
 		}
+		override = ev
 	}
 	if !found {
 		t.Fatal("expected recovered override event")
+	}
+	updatedSummary := "Updated override"
+	if err := store.UpdateEventScoped(override, EventUpdate{Summary: &updatedSummary}, EditRecurringOccurrence); err != nil {
+		t.Fatalf("UpdateEventScoped moved override: %v", err)
+	}
+	raw := readEventFile(t, path)
+	if strings.Count(raw, "RECURRENCE-ID") != 1 || !strings.Contains(raw, "RECURRENCE-ID:20260803T033000Z") {
+		t.Fatalf("moved override lost its stable recurrence identity\n%s", raw)
 	}
 }
 
@@ -627,6 +758,89 @@ func writeICSFile(t *testing.T, path, raw string) {
 	if err := os.WriteFile(path, []byte(raw), 0o644); err != nil {
 		t.Fatalf("write ics file: %v", err)
 	}
+}
+
+func attendeeRecurringStore(t *testing.T, includeLaterOverride bool) (*Store, string) {
+	t.Helper()
+	calDir := filepath.Join(t.TempDir(), "user@example.test")
+	if err := os.MkdirAll(calDir, 0o755); err != nil {
+		t.Fatalf("mkdir calendar: %v", err)
+	}
+	later := ""
+	if includeLaterOverride {
+		later = `BEGIN:VEVENT
+UID:rsvp-series@example.test
+DTSTAMP:20260713T000000Z
+DTSTART;TZID=Asia/Tokyo:20260803T130000
+DTEND;TZID=Asia/Tokyo:20260803T133000
+RECURRENCE-ID;TZID=Asia/Tokyo:20260803T130000
+ORGANIZER:mailto:organizer@example.test
+ATTENDEE;PARTSTAT=DECLINED:mailto:user@example.test
+ATTENDEE;PARTSTAT=TENTATIVE:mailto:other@example.test
+SUMMARY:Moved room
+LOCATION:Room B
+END:VEVENT
+`
+	}
+	path := filepath.Join(calDir, "event.ics")
+	writeICSFile(t, path, `BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//go-khal test//EN
+BEGIN:VEVENT
+UID:rsvp-series@example.test
+DTSTAMP:20260713T000000Z
+DTSTART;TZID=Asia/Tokyo:20260713T130000
+DTEND;TZID=Asia/Tokyo:20260713T133000
+RRULE:FREQ=WEEKLY;COUNT=4
+ORGANIZER:mailto:organizer@example.test
+ATTENDEE;PARTSTAT=ACCEPTED:mailto:user@example.test
+ATTENDEE;PARTSTAT=ACCEPTED:mailto:other@example.test
+SUMMARY:Series
+END:VEVENT
+BEGIN:VEVENT
+UID:rsvp-series@example.test
+DTSTAMP:20260713T000000Z
+DTSTART;TZID=Asia/Tokyo:20260720T130000
+DTEND;TZID=Asia/Tokyo:20260720T133000
+RECURRENCE-ID;TZID=Asia/Tokyo:20260720T130000
+ORGANIZER:mailto:organizer@example.test
+ATTENDEE;PARTSTAT=DECLINED:mailto:user@example.test
+ATTENDEE;PARTSTAT=ACCEPTED:mailto:other@example.test
+SUMMARY:Series
+END:VEVENT
+`+later+`END:VCALENDAR
+`)
+	cfg := &config.Config{
+		Sources:                   []config.Source{{Path: calDir, Type: "calendar"}},
+		RecurrenceLookbackMonths:  1,
+		RecurrenceLookaheadMonths: 1,
+	}
+	return NewStore(cfg), path
+}
+
+func findEventOnDate(t *testing.T, store *Store, date string) Event {
+	t.Helper()
+	ds, err := store.Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	for _, ev := range ds.Events {
+		if ev.UID == "rsvp-series@example.test" && ev.Start.Format("2006-01-02") == date {
+			return ev
+		}
+	}
+	t.Fatalf("event on %s not found", date)
+	return Event{}
+}
+
+func attendeesWithUserStatus(attendees []Attendee, email, status string) []Attendee {
+	out := append([]Attendee{}, attendees...)
+	for i := range out {
+		if sameEmail(out[i].Email, email) {
+			out[i].Status = status
+		}
+	}
+	return out
 }
 
 func TestFormatICalDurationGoogleCompatible(t *testing.T) {

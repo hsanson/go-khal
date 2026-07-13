@@ -200,6 +200,8 @@ Event editing supports:
 
 When an event has attendees, go-khal uses the calendar source `email` as the iCalendar `ORGANIZER`. If `email` is omitted, calendar names that look like email addresses are used as a fallback. Events where the configured email is an attendee but not the organizer are treated as attendee-owned: only local calendar placement, RSVP, availability/visibility, and notifications are editable.
 
+Recurring RSVP edits preserve the organizer's series: editing one occurrence creates or updates its `RECURRENCE-ID` exception, editing all occurrences updates the user's response on the master and existing exceptions, and editing this and following occurrences uses `RANGE=THISANDFUTURE`. Organizer-owned structural edits to this and following occurrences split the recurrence into past and future series; exceptions at or after the split are reset.
+
 Task editing supports title, calendar, description, location, start/due times, completion, and priority.
 
 In description popups, `ctrl+e` opens `$EDITOR`/`$VISUAL` for larger edits. In multiselect popups, `space` or `x` toggles selections. Attendee add/search supports `/` filtering and `enter` applies the filter.
