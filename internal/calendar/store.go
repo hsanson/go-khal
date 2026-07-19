@@ -366,7 +366,7 @@ func (s *Store) componentToEvents(comp *ical.Component, src calendarSource, file
 		end = start.Add(duration)
 	}
 
-	allDay := start.Hour() == 0 && start.Minute() == 0 && end.Sub(start)%24*time.Hour == 0
+	allDay := eventPropsAllDay(comp.Props)
 	recurring := comp.Props.Get(ical.PropRecurrenceRule) != nil || len(comp.Props.Values(ical.PropRecurrenceDates)) > 0
 	hasAlarm := false
 	for _, child := range comp.Children {
@@ -1819,7 +1819,7 @@ func eventBaseFromComponent(comp *ical.Component, fallback Event, loc *time.Loca
 	if end, err := comp.Props.DateTime(ical.PropDateTimeEnd, loc); err == nil && !end.IsZero() {
 		base.End = end.In(loc)
 	}
-	base.AllDay = base.Start.Hour() == 0 && base.Start.Minute() == 0 && base.End.Sub(base.Start)%(24*time.Hour) == 0
+	base.AllDay = eventPropsAllDay(comp.Props)
 	base.Recurring = base.Recurrence != nil
 	return base
 }
@@ -2578,6 +2578,11 @@ func setEventTimeProps(comp *ical.Component, start, end time.Time, allDay bool) 
 	}
 	comp.Props.SetDateTime(ical.PropDateTimeStart, start.UTC())
 	comp.Props.SetDateTime(ical.PropDateTimeEnd, end.UTC())
+}
+
+func eventPropsAllDay(props ical.Props) bool {
+	start := props.Get(ical.PropDateTimeStart)
+	return start != nil && strings.EqualFold(strings.TrimSpace(start.Params.Get(ical.ParamValue)), string(ical.ValueDate))
 }
 
 func (s *Store) SetCalendarHidden(sourceName, calendarName string, hidden bool) error {
