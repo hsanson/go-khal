@@ -1909,6 +1909,7 @@ func (m Model) renderEventDetailsFor(ev calendar.Event, width, height int) strin
 	meta := []string{
 		detailLine("󰉢", "Title", ev.Summary, width),
 	}
+	meta = append(meta, detailLine("", "RSVP", eventRSVPDisplayValue(eventRSVPValue(ev)), width))
 	if ev.Organizer != "" {
 		meta = append(meta, detailLine("", "Organizer", ev.Organizer, width))
 	}
@@ -3269,6 +3270,7 @@ func (m *Model) commitEventForm() error {
 			Location:     &s.location,
 			URL:          &s.url,
 			Attendees:    &attendees,
+			UserRSVP:     &s.rsvp,
 			Availability: &s.availability,
 			Visibility:   &s.visibility,
 			Recurrence:   recurrenceUpdatePtr,

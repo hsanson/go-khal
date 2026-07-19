@@ -448,6 +448,45 @@ func TestUpdateRecurringOccurrenceCreatesOverride(t *testing.T) {
 	}
 }
 
+func TestLocalRSVPOccurrencePersistsWithoutAttendees(t *testing.T) {
+	store, _, _ := testStore(t)
+	start := time.Date(2026, time.July, 20, 13, 0, 0, 0, time.Local)
+	if err := store.CreateEvent("src", "cal", Event{
+		UID: "local-rsvp@example.test", Summary: "Test2", Start: start, End: start.Add(time.Hour),
+		Recurrence: &Recurrence{Frequency: "DAILY", Interval: 1, Count: 3},
+	}); err != nil {
+		t.Fatalf("CreateEvent: %v", err)
+	}
+	ds, err := store.Load()
+	if err != nil || len(ds.Events) < 2 {
+		t.Fatalf("Load recurrence: events=%d err=%v", len(ds.Events), err)
+	}
+	target := ds.Events[1]
+	rsvp := "yes"
+	if err := store.UpdateEventScoped(target, EventUpdate{UserRSVP: &rsvp}, EditRecurringOccurrence); err != nil {
+		t.Fatalf("UpdateEventScoped occurrence: %v", err)
+	}
+	raw := readEventFile(t, target.FilePath)
+	if !strings.Contains(raw, "RECURRENCE-ID") || !strings.Contains(raw, "X-GO-KHAL-RSVP") || !strings.Contains(raw, ":yes") {
+		t.Fatalf("local occurrence RSVP was not persisted\n%s", raw)
+	}
+	reloaded, err := store.Load()
+	if err != nil {
+		t.Fatalf("Load after update: %v", err)
+	}
+	for _, ev := range reloaded.Events {
+		if ev.UID != target.UID {
+			continue
+		}
+		if ev.Start.Equal(target.Start) && ev.UserRSVP != "yes" {
+			t.Fatalf("updated occurrence RSVP = %q, want yes", ev.UserRSVP)
+		}
+		if ev.Start.Equal(ds.Events[0].Start) && ev.UserRSVP != "" {
+			t.Fatalf("other occurrence RSVP = %q, want empty", ev.UserRSVP)
+		}
+	}
+}
+
 func TestUpdateRecurringFutureSplitsSeries(t *testing.T) {
 	store, _, _ := testStore(t)
 	start := time.Date(2026, time.July, 7, 12, 0, 0, 0, time.Local)
