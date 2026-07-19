@@ -72,6 +72,27 @@ func TestEventMetadataRoundTrip(t *testing.T) {
 	}
 }
 
+func TestMidnightTimedEventDoesNotBecomeAllDay(t *testing.T) {
+	store, _, _ := testStore(t)
+	start := time.Date(2026, time.July, 20, 0, 0, 0, 0, time.Local)
+	if err := store.CreateEvent("src", "cal", Event{
+		UID: "midnight-timed@example.test", Summary: "Midnight", Start: start, End: start.Add(time.Hour), AllDay: false,
+	}); err != nil {
+		t.Fatalf("CreateEvent: %v", err)
+	}
+
+	ev, err := store.FindEvent("midnight-timed@example.test")
+	if err != nil {
+		t.Fatalf("FindEvent: %v", err)
+	}
+	if ev.AllDay {
+		t.Fatal("midnight timed event was loaded as all-day")
+	}
+	if !ev.Start.Equal(start) || !ev.End.Equal(start.Add(time.Hour)) {
+		t.Fatalf("timed event range changed: %v - %v", ev.Start, ev.End)
+	}
+}
+
 func TestCreateEventWithAttendeesWritesOrganizerAndRSVP(t *testing.T) {
 	store, _, calDir := testStore(t)
 	store.config.Sources[0].Email = "organizer@example.test"
