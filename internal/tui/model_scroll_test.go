@@ -51,6 +51,36 @@ func TestEventDetailsShowRSVP(t *testing.T) {
 	}
 }
 
+func TestRecurringDeleteUsesScopeThenConfirmation(t *testing.T) {
+	m := NewModel(&config.Config{}, calendar.Dataset{}, nil)
+	state := &deleteConfirmState{kind: "event", recurring: true, stage: "scope", scope: string(calendar.DeleteRecurringOccurrence)}
+	state.form = m.buildDeleteConfirmForm(state)
+	m.deleteConfirm = state
+	_ = state.form.Init()
+
+	if got := state.form.GetFocusedField().GetKey(); got != "scope" {
+		t.Fatalf("first delete field = %q, want scope", got)
+	}
+	m.moveDeleteConfirmFocus(1)
+	if got := state.form.GetFocusedField().GetKey(); got != "scope" {
+		t.Fatalf("scope field lost focus after tab: %q", got)
+	}
+	m.moveDeleteConfirmFocus(-1)
+	if got := state.form.GetFocusedField().GetKey(); got != "scope" {
+		t.Fatalf("scope field lost focus after shift-tab: %q", got)
+	}
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(Model)
+	state = m.deleteConfirm
+	if state.stage != "confirm" {
+		t.Fatalf("delete stage = %q, want confirm", state.stage)
+	}
+	if got := state.form.GetFocusedField().GetKey(); got != "confirm" {
+		t.Fatalf("second delete field = %q, want confirm", got)
+	}
+}
+
 func TestEventRSVPUsesCalendarOwnerInsteadOfCombiningAttendees(t *testing.T) {
 	ev := calendar.Event{
 		UserRSVP: "no",

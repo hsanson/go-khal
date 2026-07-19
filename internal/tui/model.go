@@ -99,6 +99,7 @@ type deleteConfirmState struct {
 	event     *calendar.Event
 	todo      *calendar.Todo
 	recurring bool
+	stage     string
 	confirm   bool
 	scope     string
 	errMsg    string
@@ -248,6 +249,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.deleteConfirm != nil {
 			switch msg.String() {
 			case "ctrl+s", "enter":
+				if m.deleteConfirm.stage == "scope" {
+					m.deleteConfirm.stage = "confirm"
+					m.deleteConfirm.confirm = false
+					m.deleteConfirm.form = m.buildDeleteConfirmForm(m.deleteConfirm)
+					m.deleteConfirm.form.UpdateFieldPositions()
+					return m, m.deleteConfirm.form.Init()
+				}
 				if err := m.commitDeleteConfirm(); err != nil {
 					m.deleteConfirm.errMsg = err.Error()
 					return m, nil
@@ -263,11 +271,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.focusMain = true
 				return m, nil
 			case "tab":
-				m.deleteConfirm.form.UpdateFieldPositions()
-				return m, m.deleteConfirm.form.NextField()
+				return m, m.moveDeleteConfirmFocus(1)
 			case "shift+tab":
-				m.deleteConfirm.form.UpdateFieldPositions()
-				return m, m.deleteConfirm.form.PrevField()
+				return m, m.moveDeleteConfirmFocus(-1)
 			}
 			updated, cmd := m.deleteConfirm.form.Update(msg)
 			if fm, ok := updated.(*huh.Form); ok {
@@ -451,6 +457,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.updateActiveTodoEditorForm(msg)
 	}
 	return m, nil
+}
+
+func (m *Model) moveDeleteConfirmFocus(_ int) tea.Cmd {
+	if m.deleteConfirm == nil || m.deleteConfirm.form == nil {
+		return nil
+	}
+	form := m.buildDeleteConfirmForm(m.deleteConfirm)
+	m.deleteConfirm.form = form
+	form.UpdateFieldPositions()
+	return form.Init()
 }
 
 func (m Model) View() string {
@@ -3349,7 +3365,7 @@ func (m *Model) openDeleteConfirmForSelected() bool {
 	if it.IsFree {
 		return false
 	}
-	state := &deleteConfirmState{confirm: false, scope: string(calendar.DeleteRecurringOccurrence)}
+	state := &deleteConfirmState{confirm: false, scope: string(calendar.DeleteRecurringOccurrence), stage: "confirm"}
 	if it.Event != nil {
 		ev := *it.Event
 		if ev.Source == calendar.SpecialSourceBirthdays {
@@ -3358,6 +3374,9 @@ func (m *Model) openDeleteConfirmForSelected() bool {
 		state.kind = "event"
 		state.event = &ev
 		state.recurring = ev.Recurring
+		if state.recurring {
+			state.stage = "scope"
+		}
 		state.itemLabel = ev.Summary
 	} else if it.Todo != nil {
 		td := *it.Todo
@@ -3377,25 +3396,28 @@ func (m *Model) openDeleteConfirmForSelected() bool {
 }
 
 func (m *Model) buildDeleteConfirmForm(s *deleteConfirmState) *huh.Form {
-	title := "Delete " + s.kind
-	if strings.TrimSpace(s.itemLabel) != "" {
-		title += ": " + s.itemLabel
-	}
-	fields := []huh.Field{
-		huh.NewConfirm().Key("confirm").Title(title).Description("This cannot be undone").Value(&s.confirm),
-	}
-	if s.recurring {
-		fields = append(fields, huh.NewSelect[string]().
+	if s.stage == "scope" {
+		return huh.NewForm(huh.NewGroup(huh.NewSelect[string]().
 			Key("scope").
-			Title("Recurring event").
+			Title("Delete recurring event").
 			Options(
 				huh.NewOption("Only this occurrence", string(calendar.DeleteRecurringOccurrence)),
 				huh.NewOption("This and following occurrences", string(calendar.DeleteRecurringFuture)),
 				huh.NewOption("All occurrences", string(calendar.DeleteRecurringAll)),
 			).
-			Value(&s.scope))
+			Value(&s.scope)).Title("Delete")).WithShowHelp(true).WithShowErrors(true)
 	}
-	return huh.NewForm(huh.NewGroup(fields...).Title("Delete")).WithShowHelp(true).WithShowErrors(true)
+	title := "Delete " + s.kind
+	if strings.TrimSpace(s.itemLabel) != "" {
+		title += ": " + s.itemLabel
+	}
+	description := "This cannot be undone"
+	if s.recurring {
+		description = "Delete " + eventEditScopeLabel(s.scope) + ". " + description
+	}
+	return huh.NewForm(huh.NewGroup(
+		huh.NewConfirm().Key("confirm").Title(title).Description(description).Value(&s.confirm),
+	).Title("Confirm deletion")).WithShowHelp(true).WithShowErrors(true)
 }
 
 func (m *Model) commitDeleteConfirm() error {
