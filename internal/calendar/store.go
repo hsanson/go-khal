@@ -18,6 +18,8 @@ import (
 	"github.com/teambition/rrule-go"
 )
 
+const propGoKhalRSVP = "X-GO-KHAL-RSVP"
+
 type calendarSource struct {
 	sourceName string
 	calendar   Calendar
@@ -206,6 +208,7 @@ func (s *Store) loadICSFile(src calendarSource, filePath string) ([]Event, []Tod
 func (s *Store) componentsToEvents(comps []*ical.Component, src calendarSource, filePath string) []Event {
 	exdatesByUID := map[string][]time.Time{}
 	masterRecurrenceByUID := map[string]*Recurrence{}
+	masterRSVPByUID := map[string]string{}
 	rangesByUID := map[string][]*ical.Component{}
 	for _, comp := range comps {
 		uid, _ := comp.Props.Text(ical.PropUID)
@@ -214,6 +217,7 @@ func (s *Store) componentsToEvents(comps []*ical.Component, src calendarSource, 
 		}
 		recurrenceID, err := comp.Props.DateTime(ical.PropRecurrenceID, src.location)
 		if err != nil || recurrenceID.IsZero() {
+			masterRSVPByUID[uid], _ = comp.Props.Text(propGoKhalRSVP)
 			if recurrence := propsToRecurrence(comp.Props); recurrence != nil {
 				masterRecurrenceByUID[uid] = recurrence
 			}
@@ -248,6 +252,9 @@ func (s *Store) componentsToEvents(comps []*ical.Component, src calendarSource, 
 		events := s.componentToEvents(comp, src, filePath, exdatesByUID[uid], forceSingle)
 		if forceSingle {
 			for i := range events {
+				if events[i].UserRSVP == "" {
+					events[i].UserRSVP = masterRSVPByUID[uid]
+				}
 				rid := recurrenceID.In(src.location)
 				events[i].RecurrenceID = &rid
 				events[i].Recurring = true
@@ -332,6 +339,9 @@ func (s *Store) componentToEvents(comp *ical.Component, src calendarSource, file
 	organizer := propEmail(comp.Props.Get(ical.PropOrganizer))
 	attendees := propsToAttendees(comp.Props)
 	userRSVP := attendeeStatusForEmail(attendees, src.calendar.Email)
+	if userRSVP == "" {
+		userRSVP, _ = comp.Props.Text(propGoKhalRSVP)
+	}
 	availability := propsToAvailability(comp.Props)
 	visibility := propsToVisibility(comp.Props)
 	recurrence := propsToRecurrence(comp.Props)
@@ -1671,6 +1681,13 @@ func (s *Store) updateEventAll(ev Event, update EventUpdate) error {
 	base := eventBaseFromComponent(master, ev, ev.Start.Location())
 	update = eventUpdateRelativeToMaster(ev, base, update)
 	applyEventUpdateToComponent(master, base, update)
+	if update.UserRSVP != nil {
+		for _, child := range cal.Children {
+			if child != master && eventComponentHasUID(child, ev.UID) {
+				setLocalEventRSVP(child, *update.UserRSVP)
+			}
+		}
+	}
 	if update.Recurrence != nil && *update.Recurrence == nil {
 		cal.Children = removeEventOverrides(cal.Children, ev.UID)
 	}
@@ -1785,6 +1802,7 @@ func eventBaseFromComponent(comp *ical.Component, fallback Event, loc *time.Loca
 	base.Location, _ = comp.Props.Text(ical.PropLocation)
 	base.Organizer = propEmail(comp.Props.Get(ical.PropOrganizer))
 	base.Attendees = propsToAttendees(comp.Props)
+	base.UserRSVP, _ = comp.Props.Text(propGoKhalRSVP)
 	base.Availability = propsToAvailability(comp.Props)
 	base.Visibility = propsToVisibility(comp.Props)
 	base.Recurrence = propsToRecurrence(comp.Props)
@@ -1902,6 +1920,12 @@ func applyEventUpdateToComponent(comp *ical.Component, base Event, update EventU
 	}
 	setEventAttendees(comp, attendees, strings.TrimSpace(organizer) != "")
 
+	userRSVP := base.UserRSVP
+	if update.UserRSVP != nil {
+		userRSVP = *update.UserRSVP
+	}
+	setLocalEventRSVP(comp, userRSVP)
+
 	availability := base.Availability
 	if update.Availability != nil {
 		availability = *update.Availability
@@ -1948,6 +1972,13 @@ func applyEventUpdateToComponent(comp *ical.Component, base Event, update EventU
 		rec = *update.Recurrence
 	}
 	setEventRecurrence(comp, rec, nextStart)
+}
+
+func setLocalEventRSVP(comp *ical.Component, value string) {
+	comp.Props.Del(propGoKhalRSVP)
+	if strings.TrimSpace(value) != "" {
+		comp.Props.SetText(propGoKhalRSVP, strings.ToLower(strings.TrimSpace(value)))
+	}
 }
 
 func setEventAttendees(comp *ical.Component, attendees []Attendee, requestRSVP bool) {

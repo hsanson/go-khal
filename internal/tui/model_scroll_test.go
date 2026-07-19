@@ -2,6 +2,7 @@ package tui
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -37,6 +38,16 @@ func TestEventResponseDisplaysAvoidDefaultLabel(t *testing.T) {
 	}
 	if got := eventVisibilityDisplay(""); got != "calendar default" {
 		t.Fatalf("empty visibility display = %q", got)
+	}
+}
+
+func TestEventDetailsShowRSVP(t *testing.T) {
+	m := NewModel(&config.Config{}, calendar.Dataset{}, nil)
+	ev := calendar.Event{Summary: "Test2", UserRSVP: "yes"}
+
+	got := m.renderEventDetailsFor(ev, 80, 20)
+	if !strings.Contains(got, "RSVP") || !strings.Contains(got, "yes") {
+		t.Fatalf("event details do not show RSVP:\n%s", got)
 	}
 }
 
