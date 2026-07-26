@@ -51,6 +51,80 @@ func TestEventDetailsShowRSVP(t *testing.T) {
 	}
 }
 
+func TestEventDetailsDoNotShowDescription(t *testing.T) {
+	m := NewModel(&config.Config{}, calendar.Dataset{}, nil)
+	ev := calendar.Event{Summary: "Test", Description: "private notes"}
+
+	got := m.renderEventDetailsFor(ev, 80, 20)
+	if strings.Contains(got, "Description") || strings.Contains(got, "private notes") {
+		t.Fatalf("event details unexpectedly show description:\n%s", got)
+	}
+}
+
+func TestEnterOpensReadOnlyEventView(t *testing.T) {
+	now := time.Now()
+	cal := calendar.Calendar{Source: "local", Name: "personal"}
+	ev := calendar.Event{
+		UID: "event", Summary: "Event", Source: cal.Source, Calendar: cal.Name,
+		Start: now, End: now.Add(time.Hour),
+	}
+	m := NewModel(&config.Config{}, calendar.Dataset{Calendars: []calendar.Calendar{cal}, Events: []calendar.Event{ev}}, nil)
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(Model)
+	if m.eventForm == nil || m.eventForm.mode != "view" {
+		t.Fatalf("Enter did not open the read-only event view: %#v", m.eventForm)
+	}
+	for _, row := range m.eventEditorRows() {
+		if row.key == "attendees-add" || row.key == "alarms-add" {
+			t.Fatalf("read-only view contains add button %q", row.key)
+		}
+	}
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = *updated.(*Model)
+	if m.eventForm.activeForm != nil {
+		t.Fatal("Enter made a field editable in read-only view")
+	}
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+	m = *updated.(*Model)
+	if m.eventForm == nil || m.eventForm.mode != "edit" {
+		t.Fatal("e did not open the Edit Event form")
+	}
+}
+
+func TestReadOnlyTaskViewReturnsToListWithQ(t *testing.T) {
+	now := time.Now()
+	due := now.Add(time.Hour)
+	cal := calendar.Calendar{Source: "local", Name: "personal"}
+	todo := calendar.Todo{
+		UID: "task", Summary: "Task", Source: cal.Source, Calendar: cal.Name,
+		Start: &now, Due: &due,
+	}
+	m := NewTaskModeModel(&config.Config{}, calendar.Dataset{Calendars: []calendar.Calendar{cal}, Todos: []calendar.Todo{todo}}, nil)
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(Model)
+	if m.todoForm == nil || m.todoForm.mode != "view" {
+		t.Fatal("Enter did not open the read-only task view")
+	}
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+	m = *updated.(*Model)
+	if m.todoForm != nil || !m.focusMain {
+		t.Fatal("q did not return from task view to the task list")
+	}
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(Model)
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+	m = *updated.(*Model)
+	if m.todoForm == nil || m.todoForm.mode != "edit" {
+		t.Fatal("e did not open the Edit Task form")
+	}
+}
+
 func TestRecurringDeleteUsesScopeThenConfirmation(t *testing.T) {
 	m := NewModel(&config.Config{}, calendar.Dataset{}, nil)
 	state := &deleteConfirmState{kind: "event", recurring: true, stage: "scope", scope: string(calendar.DeleteRecurringOccurrence)}
