@@ -444,7 +444,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.detailScroll = 0
 		case "enter":
-			m.detailScroll = 0
+			if m.openViewForSelected() {
+				return m, nil
+			}
 		case " ":
 			m.detailScroll = 0
 		}
@@ -576,7 +578,11 @@ func (m Model) renderEventFormMainPanel(width, panelHeight int) string {
 	if strings.TrimSpace(m.eventForm.errMsg) != "" {
 		body = lipgloss.JoinVertical(lipgloss.Left, errorText("Error: "+m.eventForm.errMsg), "", body)
 	}
-	content := lipgloss.JoinVertical(lipgloss.Left, header, m.styles.Subtle.Render("[j/k] move  [enter] edit  [ctrl+s] save  [esc] cancel"), "", body)
+	help := "[j/k] move  [enter] edit  [ctrl+s] save  [esc] cancel"
+	if m.eventForm.mode == "view" {
+		help = "[j/k] move  [e] edit  [esc/q] back"
+	}
+	content := lipgloss.JoinVertical(lipgloss.Left, header, m.styles.Subtle.Render(help), "", body)
 	panel := m.styles.MainPanel.Width(width).Height(panelHeight).Render(content)
 	if m.eventForm.attendeeManager != nil {
 		modal := m.renderAttendeeManager(min(78, max(36, width-8)), max(9, min(panelHeight-4, (panelHeight*2)/3)))
@@ -605,7 +611,11 @@ func (m Model) renderTodoFormMainPanel(width, panelHeight int) string {
 	if strings.TrimSpace(m.todoForm.errMsg) != "" {
 		body = lipgloss.JoinVertical(lipgloss.Left, errorText("Error: "+m.todoForm.errMsg), "", body)
 	}
-	content := lipgloss.JoinVertical(lipgloss.Left, header, m.styles.Subtle.Render("[j/k] move  [enter] edit  [ctrl+s] save  [esc] cancel"), "", body)
+	help := "[j/k] move  [enter] edit  [ctrl+s] save  [esc] cancel"
+	if m.todoForm.mode == "view" {
+		help = "[j/k] move  [e] edit  [esc/q] back"
+	}
+	content := lipgloss.JoinVertical(lipgloss.Left, header, m.styles.Subtle.Render(help), "", body)
 	panel := m.styles.MainPanel.Width(width).Height(panelHeight).Render(content)
 	if m.todoForm.activeForm != nil {
 		formHeight := max(7, panelHeight/3)
@@ -845,12 +855,14 @@ func (m Model) eventEditorRows() []editorRow {
 		editorSeparatorRow(" Attendees"),
 		{"attendees", "Attendees", emptyDefault(s.attendees, "-")},
 		{"rsvp", "RSVP", eventRSVPDisplayValue(s.rsvp)},
-		{"attendees-add", "", ""},
 		editorSeparatorRow("󰛐 Privacy"),
 		{"availability", "Availability", eventAvailabilityDisplay(s.availability)},
 		{"visibility", "Visibility", eventVisibilityDisplay(s.visibility)},
 		editorSeparatorRow("󰥔 Time"),
 		{"all-day", "All-day", yesNo(s.allDay)},
+	}
+	if s.mode != "view" {
+		rows = append(rows[:11], append([]editorRow{{"attendees-add", "", ""}}, rows[11:]...)...)
 	}
 	if !s.allDay {
 		rows = append(rows, editorRow{"when", "When", fmt.Sprintf("%s %s - %s %s", s.fromDate, s.fromTime, s.toDate, s.toTime)})
@@ -880,8 +892,10 @@ func (m Model) eventEditorRows() []editorRow {
 	rows = append(rows,
 		editorSeparatorRow("󰀠 Notifications"),
 		editorRow{"alarms", "Notifications", emptyDefault(s.alarms, "-")},
-		editorRow{"alarms-add", "", ""},
 	)
+	if s.mode != "view" {
+		rows = append(rows, editorRow{"alarms-add", "", ""})
+	}
 	return rows
 }
 
@@ -889,7 +903,7 @@ func (m Model) eventFormAttendeeOnly() bool {
 	if m.store == nil || m.eventForm == nil || m.eventForm.targetEvent == nil {
 		return false
 	}
-	return m.store.EventUserRole(*m.eventForm.targetEvent) == calendar.EventUserRoleAttendee
+	return m.eventForm.mode == "edit" && m.store.EventUserRole(*m.eventForm.targetEvent) == calendar.EventUserRoleAttendee
 }
 
 func (m Model) todoEditorRows() []editorRow {
@@ -916,6 +930,26 @@ func (m Model) todoEditorRows() []editorRow {
 
 func (m *Model) updateEventEditor(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	s := m.eventForm
+	if s.mode == "view" {
+		switch msg.String() {
+		case "esc", "q":
+			m.eventForm = nil
+			m.focusDetails = false
+			m.focusMain = true
+		case "e":
+			view := m.eventForm
+			m.eventForm = nil
+			if m.openEventFormEditSelected() {
+				return m, m.initCurrentEventForm()
+			}
+			m.eventForm = view
+		case "j", "down", "tab":
+			s.cursor = moveEditorCursor(m.eventEditorRows(), s.cursor, 1)
+		case "k", "up", "shift+tab":
+			s.cursor = moveEditorCursor(m.eventEditorRows(), s.cursor, -1)
+		}
+		return m, nil
+	}
 	if s.attendeeManager != nil {
 		switch msg.String() {
 		case "esc", "ctrl+c", "q":
@@ -979,6 +1013,26 @@ func (m *Model) updateEventEditor(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m *Model) updateTodoEditor(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	s := m.todoForm
+	if s.mode == "view" {
+		switch msg.String() {
+		case "esc", "q":
+			m.todoForm = nil
+			m.focusDetails = false
+			m.focusMain = true
+		case "e":
+			view := m.todoForm
+			m.todoForm = nil
+			if m.openTodoFormEditSelected() {
+				return m, m.todoForm.form.Init()
+			}
+			m.todoForm = view
+		case "j", "down", "tab":
+			s.cursor = moveEditorCursor(m.todoEditorRows(), s.cursor, 1)
+		case "k", "up", "shift+tab":
+			s.cursor = moveEditorCursor(m.todoEditorRows(), s.cursor, -1)
+		}
+		return m, nil
+	}
 	if s.activeForm != nil {
 		switch msg.String() {
 		case "esc", "ctrl+c", "q":
@@ -1957,7 +2011,7 @@ func (m Model) renderEventDetailsFor(ev calendar.Event, width, height int) strin
 	if len(ev.Alarms) > 0 {
 		meta = append(meta, "", detailLine("󰀠", "Notifications", formatAlarms(ev.Alarms), width))
 	}
-	return m.renderGroupedDetails("Details", meta, ev.Description, width, height)
+	return m.renderGroupedDetails("Details", meta, "", width, height)
 }
 
 func (m Model) renderTodoDetailsFor(todo calendar.Todo, mode string, width, height int) string {
@@ -2807,6 +2861,32 @@ func (m *Model) openEditFormForSelected() bool {
 	}
 	if it.Todo != nil {
 		return m.openTodoFormEditSelected()
+	}
+	return false
+}
+
+func (m *Model) openViewForSelected() bool {
+	items := m.agendaItems()
+	if len(items) == 0 || m.eventCursor < 0 || m.eventCursor >= len(items) {
+		return false
+	}
+	it := items[m.eventCursor]
+	if it.IsFree {
+		return false
+	}
+	if it.Event != nil {
+		m.eventForm = m.newEventFormState("view", it.Event.UID, *it.Event)
+		m.focusDetails = true
+		m.focusMain = false
+		m.detailScroll = 0
+		return true
+	}
+	if it.Todo != nil {
+		m.todoForm = m.newTodoFormState("view", it.Todo.UID, *it.Todo)
+		m.focusDetails = true
+		m.focusMain = false
+		m.detailScroll = 0
+		return true
 	}
 	return false
 }
