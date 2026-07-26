@@ -34,6 +34,56 @@ func NewStore(cfg *config.Config) *Store {
 	return &Store{config: cfg}
 }
 
+// ParseEvents decodes the distinct VEVENT masters in an iCalendar stream.
+// Recurrence overrides are not returned as separate events.
+func ParseEvents(r io.Reader) ([]Event, error) {
+	dec := ical.NewDecoder(r)
+	var components []*ical.Component
+	for {
+		cal, err := dec.Decode()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return nil, fmt.Errorf("decode iCalendar data: %w", err)
+		}
+		components = append(components, cal.Children...)
+	}
+
+	masters := make([]*ical.Component, 0, len(components))
+	seen := map[string]bool{}
+	for _, comp := range components {
+		if comp == nil || comp.Name != ical.CompEvent {
+			continue
+		}
+		uid, _ := comp.Props.Text(ical.PropUID)
+		if strings.TrimSpace(uid) == "" {
+			continue
+		}
+		if comp.Props.Get(ical.PropRecurrenceID) != nil {
+			continue
+		}
+		if !seen[uid] {
+			masters = append(masters, comp)
+			seen[uid] = true
+		}
+	}
+
+	parser := NewStore(config.Default())
+	src := calendarSource{location: time.Local}
+	events := make([]Event, 0, len(masters))
+	for _, comp := range masters {
+		parsed := parser.componentToEvents(comp, src, "", nil, true)
+		if len(parsed) > 0 {
+			events = append(events, parsed[0])
+		}
+	}
+	if len(events) == 0 {
+		return nil, errors.New("iCalendar data contains no events")
+	}
+	return events, nil
+}
+
 func (s *Store) Load() (Dataset, error) {
 	if s.config == nil {
 		return Dataset{}, errors.New("missing config")
@@ -1387,7 +1437,7 @@ func (s *Store) CreateEvent(sourceName, calendarName string, e Event) error {
 	newCal.Props.SetText(ical.PropMethod, "PUBLISH")
 	newCal.Children = append(newCal.Children, comp)
 
-	filePath := filepath.Join(cal.Path, e.UID+".ics")
+	filePath := filepath.Join(cal.Path, url.PathEscape(e.UID)+".ics")
 	f, err := os.Create(filePath)
 	if err != nil {
 		return fmt.Errorf("create event file: %w", err)

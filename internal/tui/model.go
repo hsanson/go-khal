@@ -222,6 +222,27 @@ func NewTodoCreateModel(cfg *config.Config, data calendar.Dataset, store *calend
 	return m
 }
 
+func NewEventImportModel(cfg *config.Config, data calendar.Dataset, store *calendar.Store, imported calendar.Event, existing *calendar.Event) Model {
+	m := NewModel(cfg, data, store)
+	mode := "create"
+	targetUID := imported.UID
+	if existing != nil {
+		mode = "edit"
+		imported.Source = existing.Source
+		imported.Calendar = existing.Calendar
+		imported.FilePath = existing.FilePath
+	}
+	m.eventForm = m.newEventFormState(mode, targetUID, imported)
+	if existing != nil {
+		target := *existing
+		m.eventForm.targetEvent = &target
+	}
+	m.focusDetails = true
+	m.focusMain = false
+	m.eventForm.form.UpdateFieldPositions()
+	return m
+}
+
 func (m Model) Init() tea.Cmd { return nil }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -3401,6 +3422,7 @@ func (m *Model) commitEventForm() error {
 		}
 	} else {
 		ev := calendar.Event{
+			UID:          s.targetUID,
 			Summary:      s.summary,
 			Description:  s.description,
 			Location:     s.location,
