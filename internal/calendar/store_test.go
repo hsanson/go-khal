@@ -11,6 +11,38 @@ import (
 	"github.com/hsanson/go-khal/internal/config"
 )
 
+func TestParseEventsReadsMultipleVEVENTs(t *testing.T) {
+	events, err := ParseEvents(strings.NewReader(`BEGIN:VCALENDAR
+VERSION:2.0
+BEGIN:VEVENT
+UID:first@example.test
+DTSTART:20260726T090000Z
+DTEND:20260726T100000Z
+SUMMARY:First
+DESCRIPTION:Imported notes
+END:VEVENT
+BEGIN:VEVENT
+UID:second@example.test
+DTSTART;VALUE=DATE:20260727
+DTEND;VALUE=DATE:20260728
+SUMMARY:Second
+END:VEVENT
+END:VCALENDAR
+`))
+	if err != nil {
+		t.Fatalf("ParseEvents: %v", err)
+	}
+	if len(events) != 2 {
+		t.Fatalf("event count = %d, want 2", len(events))
+	}
+	if events[0].UID != "first@example.test" || events[0].Description != "Imported notes" {
+		t.Fatalf("unexpected first event: %+v", events[0])
+	}
+	if events[1].UID != "second@example.test" || !events[1].AllDay {
+		t.Fatalf("unexpected second event: %+v", events[1])
+	}
+}
+
 func TestEventMetadataRoundTrip(t *testing.T) {
 	store, _, _ := testStore(t)
 	start := time.Now().Truncate(time.Minute)

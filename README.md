@@ -108,6 +108,30 @@ go-khal agenda --birthdays 10
 go-khal agenda --max-length 80
 ```
 
+Import an iCalendar attachment non-interactively from stdin:
+
+```bash
+go-khal import < invite.ics
+go-khal import -a work < invite.ics
+```
+
+This works with NeoMutt's `<pipe-entry>go-khal import<enter>`. Use
+`<pipe-entry>go-khal import -a work<enter>` to choose the destination calendar.
+Without `-a`, new event UIDs are added to the first configured calendar.
+Existing UIDs are updated in their current calendars.
+
+Import from a mailcap entry:
+
+```mailcap
+text/calendar; go-khal import "%s"; needsterminal
+```
+
+A file containing multiple events is imported non-interactively. For a
+single-event file, go-khal opens a prefilled create form, or a prefilled edit
+form when that UID already exists. The `needsterminal` flag lets NeoMutt run
+that interactive form correctly. Do not use `copiousoutput`: it is intended
+for commands whose text output should be displayed in NeoMutt's pager.
+
 Launch the interactive calendar:
 
 ```bash
