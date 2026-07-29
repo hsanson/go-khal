@@ -312,6 +312,44 @@ func TestCreateTodoWritesUTCDateTimes(t *testing.T) {
 	}
 }
 
+func TestUpdateTodoSetsAndClearsCompletedTime(t *testing.T) {
+	store, _, _ := testStore(t)
+	completed := time.Date(2026, 7, 10, 11, 0, 0, 0, time.UTC)
+	if err := store.CreateTodo("src", "cal", Todo{
+		UID:       "todo-completed@example.test",
+		Summary:   "Completed task",
+		Status:    "COMPLETED",
+		Completed: &completed,
+	}); err != nil {
+		t.Fatalf("CreateTodo: %v", err)
+	}
+
+	var cleared *time.Time
+	if err := store.UpdateTodo("todo-completed@example.test", TodoUpdate{Completed: &cleared}); err != nil {
+		t.Fatalf("clear completed: %v", err)
+	}
+	todo, err := store.FindTodo("todo-completed@example.test")
+	if err != nil {
+		t.Fatalf("FindTodo: %v", err)
+	}
+	if todo.Completed != nil {
+		t.Fatalf("completed time was not cleared: %v", todo.Completed)
+	}
+
+	replacement := completed.Add(time.Hour)
+	replacementPtr := &replacement
+	if err := store.UpdateTodo("todo-completed@example.test", TodoUpdate{Completed: &replacementPtr}); err != nil {
+		t.Fatalf("set completed: %v", err)
+	}
+	todo, err = store.FindTodo("todo-completed@example.test")
+	if err != nil {
+		t.Fatalf("FindTodo: %v", err)
+	}
+	if todo.Completed == nil || !todo.Completed.Equal(replacement) {
+		t.Fatalf("completed time = %v, want %v", todo.Completed, replacement)
+	}
+}
+
 func TestDeleteTodoRemovesFileWithOnlyTimezoneRemaining(t *testing.T) {
 	store, _, calDir := testStore(t)
 	path := filepath.Join(calDir, "todo-delete-timezone@example.test.ics")

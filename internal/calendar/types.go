@@ -115,6 +115,7 @@ type TodoUpdate struct {
 	Location    *string
 	Status      *string
 	Priority    *int
+	Completed   **time.Time
 	Start       **time.Time
 	Due         **time.Time
 	Percent     *int
