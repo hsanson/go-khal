@@ -282,7 +282,7 @@ func runTodoEditForm(summary, description, status, startStr, dueStr *string, per
 			huh.NewInput().Title("Due").Value(dueStr),
 			huh.NewInput().Title("Percent complete").Value(&percentStr),
 		),
-	)
+	).WithKeyMap(tui.NewPreferredMultiFieldFormKeyMap())
 	if err := form.Run(); err != nil {
 		return err
 	}

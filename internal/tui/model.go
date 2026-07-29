@@ -41,6 +41,7 @@ type Model struct {
 	todoForm           *todoFormState
 	deleteConfirm      *deleteConfirmState
 	showHelpOverlay    bool
+	actionErr          string
 }
 
 const calendarKeySeparator = "\x1f"
@@ -54,6 +55,7 @@ type eventFormState struct {
 	activeKey       string
 	activeForm      *huh.Form
 	attendeeManager *attendeeManagerState
+	noNotifications bool
 	backup          *eventFormSnapshot
 	cursor          int
 	summary         string
@@ -252,67 +254,29 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 		m.scrollForSelection()
 	case tea.KeyMsg:
-		if msg.String() == "?" {
-			m.showHelpOverlay = !m.showHelpOverlay
-			return m, nil
-		}
+		key := msg.String()
 		if m.showHelpOverlay {
-			if msg.String() == "q" || msg.String() == "esc" {
+			if key == "?" || key == "q" || key == "esc" {
 				m.showHelpOverlay = false
-				return m, nil
 			}
 			return m, nil
 		}
-		if (msg.String() == "q" || msg.String() == "ctrl+c") && m.eventForm == nil && m.todoForm == nil && m.deleteConfirm == nil && !m.focusCalendarPane {
-			return m, tea.Quit
-		}
 
+		// Popups own their shortcuts and do not open application help.
 		if m.deleteConfirm != nil {
-			switch msg.String() {
-			case "ctrl+s", "enter":
-				if m.deleteConfirm.stage == "scope" {
-					m.deleteConfirm.stage = "confirm"
-					m.deleteConfirm.confirm = false
-					m.deleteConfirm.form = m.buildDeleteConfirmForm(m.deleteConfirm)
-					m.deleteConfirm.form.UpdateFieldPositions()
-					return m, m.deleteConfirm.form.Init()
-				}
-				if err := m.commitDeleteConfirm(); err != nil {
-					m.deleteConfirm.errMsg = err.Error()
-					return m, nil
-				}
-				m.deleteConfirm = nil
-				m.focusDetails = false
-				m.focusMain = true
-				m.ensureEventSelectionValid()
-				return m, nil
-			case "ctrl+c", "esc", "q":
-				m.deleteConfirm = nil
-				m.focusDetails = false
-				m.focusMain = true
-				return m, nil
-			case "tab":
-				return m, m.moveDeleteConfirmFocus(1)
-			case "shift+tab":
-				return m, m.moveDeleteConfirmFocus(-1)
-			}
-			updated, cmd := m.deleteConfirm.form.Update(msg)
-			if fm, ok := updated.(*huh.Form); ok {
-				m.deleteConfirm.form = fm
-			}
-			m.deleteConfirm.form.UpdateFieldPositions()
-			if m.deleteConfirm.form.State == huh.StateAborted {
-				m.deleteConfirm = nil
-				m.focusDetails = false
-				m.focusMain = true
-				return m, nil
-			}
-			if m.deleteConfirm.form.State == huh.StateCompleted {
-				m.deleteConfirm.form.State = huh.StateNormal
-			}
-			return m, cmd
+			return m.updateDeleteConfirm(msg)
+		}
+		if m.eventForm != nil && m.eventForm.hasActiveDialog() {
+			return m.updateEventEditor(msg)
+		}
+		if m.todoForm != nil && m.todoForm.activeForm != nil {
+			return m.updateTodoEditor(msg)
 		}
 
+		if key == "?" {
+			m.showHelpOverlay = true
+			return m, nil
+		}
 		if m.eventForm != nil {
 			return m.updateEventEditor(msg)
 		}
@@ -320,21 +284,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateTodoEditor(msg)
 		}
 
-		if msg.String() == "c" {
-			m.focusCalendarPane = true
-			m.ensureCalendarCursorVisible(m.calendarPaneHeight())
-			m.ensureEventSelectionValid()
-			return m, nil
-		}
 		if m.focusDetails {
-			switch msg.String() {
-			case "esc", "enter", " ":
+			if key == "ctrl+c" {
+				return m, tea.Quit
+			}
+			switch key {
+			case "esc", "q", "enter", " ":
 				m.focusDetails = false
 				m.focusMain = true
 				m.detailScroll = 0
 			case "e":
-				if m.openEventFormEditSelected() {
-					return m, m.initCurrentEventForm()
+				if m.openEditFormForSelected() {
+					if m.eventForm != nil {
+						return m, m.initCurrentEventForm()
+					}
+					return m, m.todoForm.form.Init()
 				}
 			case "ctrl+d":
 				if m.openDeleteConfirmForSelected() {
@@ -350,25 +314,39 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if m.focusCalendarPane {
-			switch msg.String() {
+			if key == "ctrl+c" {
+				return m, tea.Quit
+			}
+			switch key {
 			case "j", "down":
 				m.moveCalendarCursor(1)
 			case "k", "up":
 				m.moveCalendarCursor(-1)
 			case " ", "enter":
 				if len(m.calendarOrder) > 0 {
-					key := m.calendarOrder[m.calendarCursor]
-					m.calendarVisibility[key] = !m.calendarVisibility[key]
+					calendarKey := m.calendarOrder[m.calendarCursor]
+					m.calendarVisibility[calendarKey] = !m.calendarVisibility[calendarKey]
 					m.ensureEventSelectionValid()
 				}
-			case "esc", "q", "h":
+			case "esc", "q", "h", "c":
 				m.focusCalendarPane = false
 				m.focusMain = true
 			}
 			m.ensureCalendarCursorVisible(m.calendarPaneHeight())
 			return m, nil
 		}
-		switch msg.String() {
+		if key == "q" || key == "esc" || key == "ctrl+c" {
+			return m, tea.Quit
+		}
+		if key == "c" {
+			m.focusCalendarPane = true
+			m.focusMain = false
+			m.ensureCalendarCursorVisible(m.calendarPaneHeight())
+			m.ensureEventSelectionValid()
+			return m, nil
+		}
+
+		switch key {
 		case "j", "down":
 			m.moveEventCursor(1)
 		case "k", "up":
@@ -426,7 +404,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.openEventFormNew()
 			return m, m.eventForm.form.Init()
-		case "e":
+		case "e", "enter":
 			if m.openEditFormForSelected() {
 				if m.eventForm != nil {
 					return m, m.initCurrentEventForm()
@@ -444,6 +422,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.eventCursor = 0
 			m.eventListOffset = 0
 			m.ensureEventSelectionValid()
+		case "x", "d":
+			if m.showTasksMode {
+				m.actionErr = m.toggleSelectedTodoDone()
+			}
+		case "p":
+			if m.showTasksMode {
+				m.actionErr = m.cycleSelectedTodoPriority()
+			}
 		case "m":
 			if m.showTasksMode {
 				m.exitTaskMode()
@@ -455,7 +441,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.selected = now
 			m.agendaStart = dayStart(now)
 			m.weekViewportStart = calendar.StartOfWeek(now, m.weekStart())
-			m.focusMain = false
+			m.focusMain = true
 			m.focusDetails = false
 			if m.showTasksMode {
 				m.jumpTaskCursorToToday(now)
@@ -464,14 +450,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.eventListOffset = 0
 			}
 			m.detailScroll = 0
-		case "enter":
+		case "v":
 			if m.openViewForSelected() {
 				return m, nil
 			}
 		case " ":
-			m.detailScroll = 0
+			if len(m.agendaItems()) > 0 {
+				m.focusDetails = true
+				m.focusMain = false
+				m.detailScroll = 0
+			}
 		}
 		m.ensureEventSelectionValid()
+	}
+	if m.deleteConfirm != nil {
+		return m.updateDeleteConfirm(msg)
 	}
 	if m.eventForm != nil && m.eventForm.activeForm != nil {
 		return m, m.updateActiveEventEditorForm(msg)
@@ -482,14 +475,63 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m *Model) moveDeleteConfirmFocus(_ int) tea.Cmd {
-	if m.deleteConfirm == nil || m.deleteConfirm.form == nil {
-		return nil
+func (m *Model) updateDeleteConfirm(msg tea.Msg) (tea.Model, tea.Cmd) {
+	s := m.deleteConfirm
+	if s == nil {
+		return m, nil
 	}
-	form := m.buildDeleteConfirmForm(m.deleteConfirm)
-	m.deleteConfirm.form = form
-	form.UpdateFieldPositions()
-	return form.Init()
+	if key, ok := msg.(tea.KeyMsg); ok {
+		switch key.String() {
+		case "ctrl+c", "esc", "q":
+			m.closeDeleteConfirm()
+			return m, nil
+		case "ctrl+s":
+			return m.finishDeleteConfirm()
+		}
+	}
+
+	updated, cmd := s.form.Update(msg)
+	if form, ok := updated.(*huh.Form); ok {
+		s.form = form
+	}
+	s.form.UpdateFieldPositions()
+	if s.form.State == huh.StateAborted {
+		m.closeDeleteConfirm()
+		return m, nil
+	}
+	if s.form.State == huh.StateCompleted {
+		return m.finishDeleteConfirm()
+	}
+	return m, cmd
+}
+
+func (m *Model) finishDeleteConfirm() (tea.Model, tea.Cmd) {
+	s := m.deleteConfirm
+	if s == nil {
+		return m, nil
+	}
+	if s.stage == "scope" {
+		s.stage = "confirm"
+		s.confirm = false
+		s.errMsg = ""
+		s.form = m.buildDeleteConfirmForm(s).WithKeyMap(deleteConfirmFormKeyMap(s))
+		s.form.UpdateFieldPositions()
+		return m, s.form.Init()
+	}
+	if err := m.commitDeleteConfirm(); err != nil {
+		s.errMsg = err.Error()
+		s.form = m.buildDeleteConfirmForm(s).WithKeyMap(deleteConfirmFormKeyMap(s))
+		return m, s.form.Init()
+	}
+	m.closeDeleteConfirm()
+	m.ensureEventSelectionValid()
+	return m, nil
+}
+
+func (m *Model) closeDeleteConfirm() {
+	m.deleteConfirm = nil
+	m.focusDetails = false
+	m.focusMain = true
 }
 
 func (m Model) View() string {
@@ -506,8 +548,11 @@ func (m Model) View() string {
 	right := m.renderMainPanel(rightWidth)
 
 	root := lipgloss.JoinHorizontal(lipgloss.Top, left, right)
-	legend := m.styles.Subtle.Render("[q] quit  [?] shortcuts")
-	base := m.styles.Container.Render(lipgloss.JoinVertical(lipgloss.Left, legend, "", root))
+	content := root
+	if legend := m.shortcutsLegend(); legend != "" {
+		content = lipgloss.JoinVertical(lipgloss.Left, root, "", m.styles.Subtle.Render(legend))
+	}
+	base := m.styles.Container.Render(content)
 	if m.showHelpOverlay {
 		overlay := m.renderHelpOverlay(max(40, m.width*2/3), max(16, m.height*2/3))
 		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, overlay)
@@ -577,7 +622,14 @@ func (m Model) renderMainPanel(width int) string {
 		header = m.styles.PanelTitle.Render("Tasks")
 	}
 	if m.showAllMode {
-		header += m.styles.Subtle.Render(" [SHOW-ALL]")
+		if m.showTasksMode {
+			header += m.styles.Subtle.Render(" [SHOW-COMPLETED]")
+		} else {
+			header += m.styles.Subtle.Render(" [SHOW-ALL]")
+		}
+	}
+	if strings.TrimSpace(m.actionErr) != "" {
+		header = lipgloss.JoinVertical(lipgloss.Left, header, errorText("Error: "+m.actionErr))
 	}
 	separator := m.styles.Subtle.Render(strings.Repeat("-", max(10, width-2)))
 	content := lipgloss.JoinVertical(lipgloss.Left, header, "", top, separator, detail)
@@ -595,18 +647,18 @@ func (m Model) renderEventFormMainPanel(width, panelHeight int) string {
 	if label := eventEditScopeLabel(m.eventForm.editScope); m.eventForm.mode == "edit" && label != "" {
 		header = lipgloss.JoinHorizontal(lipgloss.Left, header, m.styles.Subtle.Render("  ["+label+"]"))
 	}
-	body := m.renderEventEditorList(width-2, panelHeight-4)
+	body := m.renderEventEditorList(width-2, panelHeight-2)
 	if strings.TrimSpace(m.eventForm.errMsg) != "" {
 		body = lipgloss.JoinVertical(lipgloss.Left, errorText("Error: "+m.eventForm.errMsg), "", body)
 	}
-	help := "[j/k] move  [enter] edit  [ctrl+s] save  [esc] cancel"
-	if m.eventForm.mode == "view" {
-		help = "[j/k] move  [e] edit  [esc/q] back"
-	}
-	content := lipgloss.JoinVertical(lipgloss.Left, header, m.styles.Subtle.Render(help), "", body)
+	content := lipgloss.JoinVertical(lipgloss.Left, header, "", body)
 	panel := m.styles.MainPanel.Width(width).Height(panelHeight).Render(content)
 	if m.eventForm.attendeeManager != nil {
 		modal := m.renderAttendeeManager(min(78, max(36, width-8)), max(9, min(panelHeight-4, (panelHeight*2)/3)))
+		return overlayCentered(panel, modal, width, panelHeight)
+	}
+	if m.eventForm.noNotifications {
+		modal := m.renderEmptyEditorDialog("Notifications", "No notifications", min(70, max(30, width-10)), max(7, panelHeight/3))
 		return overlayCentered(panel, modal, width, panelHeight)
 	}
 	if m.eventForm.activeForm != nil {
@@ -628,15 +680,11 @@ func (m Model) renderTodoFormMainPanel(width, panelHeight int) string {
 	if m.todoForm.mode == "edit" {
 		header = m.styles.PanelTitle.Render("Edit Task")
 	}
-	body := m.renderTodoEditorList(width-2, panelHeight-4)
+	body := m.renderTodoEditorList(width-2, panelHeight-2)
 	if strings.TrimSpace(m.todoForm.errMsg) != "" {
 		body = lipgloss.JoinVertical(lipgloss.Left, errorText("Error: "+m.todoForm.errMsg), "", body)
 	}
-	help := "[j/k] move  [enter] edit  [ctrl+s] save  [esc] cancel"
-	if m.todoForm.mode == "view" {
-		help = "[j/k] move  [e] edit  [esc/q] back"
-	}
-	content := lipgloss.JoinVertical(lipgloss.Left, header, m.styles.Subtle.Render(help), "", body)
+	content := lipgloss.JoinVertical(lipgloss.Left, header, "", body)
 	panel := m.styles.MainPanel.Width(width).Height(panelHeight).Render(content)
 	if m.todoForm.activeForm != nil {
 		formHeight := max(7, panelHeight/3)
@@ -699,20 +747,18 @@ func (m Model) renderAttendeeManager(width, height int) string {
 	width = max(28, width)
 	height = max(6, height)
 	mgr := m.eventForm.attendeeManager
-	lines := []string{
-		lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("117")).Render("Attendees"),
-		m.styles.Subtle.Render("[j/k] move  [space/o] optional  [x/d] remove  [enter] apply"),
-		"",
-	}
+	title := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("117")).Render("Attendees")
+	legend := m.styles.Subtle.Render("[j/k] Move  [space/o] Optional  [x/d] Remove  [enter] Apply  [esc/q] Cancel")
+	bodyHeight := max(1, height-2)
+	lines := make([]string, 0, bodyHeight)
 	if mgr == nil || len(mgr.attendees) == 0 {
 		lines = append(lines, m.styles.Subtle.Render("No attendees"))
 	} else {
-		available := max(1, height-len(lines)-1)
 		start := 0
-		if mgr.cursor >= available {
-			start = mgr.cursor - available + 1
+		if mgr.cursor >= bodyHeight {
+			start = mgr.cursor - bodyHeight + 1
 		}
-		end := min(len(mgr.attendees), start+available)
+		end := min(len(mgr.attendees), start+bodyHeight)
 		for i := start; i < end; i++ {
 			item := mgr.attendees[i]
 			selected := i == mgr.cursor
@@ -736,11 +782,24 @@ func (m Model) renderAttendeeManager(width, height int) string {
 			lines = append(lines, editorRowStyle(selected, width).Render(line))
 		}
 	}
+	body := lipgloss.NewStyle().Width(width).Height(bodyHeight).MaxHeight(bodyHeight).Render(strings.Join(lines, "\n"))
 	return lipgloss.NewStyle().
 		Width(width).
 		Height(height).
 		MaxHeight(height).
-		Render(strings.Join(lines, "\n"))
+		Render(lipgloss.JoinVertical(lipgloss.Left, title, body, legend))
+}
+
+func (m Model) renderEmptyEditorDialog(title, message string, width, height int) string {
+	width = max(28, width)
+	height = max(5, height)
+	header := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("117")).Render(title)
+	legend := m.styles.Subtle.Render("[enter/esc/q] Close")
+	bodyHeight := max(1, height-2)
+	body := lipgloss.NewStyle().Width(width).Height(bodyHeight).MaxHeight(bodyHeight).Render(m.styles.Subtle.Render(message))
+	return lipgloss.NewStyle().Width(width).Height(height).MaxHeight(height).Render(
+		lipgloss.JoinVertical(lipgloss.Left, header, body, legend),
+	)
 }
 
 func (m Model) renderEventEditorList(width, height int) string {
@@ -971,6 +1030,15 @@ func (m *Model) updateEventEditor(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	}
+	if s.noNotifications {
+		switch msg.String() {
+		case "enter", "esc", "ctrl+c", "q":
+			s.noNotifications = false
+			s.activeKey = ""
+			s.backup = nil
+		}
+		return m, nil
+	}
 	if s.attendeeManager != nil {
 		switch msg.String() {
 		case "esc", "ctrl+c", "q":
@@ -996,14 +1064,9 @@ func (m *Model) updateEventEditor(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	if s.activeForm != nil {
 		switch msg.String() {
-		case "esc", "ctrl+c", "q":
+		case "esc", "ctrl+c":
 			s.cancelActive()
 			return m, nil
-		case "enter":
-			if activeFormFiltering(s.activeForm) {
-				return m, m.updateActiveEventEditorForm(msg)
-			}
-			return m, m.submitActiveEventForm()
 		}
 		return m, m.updateActiveEventEditorForm(msg)
 	}
@@ -1056,14 +1119,9 @@ func (m *Model) updateTodoEditor(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	if s.activeForm != nil {
 		switch msg.String() {
-		case "esc", "ctrl+c", "q":
+		case "esc", "ctrl+c":
 			s.cancelActive()
 			return m, nil
-		case "enter":
-			if activeFormFiltering(s.activeForm) {
-				return m, m.updateActiveTodoEditorForm(msg)
-			}
-			return m, m.submitActiveTodoForm()
 		}
 		return m, m.updateActiveTodoEditorForm(msg)
 	}
@@ -1105,8 +1163,13 @@ func (m *Model) openEventEditorForm() tea.Cmd {
 	}
 	s.activeKey = key
 	s.backup = s.snapshot()
+	s.errMsg = ""
 	if key == "attendees" {
 		s.attendeeManager = newAttendeeManager(parseAttendeesInput(s.attendees))
+		return nil
+	}
+	if key == "alarms" && len(splitListInput(s.alarms)) == 0 {
+		s.noNotifications = true
 		return nil
 	}
 	s.activeForm = m.buildEventEditorForm(key)
@@ -1115,6 +1178,7 @@ func (m *Model) openEventEditorForm() tea.Cmd {
 		s.backup = nil
 		return nil
 	}
+	s.activeForm.WithKeyMap(eventEditorFormKeyMap(key))
 	return s.activeForm.Init()
 }
 
@@ -1124,11 +1188,13 @@ func (m *Model) openEventEditScopeForm() tea.Cmd {
 		return nil
 	}
 	s.activeKey = "edit-scope"
+	s.errMsg = ""
 	s.activeForm = m.buildEventEditorForm("edit-scope")
 	if s.activeForm == nil {
 		s.activeKey = ""
 		return nil
 	}
+	s.activeForm.WithKeyMap(NewPreferredFormKeyMap())
 	return s.activeForm.Init()
 }
 
@@ -1148,35 +1214,19 @@ func (m *Model) updateActiveEventEditorForm(msg tea.Msg) tea.Cmd {
 	if s.activeForm.State == huh.StateCompleted {
 		if err := m.applyEventEditorForm(); err != nil {
 			s.errMsg = err.Error()
-		} else {
-			s.errMsg = ""
+			s.activeForm = m.buildEventEditorForm(s.activeKey)
+			if s.activeForm == nil {
+				return nil
+			}
+			s.activeForm.WithKeyMap(eventEditorFormKeyMap(s.activeKey))
+			return s.activeForm.Init()
 		}
+		s.errMsg = ""
 		s.activeForm = nil
 		s.activeKey = ""
 		s.backup = nil
 		return nil
 	}
-	return cmd
-}
-
-func (m *Model) submitActiveEventForm() tea.Cmd {
-	s := m.eventForm
-	if s == nil || s.activeForm == nil {
-		return nil
-	}
-	cmd := s.activeForm.NextGroup()
-	if s.activeForm.State != huh.StateCompleted {
-		return cmd
-	}
-	if err := m.applyEventEditorForm(); err != nil {
-		s.errMsg = err.Error()
-		s.activeForm.State = huh.StateNormal
-		return cmd
-	}
-	s.errMsg = ""
-	s.activeForm = nil
-	s.activeKey = ""
-	s.backup = nil
 	return cmd
 }
 
@@ -1352,12 +1402,14 @@ func (m *Model) openTodoEditorForm() tea.Cmd {
 	}
 	s.activeKey = key
 	s.backup = s.snapshot()
+	s.errMsg = ""
 	s.activeForm = m.buildTodoEditorForm(key)
 	if s.activeForm == nil {
 		s.activeKey = ""
 		s.backup = nil
 		return nil
 	}
+	s.activeForm.WithKeyMap(todoEditorFormKeyMap(key))
 	return s.activeForm.Init()
 }
 
@@ -1377,35 +1429,19 @@ func (m *Model) updateActiveTodoEditorForm(msg tea.Msg) tea.Cmd {
 	if s.activeForm.State == huh.StateCompleted {
 		if err := m.applyTodoEditorForm(); err != nil {
 			s.errMsg = err.Error()
-		} else {
-			s.errMsg = ""
+			s.activeForm = m.buildTodoEditorForm(s.activeKey)
+			if s.activeForm == nil {
+				return nil
+			}
+			s.activeForm.WithKeyMap(todoEditorFormKeyMap(s.activeKey))
+			return s.activeForm.Init()
 		}
+		s.errMsg = ""
 		s.activeForm = nil
 		s.activeKey = ""
 		s.backup = nil
 		return nil
 	}
-	return cmd
-}
-
-func (m *Model) submitActiveTodoForm() tea.Cmd {
-	s := m.todoForm
-	if s == nil || s.activeForm == nil {
-		return nil
-	}
-	cmd := s.activeForm.NextGroup()
-	if s.activeForm.State != huh.StateCompleted {
-		return cmd
-	}
-	if err := m.applyTodoEditorForm(); err != nil {
-		s.errMsg = err.Error()
-		s.activeForm.State = huh.StateNormal
-		return cmd
-	}
-	s.errMsg = ""
-	s.activeForm = nil
-	s.activeKey = ""
-	s.backup = nil
 	return cmd
 }
 
@@ -1524,9 +1560,6 @@ func selectedOptions(values []string) []huh.Option[string] {
 	for _, value := range values {
 		out = append(out, huh.NewOption(value, value).Selected(true))
 	}
-	if len(out) == 0 {
-		out = append(out, huh.NewOption("None", ""))
-	}
 	return out
 }
 
@@ -1607,8 +1640,10 @@ func (s *eventFormState) cancelActive() {
 	}
 	s.activeForm = nil
 	s.attendeeManager = nil
+	s.noNotifications = false
 	s.activeKey = ""
 	s.backup = nil
+	s.errMsg = ""
 }
 
 func (s *todoFormState) snapshot() *todoFormSnapshot {
@@ -1648,6 +1683,7 @@ func (s *todoFormState) cancelActive() {
 	s.activeForm = nil
 	s.activeKey = ""
 	s.backup = nil
+	s.errMsg = ""
 }
 
 func (m Model) calendarDisplayName(key string) string {
@@ -1745,18 +1781,6 @@ func activeFormValue(form *huh.Form) any {
 		return nil
 	}
 	return field.GetValue()
-}
-
-func activeFormFiltering(form *huh.Form) bool {
-	if form == nil {
-		return false
-	}
-	field := form.GetFocusedField()
-	if field == nil {
-		return false
-	}
-	filtering, ok := field.(interface{ GetFiltering() bool })
-	return ok && filtering.GetFiltering()
 }
 
 func editorSeparatorRow(label string) editorRow {
@@ -1891,8 +1915,94 @@ func editorRowStyle(selected bool, width int) lipgloss.Style {
 	return style
 }
 
-func attendeeMultiSelectKeyMap() *huh.KeyMap {
+// NewPreferredFormKeyMap uses j/k-first navigation labels and ctrl-enter text shortcuts.
+func NewPreferredFormKeyMap() *huh.KeyMap {
 	keymap := huh.NewDefaultKeyMap()
+	keymap.Select.Up.SetHelp("k", "previous")
+	keymap.Select.Down.SetHelp("j", "next")
+	keymap.MultiSelect.Up.SetHelp("k", "previous")
+	keymap.MultiSelect.Down.SetHelp("j", "next")
+	keymap.FilePicker.Up.SetHelp("k", "previous")
+	keymap.FilePicker.Down.SetHelp("j", "next")
+	keymap.Confirm.Toggle.SetKeys("j", "k", "h", "l", "left", "right")
+	keymap.Confirm.Toggle.SetHelp("j/k", "toggle")
+	keymap.Text.NewLine.SetKeys("ctrl+enter", "ctrl+j")
+	keymap.Text.NewLine.SetHelp("ctrl+enter / ctrl+j", "new line")
+	return keymap
+}
+
+// NewPreferredMultiFieldFormKeyMap uses ctrl+j/ctrl+k for field navigation.
+// Enter still advances and submits only from the final field.
+func NewPreferredMultiFieldFormKeyMap() *huh.KeyMap {
+	keymap := NewPreferredFormKeyMap()
+
+	keymap.Input.Next.SetKeys("enter", "tab", "ctrl+j")
+	keymap.Input.Next.SetHelp("ctrl+j", "next")
+	keymap.Input.Prev.SetKeys("shift+tab", "ctrl+k")
+	keymap.Input.Prev.SetHelp("ctrl+k", "previous")
+
+	keymap.Text.Next.SetKeys("enter", "tab", "ctrl+j")
+	keymap.Text.Next.SetHelp("ctrl+j", "next")
+	keymap.Text.Prev.SetKeys("shift+tab", "ctrl+k")
+	keymap.Text.Prev.SetHelp("ctrl+k", "previous")
+	keymap.Text.NewLine.SetKeys("ctrl+enter")
+	keymap.Text.NewLine.SetHelp("ctrl+enter", "new line")
+
+	keymap.Select.Next.SetKeys("enter", "tab", "ctrl+j")
+	keymap.Select.Next.SetHelp("ctrl+j", "next")
+	keymap.Select.Prev.SetKeys("shift+tab", "ctrl+k")
+	keymap.Select.Prev.SetHelp("ctrl+k", "previous")
+	keymap.Select.Up.SetKeys("up", "k", "ctrl+p")
+	keymap.Select.Down.SetKeys("down", "j", "ctrl+n")
+
+	keymap.MultiSelect.Next.SetKeys("enter", "tab", "ctrl+j")
+	keymap.MultiSelect.Next.SetHelp("ctrl+j", "next")
+	keymap.MultiSelect.Prev.SetKeys("shift+tab", "ctrl+k")
+	keymap.MultiSelect.Prev.SetHelp("ctrl+k", "previous")
+
+	keymap.Confirm.Next.SetKeys("enter", "tab", "ctrl+j")
+	keymap.Confirm.Next.SetHelp("ctrl+j", "next")
+	keymap.Confirm.Prev.SetKeys("shift+tab", "ctrl+k")
+	keymap.Confirm.Prev.SetHelp("ctrl+k", "previous")
+
+	keymap.Note.Next.SetKeys("enter", "tab", "ctrl+j")
+	keymap.Note.Next.SetHelp("ctrl+j", "next")
+	keymap.Note.Prev.SetKeys("shift+tab", "ctrl+k")
+	keymap.Note.Prev.SetHelp("ctrl+k", "previous")
+
+	keymap.FilePicker.Next.SetKeys("tab", "ctrl+j")
+	keymap.FilePicker.Next.SetHelp("ctrl+j", "next")
+	keymap.FilePicker.Prev.SetKeys("shift+tab", "ctrl+k")
+	keymap.FilePicker.Prev.SetHelp("ctrl+k", "previous")
+	keymap.FilePicker.Up.SetKeys("up", "k", "ctrl+p")
+	keymap.FilePicker.Down.SetKeys("down", "j", "ctrl+n")
+
+	return keymap
+}
+
+func eventEditorFormKeyMap(key string) *huh.KeyMap {
+	if key == "when" {
+		return NewPreferredMultiFieldFormKeyMap()
+	}
+	if key == "attendees-add" {
+		return attendeeMultiSelectKeyMap()
+	}
+	return NewPreferredFormKeyMap()
+}
+
+func todoEditorFormKeyMap(key string) *huh.KeyMap {
+	if key == "start" || key == "due" {
+		return NewPreferredMultiFieldFormKeyMap()
+	}
+	return NewPreferredFormKeyMap()
+}
+
+func deleteConfirmFormKeyMap(_ *deleteConfirmState) *huh.KeyMap {
+	return NewPreferredFormKeyMap()
+}
+
+func attendeeMultiSelectKeyMap() *huh.KeyMap {
+	keymap := NewPreferredFormKeyMap()
 	keymap.MultiSelect.SelectAll.Unbind()
 	keymap.MultiSelect.SelectNone.Unbind()
 	keymap.MultiSelect.SetFilter.SetKeys("enter")
@@ -1919,6 +2029,10 @@ func mergeListInput(existing string, added []string) string {
 		out = append(out, v)
 	}
 	return strings.Join(out, "; ")
+}
+
+func (s *eventFormState) hasActiveDialog() bool {
+	return s != nil && (s.activeForm != nil || s.attendeeManager != nil || s.noNotifications)
 }
 
 func newAttendeeManager(attendees []calendar.Attendee) *attendeeManagerState {
@@ -2533,69 +2647,144 @@ func (m *Model) ensureCalendarCursorVisible(height int) {
 	}
 }
 
-func (m Model) renderHelpOverlay(width, height int) string {
-	if width < 78 {
-		width = 78
+func (m Model) shortcutsLegend() string {
+	if m.deleteConfirm != nil || (m.eventForm != nil && m.eventForm.hasActiveDialog()) || (m.todoForm != nil && m.todoForm.activeForm != nil) {
+		return ""
 	}
-	if height < 22 {
-		height = 22
+	if (m.eventForm != nil && m.eventForm.mode == "view") || (m.todoForm != nil && m.todoForm.mode == "view") {
+		return "[esc/q] Back  [j/k] Next / Previous  [e] Edit  [?] Help"
 	}
-	title := m.styles.Title.Render("Shortcuts")
-	left := []string{
-		"q, ctrl+c   Quit",
-		"?           Toggle help",
-		"",
-		"Agenda:",
-		"j/k, ↑/↓    Next / previous item",
+	if m.eventForm != nil || m.todoForm != nil {
+		return "[esc/q] Cancel  [ctrl+s] Save  [j/k] Next / Prev  [enter] Edit  [?] Help"
+	}
+	if m.focusCalendarPane {
+		return "[esc/q] Back  [j/k] Next / Previous  [enter/spc] Hide/Show  [?] Help"
+	}
+	if m.focusDetails {
+		return "[esc/q] Back  [j/k] Scroll  [enter/spc] Back  [e] Edit  [ctrl-d] Delete  [?] Help"
+	}
+	if m.showTasksMode {
+		return "[esc/q] Exit  [j/k] Next / Previous  [enter] Open  [n] New  [x] Done/Undone  [p] Priority  [f] Show/hide completed  [?] Help"
+	}
+	return "[esc/q] Exit  [j/k] Next / Previous  [t] Today  [enter] Open  [n] New  [m] Tasks  [ctrl-d] Delete  [c] Calendars  [?] Help"
+}
+
+func (m Model) helpLines() []string {
+	if (m.eventForm != nil && m.eventForm.mode == "view") || (m.todoForm != nil && m.todoForm.mode == "view") {
+		return []string{
+			"esc, q      Back to list",
+			"j/k         Next / previous field",
+			"↑/↓         Next / previous field",
+			"tab         Next field",
+			"shift+tab   Previous field",
+			"e           Edit item",
+			"?           Toggle help",
+		}
+	}
+	if m.eventForm != nil || m.todoForm != nil {
+		return []string{
+			"esc, q      Cancel editor",
+			"ctrl+c      Cancel editor",
+			"ctrl+s      Save",
+			"j/k         Next / previous field",
+			"↑/↓         Next / previous field",
+			"tab         Next field",
+			"shift+tab   Previous field",
+			"enter       Edit selected field",
+			"?           Toggle help",
+		}
+	}
+	if m.focusCalendarPane {
+		back := "events"
+		if m.showTasksMode {
+			back = "tasks"
+		}
+		return []string{
+			"esc, q      Back to " + back,
+			"ctrl+c      Exit",
+			"j/k         Next / previous calendar",
+			"↑/↓         Next / previous calendar",
+			"enter, spc  Hide/show calendar",
+			"c, h        Back to " + back,
+			"?           Toggle help",
+		}
+	}
+	if m.focusDetails {
+		return []string{
+			"esc, q      Back to list",
+			"ctrl+c      Exit",
+			"j/k         Scroll down/up",
+			"↑/↓         Scroll down/up",
+			"enter, spc  Back to list",
+			"e           Edit selected item",
+			"ctrl+d      Delete selected item",
+			"?           Toggle help",
+		}
+	}
+	if m.showTasksMode {
+		return []string{
+			"esc, q      Exit",
+			"ctrl+c      Exit",
+			"j/k         Next / previous task",
+			"↑/↓         Next / previous task",
+			"ctrl+f/b    Page down / page up",
+			"t           Jump to today",
+			"enter, e    Open task editor",
+			"v           Open read-only details",
+			"n           New task",
+			"x, d        Toggle done status",
+			"p           Cycle task priority",
+			"f           Show/hide completed",
+			"m           Open events",
+			"ctrl+d      Delete selected task",
+			"c           Open calendars pane",
+			"spc         Focus details",
+			"ctrl+j/k    Scroll details down/up",
+			"?           Toggle help",
+		}
+	}
+	return []string{
+		"esc, q      Exit",
+		"ctrl+c      Exit",
+		"j/k         Next / previous event",
+		"↑/↓         Next / previous event",
 		"ctrl+f/b    Page down / page up",
-		"h/l, ←/→    Previous / next day",
+		"h/l         Previous / next day",
+		"←/→         Previous / next day",
 		"ctrl+h/l    Previous / next week",
 		"t           Today",
-		"enter, spc  Focus / unfocus details",
+		"enter, e    Open event editor",
+		"v           Open read-only details",
+		"n           New event",
+		"m           Open tasks",
+		"ctrl+d      Delete selected event",
+		"c           Open calendars pane",
+		"f           Show/hide free and declined",
+		"spc         Focus details",
 		"ctrl+j/k    Scroll details down/up",
-		"f           Toggle show-all free/declined",
-		"m           Toggle task mode",
-		"c           Open calendars toggle pane",
-		"n           New event / task",
-		"e           Edit selected item",
-		"ctrl+d      Delete selected item",
-		"",
-		"Task mode:",
-		"j/k, ↑/↓    Move within task list",
-		"ctrl+f/b    Page within task list",
-		"f           Toggle completed tasks",
-		"t           Jump to current date",
-		"",
-		"Calendar pane:",
-		"j/k, ↑/↓    Move calendar cursor",
-		"enter, spc  Toggle calendar visibility",
-		"h, esc      Close calendar pane",
+		"?           Toggle help",
 	}
-	right := []string{
-		"Event / task editor:",
-		"j/k, tab    Move between items",
-		"enter       Edit selected item / submit popup",
-		"ctrl+s      Save item",
-		"esc, q      Cancel editor or popup",
-		"ctrl+c      Cancel popup/editor",
-		"ctrl+e      Open $EDITOR in description popup",
-		"/           Filter attendee picker",
-		"space, x    Toggle multiselect choice",
-		"",
-		"Delete confirm:",
-		"enter       Confirm selected delete action",
-		"esc, q      Cancel delete",
+}
+
+func (m Model) renderHelpOverlay(width, height int) string {
+	if width < 58 {
+		width = 58
 	}
-	columnWidth := (width - 8) / 2
-	body := lipgloss.JoinHorizontal(
-		lipgloss.Top,
-		lipgloss.NewStyle().Width(columnWidth).Render(strings.Join(left, "\n")),
-		lipgloss.NewStyle().Width(4).Render(""),
-		lipgloss.NewStyle().Width(columnWidth).Render(strings.Join(right, "\n")),
-	)
+	lines := m.helpLines()
+	minimumHeight := len(lines) + 4
+	if height < minimumHeight {
+		height = minimumHeight
+	}
+	title := m.styles.Title.Render("Shortcuts")
+	body := lipgloss.NewStyle().Width(width - 4).Render(strings.Join(lines, "\n"))
 	content := lipgloss.JoinVertical(lipgloss.Left, title, "", body)
-	box := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("245")).Padding(1, 2).Width(width).Height(height).Render(content)
-	return box
+	return lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("245")).
+		Padding(1, 2).
+		Width(width).
+		Height(height).
+		Render(content)
 }
 
 func (m Model) calendarPaneHeight() int {
@@ -2741,6 +2930,96 @@ func (m *Model) jumpTaskCursorToToday(now time.Time) {
 	}
 	m.eventCursor = target
 	m.ensureEventCursorVisible()
+}
+
+func (m *Model) selectedTodo() (calendar.Todo, bool) {
+	if !m.showTasksMode {
+		return calendar.Todo{}, false
+	}
+	items := m.agendaItems()
+	if len(items) == 0 || m.eventCursor < 0 || m.eventCursor >= len(items) || items[m.eventCursor].Todo == nil {
+		return calendar.Todo{}, false
+	}
+	return *items[m.eventCursor].Todo, true
+}
+
+func (m *Model) toggleSelectedTodoDone() string {
+	todo, ok := m.selectedTodo()
+	if !ok {
+		return ""
+	}
+	status := "COMPLETED"
+	percent := 100
+	var completed *time.Time
+	if isTodoDone(todo) {
+		status = "NEEDS-ACTION"
+		percent = 0
+	} else {
+		now := time.Now()
+		completed = &now
+	}
+	return m.updateSelectedTodo(todo.UID, calendar.TodoUpdate{
+		Status:    &status,
+		Percent:   &percent,
+		Completed: &completed,
+	})
+}
+
+func (m *Model) cycleSelectedTodoPriority() string {
+	todo, ok := m.selectedTodo()
+	if !ok {
+		return ""
+	}
+	priority := 1
+	switch todoPriorityLabel(todo.Priority) {
+	case "high":
+		priority = 5
+	case "mid":
+		priority = 9
+	}
+	return m.updateSelectedTodo(todo.UID, calendar.TodoUpdate{Priority: &priority})
+}
+
+func (m *Model) updateSelectedTodo(uid string, update calendar.TodoUpdate) string {
+	if m.store != nil {
+		if err := m.store.UpdateTodo(uid, update); err != nil {
+			return err.Error()
+		}
+		data, err := m.store.Load()
+		if err != nil {
+			return err.Error()
+		}
+		m.data = data
+	} else {
+		for i := range m.data.Todos {
+			if m.data.Todos[i].UID != uid {
+				continue
+			}
+			if update.Status != nil {
+				m.data.Todos[i].Status = *update.Status
+			}
+			if update.Priority != nil {
+				m.data.Todos[i].Priority = *update.Priority
+			}
+			if update.Percent != nil {
+				m.data.Todos[i].Percent = *update.Percent
+			}
+			if update.Completed != nil {
+				m.data.Todos[i].Completed = *update.Completed
+			}
+			break
+		}
+	}
+
+	m.ensureEventSelectionValid()
+	for i, item := range m.agendaItems() {
+		if item.Todo != nil && item.Todo.UID == uid {
+			m.eventCursor = i
+			m.ensureEventCursorVisible()
+			break
+		}
+	}
+	return ""
 }
 
 func (m *Model) openEventFormNew() {
@@ -3088,8 +3367,13 @@ func (m *Model) commitTodoForm() error {
 		return err
 	}
 	status := "NEEDS-ACTION"
+	percent := 0
+	var completed *time.Time
 	if s.completed {
 		status = "COMPLETED"
+		percent = 100
+		now := time.Now()
+		completed = &now
 	}
 	priority := todoPriorityFromLabel(s.priorityLabel)
 
@@ -3102,6 +3386,8 @@ func (m *Model) commitTodoForm() error {
 			Location:    &s.location,
 			Status:      &status,
 			Priority:    &priority,
+			Completed:   &completed,
+			Percent:     &percent,
 			Start:       &startUpdate,
 			Due:         &dueUpdate,
 		}
@@ -3120,6 +3406,8 @@ func (m *Model) commitTodoForm() error {
 			Location:    s.location,
 			Status:      status,
 			Priority:    priority,
+			Completed:   completed,
+			Percent:     percent,
 			Start:       startPtr,
 			Due:         duePtr,
 		}
@@ -3488,7 +3776,7 @@ func (m *Model) openDeleteConfirmForSelected() bool {
 	} else {
 		return false
 	}
-	state.form = m.buildDeleteConfirmForm(state)
+	state.form = m.buildDeleteConfirmForm(state).WithKeyMap(deleteConfirmFormKeyMap(state))
 	m.deleteConfirm = state
 	m.focusDetails = true
 	m.focusMain = false
