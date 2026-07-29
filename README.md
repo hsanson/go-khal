@@ -138,23 +138,21 @@ Launch the interactive calendar:
 go-khal
 ```
 
-Keyboard shortcuts:
+Common agenda shortcuts appear in the bottom legend:
 
-- `?`: toggle shortcut help
-- `q`, `ctrl+c`: quit
-- `j/k`, `up/down`: move through agenda items
-- `ctrl+f`, `ctrl+b`: page down/up through agenda items
-- `h/l`, `left/right`: previous/next day
-- `ctrl+h`, `ctrl+l`: previous/next week
+- `esc`, `q`: exit
+- `j/k`: select next/previous event
 - `t`: jump to today
-- `enter`, `space`: focus/unfocus details
-- `ctrl+j`, `ctrl+k`: scroll details down/up
-- `f`: toggle show-all mode with free slots and declined events in agenda mode; completed tasks in task mode
-- `m`: toggle task mode
+- `enter`: open the selected event editor
+- `n`: create an event
+- `m`: open task mode
+- `ctrl+d`: delete the selected event
 - `c`: open the calendar visibility pane
-- `n`: create a new event, or a new task when task mode is active
-- `e`: edit the selected event or task
-- `ctrl+d`: delete the selected event or task
+- `?`: show all shortcuts for the focused view
+
+Task mode adds `x` or `d` to toggle done status, `p` to cycle priority, and `f` to show/hide completed tasks. Press `v` on an event or task to open its read-only details. Calendar pane uses `j/k` to navigate, `enter` or `space` to hide/show a calendar, and `esc`, `q`, `c`, or `h` to return to the item list.
+
+Arrow keys remain supported. Less common navigation, paging, detail-pane, and alternate-key shortcuts appear in contextual shortcut help only.
 
 Open directly in task mode:
 
@@ -228,7 +226,7 @@ Recurring RSVP edits preserve the organizer's series: editing one occurrence cre
 
 Task editing supports title, calendar, description, location, start/due times, completion, and priority.
 
-In description popups, `ctrl+e` opens `$EDITOR`/`$VISUAL` for larger edits. In multiselect popups, `space` or `x` toggles selections. Attendee add/search supports `/` filtering and `enter` applies the filter.
+In multi-field popups, use `ctrl+j` / `ctrl+k` for next/previous field; `tab` / `shift+tab` remain supported. `enter` advances to the next field and submits only from the final field. In single-field description popups, `ctrl+enter` or `ctrl+j` inserts a newline, and `ctrl+e` opens `$EDITOR`/`$VISUAL` for larger edits. In multiselect popups, `space` or `x` toggles selections. Attendee add/search supports `/` filtering and `enter` applies the filter.
 
 ## Notes
 

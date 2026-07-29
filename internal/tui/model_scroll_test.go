@@ -7,6 +7,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/huh"
 	"github.com/hsanson/go-khal/internal/calendar"
 	"github.com/hsanson/go-khal/internal/config"
 )
@@ -61,7 +62,7 @@ func TestEventDetailsDoNotShowDescription(t *testing.T) {
 	}
 }
 
-func TestEnterOpensReadOnlyEventView(t *testing.T) {
+func TestVOpensReadOnlyEventView(t *testing.T) {
 	now := time.Now()
 	cal := calendar.Calendar{Source: "local", Name: "personal"}
 	ev := calendar.Event{
@@ -70,10 +71,10 @@ func TestEnterOpensReadOnlyEventView(t *testing.T) {
 	}
 	m := NewModel(&config.Config{}, calendar.Dataset{Calendars: []calendar.Calendar{cal}, Events: []calendar.Event{ev}}, nil)
 
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'v'}})
 	m = updated.(Model)
 	if m.eventForm == nil || m.eventForm.mode != "view" {
-		t.Fatalf("Enter did not open the read-only event view: %#v", m.eventForm)
+		t.Fatalf("v did not open the read-only event view: %#v", m.eventForm)
 	}
 	for _, row := range m.eventEditorRows() {
 		if row.key == "attendees-add" || row.key == "alarms-add" {
@@ -104,10 +105,10 @@ func TestReadOnlyTaskViewReturnsToListWithQ(t *testing.T) {
 	}
 	m := NewTaskModeModel(&config.Config{}, calendar.Dataset{Calendars: []calendar.Calendar{cal}, Todos: []calendar.Todo{todo}}, nil)
 
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'v'}})
 	m = updated.(Model)
 	if m.todoForm == nil || m.todoForm.mode != "view" {
-		t.Fatal("Enter did not open the read-only task view")
+		t.Fatal("v did not open the read-only task view")
 	}
 
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
@@ -116,7 +117,7 @@ func TestReadOnlyTaskViewReturnsToListWithQ(t *testing.T) {
 		t.Fatal("q did not return from task view to the task list")
 	}
 
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'v'}})
 	m = updated.(Model)
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
 	m = *updated.(*Model)
@@ -128,24 +129,17 @@ func TestReadOnlyTaskViewReturnsToListWithQ(t *testing.T) {
 func TestRecurringDeleteUsesScopeThenConfirmation(t *testing.T) {
 	m := NewModel(&config.Config{}, calendar.Dataset{}, nil)
 	state := &deleteConfirmState{kind: "event", recurring: true, stage: "scope", scope: string(calendar.DeleteRecurringOccurrence)}
-	state.form = m.buildDeleteConfirmForm(state)
+	state.form = m.buildDeleteConfirmForm(state).WithKeyMap(deleteConfirmFormKeyMap(state))
 	m.deleteConfirm = state
 	_ = state.form.Init()
 
 	if got := state.form.GetFocusedField().GetKey(); got != "scope" {
 		t.Fatalf("first delete field = %q, want scope", got)
 	}
-	m.moveDeleteConfirmFocus(1)
-	if got := state.form.GetFocusedField().GetKey(); got != "scope" {
-		t.Fatalf("scope field lost focus after tab: %q", got)
-	}
-	m.moveDeleteConfirmFocus(-1)
-	if got := state.form.GetFocusedField().GetKey(); got != "scope" {
-		t.Fatalf("scope field lost focus after shift-tab: %q", got)
-	}
 
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	m = updated.(Model)
+	var model tea.Model = &m
+	model = updateModelAndRunHuhNavigation(model, tea.KeyMsg{Type: tea.KeyEnter})
+	m = *modelValue(t, model)
 	state = m.deleteConfirm
 	if state.stage != "confirm" {
 		t.Fatalf("delete stage = %q, want confirm", state.stage)
@@ -510,5 +504,344 @@ func TestCalendarPaneQAndEscReturnToMainList(t *testing.T) {
 		if !next.focusMain {
 			t.Fatalf("%s should return focus to main list", key)
 		}
+	}
+}
+func TestEnterOpensSelectedEventEditor(t *testing.T) {
+	now := time.Now()
+	cal := calendar.Calendar{Source: "src", Name: "cal"}
+	event := calendar.Event{UID: "event", Summary: "Event", Source: "src", Calendar: "cal", Start: now.Add(time.Hour), End: now.Add(2 * time.Hour)}
+	m := NewModel(&config.Config{SidebarWidth: 30}, calendar.Dataset{Calendars: []calendar.Calendar{cal}, Events: []calendar.Event{event}}, nil)
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if updated.(Model).eventForm == nil || updated.(Model).eventForm.mode != "edit" {
+		t.Fatal("enter should open selected event editor")
+	}
+}
+
+func TestEnterOpensSelectedTaskEditor(t *testing.T) {
+	now := time.Now()
+	cal := calendar.Calendar{Source: "src", Name: "cal"}
+	todo := calendar.Todo{UID: "task", Summary: "Task", Source: "src", Calendar: "cal", Due: &now}
+	m := NewTaskModeModel(&config.Config{SidebarWidth: 30}, calendar.Dataset{Calendars: []calendar.Calendar{cal}, Todos: []calendar.Todo{todo}}, nil)
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if updated.(Model).todoForm == nil || updated.(Model).todoForm.mode != "edit" {
+		t.Fatal("enter should open selected task editor")
+	}
+}
+
+func TestCalendarPaneQReturnsToItemList(t *testing.T) {
+	cal := calendar.Calendar{Source: "src", Name: "cal"}
+	m := NewModel(&config.Config{SidebarWidth: 30}, calendar.Dataset{Calendars: []calendar.Calendar{cal}}, nil)
+
+	opened, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
+	closed, cmd := opened.(Model).Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+	if cmd != nil {
+		t.Fatal("q in calendar pane should not quit")
+	}
+	if closed.(Model).focusCalendarPane {
+		t.Fatal("q should return focus to item list")
+	}
+}
+
+func TestContextualLegendsAndHelp(t *testing.T) {
+	m := NewModel(&config.Config{SidebarWidth: 30}, calendar.Dataset{}, nil)
+	if got := m.shortcutsLegend(); got != "[esc/q] Exit  [j/k] Next / Previous  [t] Today  [enter] Open  [n] New  [m] Tasks  [ctrl-d] Delete  [c] Calendars  [?] Help" {
+		t.Fatalf("unexpected event legend: %q", got)
+	}
+
+	m.focusCalendarPane = true
+	calendarHelp := strings.Join(m.helpLines(), "\n")
+	if strings.Contains(calendarHelp, "New event") || !strings.Contains(calendarHelp, "Hide/show calendar") {
+		t.Fatalf("calendar help contains unrelated shortcuts: %q", calendarHelp)
+	}
+
+	m.focusCalendarPane = false
+	m.openEventFormNew()
+	editorHelp := strings.Join(m.helpLines(), "\n")
+	if strings.Contains(editorHelp, "Open tasks") || !strings.Contains(editorHelp, "Save") {
+		t.Fatalf("editor help contains unrelated shortcuts: %q", editorHelp)
+	}
+}
+
+func TestLegendRendersBelowMainView(t *testing.T) {
+	m := NewModel(&config.Config{SidebarWidth: 30}, calendar.Dataset{}, nil)
+	m.width = 120
+	m.height = 30
+	view := m.View()
+	legendAt := strings.Index(view, "[esc/q] Exit")
+	agendaAt := strings.Index(view, "Agenda from")
+	if legendAt < 0 || agendaAt < 0 || legendAt < agendaAt {
+		t.Fatalf("legend should render below main view: agenda=%d legend=%d", agendaAt, legendAt)
+	}
+}
+
+func TestEditDialogDoesNotOpenApplicationHelp(t *testing.T) {
+	cal := calendar.Calendar{Source: "src", Name: "cal"}
+	m := NewModel(&config.Config{SidebarWidth: 30}, calendar.Dataset{Calendars: []calendar.Calendar{cal}}, nil)
+	m.openEventFormNew()
+	m.eventForm.cursor = nearestSelectableEditorCursor(m.eventEditorRows(), 0)
+	m.openEventEditorForm()
+	if m.eventForm.activeForm == nil {
+		t.Fatal("expected active edit dialog")
+	}
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}})
+	updatedModel, ok := updated.(*Model)
+	if !ok {
+		t.Fatalf("updated model type = %T", updated)
+	}
+	if updatedModel.showHelpOverlay {
+		t.Fatal("? should not open application help from edit dialog")
+	}
+	if got := updatedModel.shortcutsLegend(); got != "" {
+		t.Fatalf("application legend should be hidden behind edit dialog: %q", got)
+	}
+}
+
+func TestEmptyNotificationsOpenMessageInsteadOfChoice(t *testing.T) {
+	cal := calendar.Calendar{Source: "src", Name: "cal"}
+	m := NewModel(&config.Config{SidebarWidth: 30}, calendar.Dataset{Calendars: []calendar.Calendar{cal}}, nil)
+	m.openEventFormNew()
+	rows := m.eventEditorRows()
+	for i, row := range rows {
+		if row.key == "alarms" {
+			m.eventForm.cursor = i
+			break
+		}
+	}
+
+	m.openEventEditorForm()
+	if !m.eventForm.noNotifications || m.eventForm.activeForm != nil {
+		t.Fatal("empty notifications should open message dialog")
+	}
+	view := m.renderEventFormMainPanel(100, 34)
+	if !strings.Contains(view, "No notifications") || strings.Contains(view, "None") {
+		t.Fatalf("unexpected empty notification dialog: %q", view)
+	}
+}
+
+func TestPreferredFormKeyMapUsesJKAndCtrlEnter(t *testing.T) {
+	keymap := NewPreferredFormKeyMap()
+	if got := keymap.Select.Up.Help().Key; got != "k" {
+		t.Fatalf("select up help key = %q", got)
+	}
+	if got := keymap.Select.Down.Help().Key; got != "j" {
+		t.Fatalf("select down help key = %q", got)
+	}
+	if got := keymap.Text.NewLine.Help().Key; got != "ctrl+enter / ctrl+j" {
+		t.Fatalf("text newline help key = %q", got)
+	}
+	for _, key := range keymap.Text.NewLine.Keys() {
+		if key == "alt+enter" {
+			t.Fatal("alt+enter should not be bound to text newline")
+		}
+	}
+}
+
+func TestMultiFieldFormKeyMapPrefersCtrlJK(t *testing.T) {
+	keymap := NewPreferredMultiFieldFormKeyMap()
+	if got := keymap.Input.Next.Help().Key; got != "ctrl+j" {
+		t.Fatalf("input next help key = %q", got)
+	}
+	if got := keymap.Input.Prev.Help().Key; got != "ctrl+k" {
+		t.Fatalf("input previous help key = %q", got)
+	}
+	if got := keymap.Text.NewLine.Help().Key; got != "ctrl+enter" {
+		t.Fatalf("multi-field text newline help key = %q", got)
+	}
+	if containsString(keymap.Select.Down.Keys(), "ctrl+j") || containsString(keymap.Select.Up.Keys(), "ctrl+k") {
+		t.Fatal("ctrl+j/ctrl+k should navigate fields instead of select options")
+	}
+}
+
+func TestEventWhenDialogEnterAdvancesThenSubmits(t *testing.T) {
+	cal := calendar.Calendar{Source: "src", Name: "cal"}
+	m := NewModel(&config.Config{SidebarWidth: 30}, calendar.Dataset{Calendars: []calendar.Calendar{cal}}, nil)
+	m.openEventFormNew()
+	setEventEditorCursor(t, &m, "when")
+	m.openEventEditorForm()
+	legend := activeFormModalView(m.eventForm.activeForm, 70, 20, "")
+	if !strings.Contains(legend, "ctrl+j") || strings.Contains(legend, "shift+tab") {
+		t.Fatalf("multi-field dialog should prefer ctrl+j/ctrl+k legend: %q", legend)
+	}
+
+	var model tea.Model = &m
+	model = updateModelAndRunHuhNavigation(model, tea.KeyMsg{Type: tea.KeyEnter})
+	if got := modelValue(t, model).eventForm.activeForm.GetFocusedField().GetKey(); got != "from-time" {
+		t.Fatalf("first enter focused %q, want from-time", got)
+	}
+	for range 2 {
+		model = updateModelAndRunHuhNavigation(model, tea.KeyMsg{Type: tea.KeyEnter})
+	}
+	if got := modelValue(t, model).eventForm.activeForm.GetFocusedField().GetKey(); got != "to-time" {
+		t.Fatalf("third enter focused %q, want to-time", got)
+	}
+	model = updateModelAndRunHuhNavigation(model, tea.KeyMsg{Type: tea.KeyEnter})
+	if modelValue(t, model).eventForm.activeForm != nil {
+		t.Fatal("enter on final event time field should submit dialog")
+	}
+}
+
+func TestTaskDateDialogEnterAdvancesThenSubmits(t *testing.T) {
+	cal := calendar.Calendar{Source: "src", Name: "cal"}
+	m := NewTaskModeModel(&config.Config{SidebarWidth: 30}, calendar.Dataset{Calendars: []calendar.Calendar{cal}}, nil)
+	m.openTodoFormNew()
+	setTodoEditorCursor(t, &m, "start")
+	m.openTodoEditorForm()
+
+	var model tea.Model = &m
+	model = updateModelAndRunHuhNavigation(model, tea.KeyMsg{Type: tea.KeyEnter})
+	if got := modelValue(t, model).todoForm.activeForm.GetFocusedField().GetKey(); got != "start-time" {
+		t.Fatalf("first enter focused %q, want start-time", got)
+	}
+	model = updateModelAndRunHuhNavigation(model, tea.KeyMsg{Type: tea.KeyEnter})
+	if modelValue(t, model).todoForm.activeForm != nil {
+		t.Fatal("enter on final task start field should submit dialog")
+	}
+}
+
+func TestMultiFieldDialogCtrlJAndCtrlKNavigate(t *testing.T) {
+	cal := calendar.Calendar{Source: "src", Name: "cal"}
+	m := NewModel(&config.Config{SidebarWidth: 30}, calendar.Dataset{Calendars: []calendar.Calendar{cal}}, nil)
+	m.openEventFormNew()
+	setEventEditorCursor(t, &m, "when")
+	m.openEventEditorForm()
+	fromTime := m.eventForm.fromTime
+
+	var model tea.Model = &m
+	model = updateModelAndRunHuhNavigation(model, tea.KeyMsg{Type: tea.KeyCtrlJ})
+	if got := modelValue(t, model).eventForm.activeForm.GetFocusedField().GetKey(); got != "from-time" {
+		t.Fatalf("ctrl+j focused %q, want from-time", got)
+	}
+	model = updateModelAndRunHuhNavigation(model, tea.KeyMsg{Type: tea.KeyCtrlK})
+	if got := modelValue(t, model).eventForm.activeForm.GetFocusedField().GetKey(); got != "from-date" {
+		t.Fatalf("ctrl+k focused %q, want from-date", got)
+	}
+	if got := modelValue(t, model).eventForm.fromTime; got != fromTime {
+		t.Fatalf("ctrl+k changed field value from %q to %q", fromTime, got)
+	}
+}
+
+func TestDialogErrorCanBeCorrectedAndDoesNotPersist(t *testing.T) {
+	cal := calendar.Calendar{Source: "src", Name: "cal"}
+	m := NewModel(&config.Config{SidebarWidth: 30}, calendar.Dataset{Calendars: []calendar.Calendar{cal}}, nil)
+	m.openEventFormNew()
+	setEventEditorCursor(t, &m, "when")
+	m.openEventEditorForm()
+	m.eventForm.fromDate = "invalid"
+	m.eventForm.activeForm.State = huh.StateCompleted
+
+	m.updateActiveEventEditorForm(tea.WindowSizeMsg{Width: 80, Height: 24})
+	if m.eventForm.activeForm == nil {
+		t.Fatal("dialog should remain open after apply error")
+	}
+	if m.eventForm.errMsg == "" {
+		t.Fatal("dialog should show apply error")
+	}
+	if got := m.eventForm.activeForm.GetFocusedField().GetKey(); got != "from-date" {
+		t.Fatalf("rebuilt dialog focused %q, want from-date", got)
+	}
+
+	m.updateEventEditor(tea.KeyMsg{Type: tea.KeyCtrlC})
+	if m.eventForm.activeForm != nil || m.eventForm.errMsg != "" {
+		t.Fatalf("cancel should clear dialog and error: active=%v error=%q", m.eventForm.activeForm != nil, m.eventForm.errMsg)
+	}
+	setEventEditorCursor(t, &m, "title")
+	m.openEventEditorForm()
+	if m.eventForm.errMsg != "" {
+		t.Fatalf("error persisted into next dialog: %q", m.eventForm.errMsg)
+	}
+}
+
+func containsString(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
+}
+
+func setEventEditorCursor(t *testing.T, m *Model, key string) {
+	t.Helper()
+	for i, row := range m.eventEditorRows() {
+		if row.key == key {
+			m.eventForm.cursor = i
+			return
+		}
+	}
+	t.Fatalf("event editor row %q not found", key)
+}
+
+func setTodoEditorCursor(t *testing.T, m *Model, key string) {
+	t.Helper()
+	for i, row := range m.todoEditorRows() {
+		if row.key == key {
+			m.todoForm.cursor = i
+			return
+		}
+	}
+	t.Fatalf("todo editor row %q not found", key)
+}
+
+func updateModelAndRunHuhNavigation(model tea.Model, msg tea.Msg) tea.Model {
+	updated, cmd := model.Update(msg)
+	return runHuhNavigationCommands(updated, cmd)
+}
+
+func runHuhNavigationCommands(model tea.Model, cmd tea.Cmd) tea.Model {
+	if cmd == nil {
+		return model
+	}
+	msg := cmd()
+	if batch, ok := msg.(tea.BatchMsg); ok {
+		for _, child := range batch {
+			model = runHuhNavigationCommands(model, child)
+		}
+		return model
+	}
+	typeOf := reflect.TypeOf(msg)
+	if typeOf == nil || typeOf.PkgPath() != "github.com/charmbracelet/huh" {
+		return model
+	}
+	switch typeOf.Name() {
+	case "nextFieldMsg", "prevFieldMsg", "nextGroupMsg", "prevGroupMsg":
+		updated, next := model.Update(msg)
+		return runHuhNavigationCommands(updated, next)
+	default:
+		return model
+	}
+}
+
+func modelValue(t *testing.T, model tea.Model) *Model {
+	t.Helper()
+	switch value := model.(type) {
+	case Model:
+		return &value
+	case *Model:
+		return value
+	default:
+		t.Fatalf("model type = %T", model)
+		return nil
+	}
+}
+
+func TestTaskShortcutsToggleDoneAndCyclePriority(t *testing.T) {
+	now := time.Now()
+	cal := calendar.Calendar{Source: "src", Name: "cal"}
+	todo := calendar.Todo{UID: "task", Summary: "Task", Source: "src", Calendar: "cal", Due: &now, Status: "NEEDS-ACTION", Priority: 5}
+	m := NewTaskModeModel(&config.Config{SidebarWidth: 30}, calendar.Dataset{Calendars: []calendar.Calendar{cal}, Todos: []calendar.Todo{todo}}, nil)
+
+	doneModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	done := doneModel.(Model)
+	if !isTodoDone(done.data.Todos[0]) {
+		t.Fatal("x should mark selected task done")
+	}
+
+	m = NewTaskModeModel(&config.Config{SidebarWidth: 30}, calendar.Dataset{Calendars: []calendar.Calendar{cal}, Todos: []calendar.Todo{todo}}, nil)
+	priorityModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}})
+	if got := priorityModel.(Model).data.Todos[0].Priority; got != 9 {
+		t.Fatalf("p should cycle mid priority to low, got %d", got)
 	}
 }
