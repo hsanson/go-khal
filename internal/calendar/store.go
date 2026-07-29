@@ -1082,6 +1082,12 @@ func (s *Store) UpdateTodo(uid string, update TodoUpdate) error {
 				child.Props.Set(prop)
 			}
 		}
+		if update.Completed != nil {
+			child.Props.Del(ical.PropCompleted)
+			if *update.Completed != nil {
+				child.Props.SetDateTime(ical.PropCompleted, (**update.Completed).UTC())
+			}
+		}
 		if update.Start != nil {
 			child.Props.Del(ical.PropDateTimeStart)
 			if *update.Start != nil {
