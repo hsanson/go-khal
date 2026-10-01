@@ -208,17 +208,20 @@ Example:
 
 ## Editing Events And Tasks
 
-The interactive calendar uses itemized editors for events and tasks. Move with `j/k` or `tab`/`shift+tab`, press `enter` to edit the selected item in a popup, and press `ctrl+s` to save the whole event or task. `esc`, `q`, or `ctrl+c` cancel the editor or active popup.
+The interactive calendar uses itemized editors for events and tasks. Move with `j/k` or `tab`/`shift+tab`, and press `enter` to edit the selected item. Select the `Save` or `Cancel` action at the bottom of the editor, or use `ctrl+s` to save. `esc`, `q`, or `ctrl+c` cancel the editor or active popup.
 
 Event editing supports:
 
 - Title and calendar
 - Location, URL, and description
-- Attendees, including required/optional roles and fuzzy add/search from address-book contacts
+- Attendees, including required/optional roles and direct fuzzy search from address-book contacts
 - RSVP, availability, and visibility
 - Notifications such as `10m before`, `2h before`, `10d before`, or `1d after`
 - Recurrence: daily, weekly, monthly, yearly, interval, weekdays, monthly mode, until date, and fixed count
-- All-day and timed start/end values
+- Inclusive date ranges selected from a calendar popup; use the arrows or `h/j/k/l` to move, `r` for a range, and `t` for today
+- Fixed-slot `HH:mm -> HH:mm` time ranges
+- Searchable IANA timezones with the UTC offset for the event date; changing the timezone keeps the displayed wall-clock time
+- All-day ranges; Date remains editable while Time and Timezone are disabled
 
 When an event has attendees, go-khal uses the calendar source `email` as the iCalendar `ORGANIZER`. If `email` is omitted, calendar names that look like email addresses are used as a fallback. Events where the configured email is an attendee but not the organizer are treated as attendee-owned: only local calendar placement, RSVP, availability/visibility, and notifications are editable.
 
@@ -226,7 +229,7 @@ Recurring RSVP edits preserve the organizer's series: editing one occurrence cre
 
 Task editing supports title, calendar, description, location, start/due times, completion, and priority.
 
-In multi-field popups, use `ctrl+j` / `ctrl+k` for next/previous field; `tab` / `shift+tab` remain supported. `enter` advances to the next field and submits only from the final field. In single-field description popups, `ctrl+enter` or `ctrl+j` inserts a newline, and `ctrl+e` opens `$EDITOR`/`$VISUAL` for larger edits. In multiselect popups, `space` or `x` toggles selections. Attendee add/search supports `/` filtering and `enter` applies the filter.
+In multi-field popups, use `ctrl+j` / `ctrl+k` for next/previous field; `tab` / `shift+tab` remain supported. `enter` advances to the next field and submits only from the final field. In single-field description popups, `ctrl+enter` or `ctrl+j` inserts a newline, and `ctrl+e` opens `$EDITOR`/`$VISUAL` for larger edits. In multiselect popups, `space` or `x` toggles selections. Attendee and timezone pickers search as you type; use the arrow keys or `ctrl+j` / `ctrl+k` to move and `enter` to select one result.
 
 ## Notes
 

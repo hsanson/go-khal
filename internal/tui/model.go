@@ -57,6 +57,9 @@ type eventFormState struct {
 	attendeeManager *attendeeManagerState
 	noNotifications bool
 	backup          *eventFormSnapshot
+	datePicker      *dateRangePicker
+	timeEditor      *timeRangeEditor
+	searchPicker    *searchPicker
 	cursor          int
 	summary         string
 	calendarKey     string
@@ -81,6 +84,10 @@ type eventFormState struct {
 	fromTime        string
 	toDate          string
 	toTime          string
+	timezone        string
+	timezoneLocal   bool
+	timingDirty     bool
+	overnightAuto   bool
 	errMsg          string
 }
 
@@ -159,6 +166,10 @@ type eventFormSnapshot struct {
 	fromTime       string
 	toDate         string
 	toTime         string
+	timezone       string
+	timezoneLocal  bool
+	timingDirty    bool
+	overnightAuto  bool
 }
 
 type todoFormSnapshot struct {
@@ -238,6 +249,7 @@ func NewEventImportModel(cfg *config.Config, data calendar.Dataset, store *calen
 	if existing != nil {
 		target := *existing
 		m.eventForm.targetEvent = &target
+		m.eventForm.timingDirty = true
 	}
 	m.focusDetails = true
 	m.focusMain = false
@@ -661,6 +673,16 @@ func (m Model) renderEventFormMainPanel(width, panelHeight int) string {
 		modal := m.renderEmptyEditorDialog("Notifications", "No notifications", min(70, max(30, width-10)), max(7, panelHeight/3))
 		return overlayCentered(panel, modal, width, panelHeight)
 	}
+	if m.eventForm.datePicker != nil {
+		return overlayCentered(panel, m.eventForm.datePicker.View(m.styles), width, panelHeight)
+	}
+	if m.eventForm.timeEditor != nil {
+		return overlayCentered(panel, m.eventForm.timeEditor.View(m.styles), width, panelHeight)
+	}
+	if m.eventForm.searchPicker != nil {
+		modal := m.eventForm.searchPicker.View(min(70, max(38, width-12)), m.styles)
+		return overlayCentered(panel, modal, width, panelHeight)
+	}
 	if m.eventForm.activeForm != nil {
 		formHeight := max(7, panelHeight/3)
 		if m.eventForm.activeKey == "description" {
@@ -854,25 +876,36 @@ func (m Model) renderEditorRow(row editorRow, selected bool, width int) string {
 			Render(label + strings.Repeat("─", ruleWidth))
 	}
 
+	disabled := isEditorDisabled(row)
+	selected = selected && !disabled
 	prefix := "  "
 	if selected {
 		prefix = " "
 	}
-	if row.key == "attendees-add" || row.key == "alarms-add" {
-		line := prefix + lipgloss.NewStyle().
+	key := editorRowKey(row)
+	if key == "attendees-add" || key == "alarms-add" || key == "form-cancel" || key == "form-save" {
+		buttonStyle := lipgloss.NewStyle().
 			Foreground(lipgloss.Color("230")).
 			Background(lipgloss.Color("62")).
 			Bold(true).
-			Padding(0, 1).
-			Render(editorButtonLabel(row.key))
+			Padding(0, 1)
+		if key == "form-cancel" {
+			buttonStyle = buttonStyle.Background(lipgloss.Color("238"))
+		}
+		line := prefix + buttonStyle.Render(editorButtonLabel(key))
 		return editorRowStyle(selected, width).Render(line)
 	}
 
-	label := lipgloss.NewStyle().Foreground(lipgloss.Color("117")).Bold(true).Render(row.label)
+	labelStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("117")).Bold(true)
+	valueStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
+	if disabled {
+		labelStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
+		valueStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
+	}
+	label := labelStyle.Render(row.label)
 	sep := m.styles.Subtle.Render(": ")
 	valueBudget := max(1, width-lipgloss.Width(prefix)-lipgloss.Width(row.label)-2)
-	valueStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
-	if row.key == "attendees" {
+	if key == "attendees" {
 		lines := attendeeEditorDisplayLines(row.value, valueBudget, valueStyle)
 		indent := strings.Repeat(" ", lipgloss.Width(prefix)+lipgloss.Width(row.label)+2)
 		rendered := make([]string, 0, len(lines))
@@ -910,7 +943,7 @@ func (m Model) eventEditorRows() []editorRow {
 	}
 	s := m.eventForm
 	if m.eventFormAttendeeOnly() {
-		return []editorRow{
+		rows := []editorRow{
 			editorSeparatorRow("󰉢 Event"),
 			{"calendar", "Calendar", m.calendarDisplayName(s.calendarKey)},
 			editorSeparatorRow(" Response"),
@@ -922,6 +955,7 @@ func (m Model) eventEditorRows() []editorRow {
 			{"alarms", "Notifications", emptyDefault(s.alarms, "-")},
 			{"alarms-add", "", ""},
 		}
+		return appendEditorFormActions(rows, s.mode)
 	}
 	rows := []editorRow{
 		editorSeparatorRow("󰉢 Title"),
@@ -944,9 +978,17 @@ func (m Model) eventEditorRows() []editorRow {
 	if s.mode != "view" {
 		rows = append(rows[:11], append([]editorRow{{"attendees-add", "", ""}}, rows[11:]...)...)
 	}
-	if !s.allDay {
-		rows = append(rows, editorRow{"when", "When", fmt.Sprintf("%s %s - %s %s", s.fromDate, s.fromTime, s.toDate, s.toTime)})
+	timeKey := "time"
+	timezoneKey := "timezone"
+	if s.allDay {
+		timeKey += editorDisabledSuffix
+		timezoneKey += editorDisabledSuffix
 	}
+	rows = append(rows,
+		editorRow{"date", "Date", fmt.Sprintf("%s → %s", s.fromDate, s.toDate)},
+		editorRow{timeKey, "Time", fmt.Sprintf("%s -> %s", s.fromTime, s.toTime)},
+		editorRow{timezoneKey, "Timezone", eventTimezoneDisplay(s)},
+	)
 	if s.editScope != string(calendar.EditRecurringOccurrence) {
 		rows = append(rows,
 			editorSeparatorRow("󰑖 Repeat"),
@@ -976,7 +1018,7 @@ func (m Model) eventEditorRows() []editorRow {
 	if s.mode != "view" {
 		rows = append(rows, editorRow{"alarms-add", "", ""})
 	}
-	return rows
+	return appendEditorFormActions(rows, s.mode)
 }
 
 func (m Model) eventFormAttendeeOnly() bool {
@@ -991,7 +1033,7 @@ func (m Model) todoEditorRows() []editorRow {
 		return nil
 	}
 	s := m.todoForm
-	return []editorRow{
+	rows := []editorRow{
 		editorSeparatorRow("󰉢 Title"),
 		{"summary", "Title", emptyDefault(strings.TrimSpace(s.summary), "(untitled task)")},
 		{"calendar", "Calendar", m.calendarDisplayName(s.calendarKey)},
@@ -1006,6 +1048,7 @@ func (m Model) todoEditorRows() []editorRow {
 		{"completed", "Completed", yesNo(s.completed)},
 		{"priority", "Priority", emptyDefault(s.priorityLabel, "mid")},
 	}
+	return appendEditorFormActions(rows, s.mode)
 }
 
 func (m *Model) updateEventEditor(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -1037,6 +1080,18 @@ func (m *Model) updateEventEditor(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			s.activeKey = ""
 			s.backup = nil
 		}
+		return m, nil
+	}
+	if s.datePicker != nil {
+		m.updateEventDatePicker(msg)
+		return m, nil
+	}
+	if s.timeEditor != nil {
+		m.updateEventTimeEditor(msg)
+		return m, nil
+	}
+	if s.searchPicker != nil {
+		m.updateEventSearchPicker(msg)
 		return m, nil
 	}
 	if s.attendeeManager != nil {
@@ -1072,18 +1127,11 @@ func (m *Model) updateEventEditor(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	switch msg.String() {
 	case "ctrl+s":
-		if err := m.commitEventForm(); err != nil {
+		if err := m.saveEventEditor(); err != nil {
 			s.errMsg = err.Error()
-			return m, nil
 		}
-		m.eventForm = nil
-		m.focusDetails = false
-		m.focusMain = true
-		m.ensureEventSelectionValid()
 	case "ctrl+c", "esc", "q":
-		m.eventForm = nil
-		m.focusDetails = false
-		m.focusMain = true
+		m.closeEventEditor()
 	case "j", "down", "tab":
 		s.cursor = moveEditorCursor(m.eventEditorRows(), s.cursor, 1)
 	case "k", "up", "shift+tab":
@@ -1127,18 +1175,11 @@ func (m *Model) updateTodoEditor(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	switch msg.String() {
 	case "ctrl+s":
-		if err := m.commitTodoForm(); err != nil {
+		if err := m.saveTodoEditor(); err != nil {
 			s.errMsg = err.Error()
-			return m, nil
 		}
-		m.todoForm = nil
-		m.focusDetails = false
-		m.focusMain = true
-		m.ensureEventSelectionValid()
 	case "ctrl+c", "esc", "q":
-		m.todoForm = nil
-		m.focusDetails = false
-		m.focusMain = true
+		m.closeTodoEditor()
 	case "j", "down", "tab":
 		s.cursor = moveEditorCursor(m.todoEditorRows(), s.cursor, 1)
 	case "k", "up", "shift+tab":
@@ -1157,13 +1198,17 @@ func (m *Model) openEventEditorForm() tea.Cmd {
 	}
 	s := m.eventForm
 	s.cursor = nearestSelectableEditorCursor(rows, s.cursor)
-	key := rows[s.cursor].key
-	if isEditorSeparator(rows[s.cursor]) {
+	row := rows[s.cursor]
+	if !isEditorSelectable(row) {
 		return nil
 	}
+	key := editorRowKey(row)
 	s.activeKey = key
 	s.backup = s.snapshot()
 	s.errMsg = ""
+	if m.openCustomEventEditor(key) {
+		return nil
+	}
 	if key == "attendees" {
 		s.attendeeManager = newAttendeeManager(parseAttendeesInput(s.attendees))
 		return nil
@@ -1378,6 +1423,9 @@ func (m *Model) applyEventEditorForm() error {
 		s.recurEnd = anyString(value)
 	case "all-day":
 		if v, ok := value.(bool); ok {
+			if s.backup != nil && s.backup.allDay != v {
+				s.timingDirty = true
+			}
 			s.allDay = v
 		}
 	}
@@ -1396,8 +1444,19 @@ func (m *Model) openTodoEditorForm() tea.Cmd {
 	}
 	s := m.todoForm
 	s.cursor = nearestSelectableEditorCursor(rows, s.cursor)
-	key := rows[s.cursor].key
-	if isEditorSeparator(rows[s.cursor]) {
+	row := rows[s.cursor]
+	if !isEditorSelectable(row) {
+		return nil
+	}
+	key := editorRowKey(row)
+	switch key {
+	case "form-cancel":
+		m.closeTodoEditor()
+		return nil
+	case "form-save":
+		if err := m.saveTodoEditor(); err != nil {
+			s.errMsg = err.Error()
+		}
 		return nil
 	}
 	s.activeKey = key
@@ -1605,6 +1664,10 @@ func (s *eventFormState) snapshot() *eventFormSnapshot {
 		fromTime:       s.fromTime,
 		toDate:         s.toDate,
 		toTime:         s.toTime,
+		timezone:       s.timezone,
+		timezoneLocal:  s.timezoneLocal,
+		timingDirty:    s.timingDirty,
+		overnightAuto:  s.overnightAuto,
 	}
 }
 
@@ -1637,10 +1700,17 @@ func (s *eventFormState) cancelActive() {
 		s.fromTime = b.fromTime
 		s.toDate = b.toDate
 		s.toTime = b.toTime
+		s.timezone = b.timezone
+		s.timezoneLocal = b.timezoneLocal
+		s.timingDirty = b.timingDirty
+		s.overnightAuto = b.overnightAuto
 	}
 	s.activeForm = nil
 	s.attendeeManager = nil
 	s.noNotifications = false
+	s.datePicker = nil
+	s.timeEditor = nil
+	s.searchPicker = nil
 	s.activeKey = ""
 	s.backup = nil
 	s.errMsg = ""
@@ -1783,6 +1853,46 @@ func activeFormValue(form *huh.Form) any {
 	return field.GetValue()
 }
 
+const editorDisabledSuffix = ":disabled"
+
+func appendEditorFormActions(rows []editorRow, mode string) []editorRow {
+	if mode == "view" {
+		return rows
+	}
+	return append(rows,
+		editorSeparatorRow("Actions"),
+		editorRow{"form-cancel", "", ""},
+		editorRow{"form-save", "", ""},
+	)
+}
+
+func editorRowKey(row editorRow) string {
+	return strings.TrimSuffix(row.key, editorDisabledSuffix)
+}
+
+func isEditorDisabled(row editorRow) bool {
+	return strings.HasSuffix(row.key, editorDisabledSuffix)
+}
+
+func isEditorSelectable(row editorRow) bool {
+	return !isEditorSeparator(row) && !isEditorDisabled(row)
+}
+
+func eventTimezoneDisplay(s *eventFormState) string {
+	if s == nil {
+		return "-"
+	}
+	at, err := time.Parse("2006-01-02 15:04", s.fromDate+" "+s.fromTime)
+	if err != nil {
+		at = time.Now()
+	}
+	label := timezoneLabel(s.timezone, at)
+	if s.timezoneLocal {
+		return "Local — " + label
+	}
+	return label
+}
+
 func editorSeparatorRow(label string) editorRow {
 	return editorRow{key: "__separator:" + label, label: label}
 }
@@ -1792,11 +1902,12 @@ func isEditorSeparator(row editorRow) bool {
 }
 
 func editorRowWraps(row editorRow) bool {
-	return row.key == "description" || row.key == "attendees"
+	key := editorRowKey(row)
+	return key == "description" || key == "attendees"
 }
 
 func editorDisplayValue(row editorRow) string {
-	if row.key == "attendees" {
+	if editorRowKey(row) == "attendees" {
 		return strings.ReplaceAll(row.value, "; ", "\n")
 	}
 	return row.value
@@ -1867,16 +1978,16 @@ func nearestSelectableEditorCursor(rows []editorRow, cursor int) int {
 		return 0
 	}
 	cursor = clamp(cursor, 0, len(rows)-1)
-	if !isEditorSeparator(rows[cursor]) {
+	if isEditorSelectable(rows[cursor]) {
 		return cursor
 	}
 	for i := cursor + 1; i < len(rows); i++ {
-		if !isEditorSeparator(rows[i]) {
+		if isEditorSelectable(rows[i]) {
 			return i
 		}
 	}
 	for i := cursor - 1; i >= 0; i-- {
-		if !isEditorSeparator(rows[i]) {
+		if isEditorSelectable(rows[i]) {
 			return i
 		}
 	}
@@ -1889,7 +2000,7 @@ func moveEditorCursor(rows []editorRow, cursor, delta int) int {
 	}
 	cursor = nearestSelectableEditorCursor(rows, cursor)
 	for next := cursor + delta; next >= 0 && next < len(rows); next += delta {
-		if !isEditorSeparator(rows[next]) {
+		if isEditorSelectable(rows[next]) {
 			return next
 		}
 	}
@@ -1902,6 +2013,10 @@ func editorButtonLabel(key string) string {
 		return "󰐕 Add attendee"
 	case "alarms-add":
 		return "󰐕 Add notification"
+	case "form-cancel":
+		return "Cancel"
+	case "form-save":
+		return "Save"
 	default:
 		return "󰐕 Add"
 	}
@@ -2032,7 +2147,8 @@ func mergeListInput(existing string, added []string) string {
 }
 
 func (s *eventFormState) hasActiveDialog() bool {
-	return s != nil && (s.activeForm != nil || s.attendeeManager != nil || s.noNotifications)
+	return s != nil && (s.activeForm != nil || s.attendeeManager != nil || s.noNotifications ||
+		s.datePicker != nil || s.timeEditor != nil || s.searchPicker != nil)
 }
 
 func newAttendeeManager(attendees []calendar.Attendee) *attendeeManagerState {
@@ -3435,13 +3551,21 @@ func (m *Model) newEventFormState(mode, targetUID string, ev calendar.Event) *ev
 	if strings.TrimSpace(ev.Source) == "" || strings.TrimSpace(ev.Calendar) == "" {
 		key = m.firstWritableCalendarKey()
 	}
-	fd := ev.Start.In(m.selected.Location())
-	td := ev.End.In(m.selected.Location())
+	timezone, timezoneLocal := eventFormTimezone(ev, mode)
+	displayLocation, err := time.LoadLocation(timezone)
+	if err != nil {
+		displayLocation = time.Local
+	}
+	fd := ev.Start.In(displayLocation)
+	td := ev.End.In(displayLocation)
 	if fd.IsZero() {
-		fd = m.selected
+		fd = m.selected.In(displayLocation)
 	}
 	if td.IsZero() || !td.After(fd) {
 		td = fd.Add(time.Hour)
+	}
+	if ev.AllDay && td.After(fd) {
+		td = td.AddDate(0, 0, -1)
 	}
 	state := &eventFormState{
 		mode:           mode,
@@ -3470,6 +3594,12 @@ func (m *Model) newEventFormState(mode, targetUID string, ev calendar.Event) *ev
 		fromTime:       fd.Format("15:04"),
 		toDate:         td.Format("2006-01-02"),
 		toTime:         td.Format("15:04"),
+		timezone:       timezone,
+		timezoneLocal:  timezoneLocal,
+	}
+	if ev.AllDay {
+		state.fromTime = "09:00"
+		state.toTime = "10:00"
 	}
 	if mode == "edit" {
 		target := ev
@@ -3680,9 +3810,16 @@ func (m *Model) commitEventForm() error {
 			Visibility:   &s.visibility,
 			Recurrence:   recurrenceUpdatePtr,
 			Alarms:       &alarms,
-			Start:        &start,
-			End:          &end,
-			AllDay:       &s.allDay,
+		}
+		if s.timingDirty {
+			timezone := s.timezone
+			if s.allDay {
+				timezone = ""
+			}
+			upd.Start = &start
+			upd.End = &end
+			upd.Timezone = &timezone
+			upd.AllDay = &s.allDay
 		}
 		if s.targetEvent != nil {
 			var organizerUpdate *string
@@ -3720,6 +3857,7 @@ func (m *Model) commitEventForm() error {
 			Visibility:   s.visibility,
 			Recurrence:   recurrence,
 			Alarms:       alarms,
+			Timezone:     s.timezone,
 			AllDay:       s.allDay,
 			Start:        start,
 			End:          end,
@@ -3874,31 +4012,38 @@ func (m *Model) firstWritableCalendarKey() string {
 func parseEventFormTimes(s eventFormState) (time.Time, time.Time, error) {
 	startDate, err := time.Parse("2006-01-02", strings.TrimSpace(s.fromDate))
 	if err != nil {
-		return time.Time{}, time.Time{}, errors.New("invalid from date (expected YYYY-MM-DD)")
+		return time.Time{}, time.Time{}, errors.New("invalid start date (expected YYYY-MM-DD)")
 	}
 	endDate, err := time.Parse("2006-01-02", strings.TrimSpace(s.toDate))
 	if err != nil {
-		return time.Time{}, time.Time{}, errors.New("invalid to date (expected YYYY-MM-DD)")
+		return time.Time{}, time.Time{}, errors.New("invalid end date (expected YYYY-MM-DD)")
+	}
+	if endDate.Before(startDate) {
+		return time.Time{}, time.Time{}, errors.New("end date cannot be before start date")
 	}
 	if s.allDay {
 		start := time.Date(startDate.Year(), startDate.Month(), startDate.Day(), 0, 0, 0, 0, time.Local)
-		end := time.Date(endDate.Year(), endDate.Month(), endDate.Day(), 0, 0, 0, 0, time.Local)
-		if !end.After(start) {
-			end = start.Add(24 * time.Hour)
-		}
+		end := time.Date(endDate.Year(), endDate.Month(), endDate.Day(), 0, 0, 0, 0, time.Local).AddDate(0, 0, 1)
 		return start, end, nil
 	}
 
+	loc, err := time.LoadLocation(s.timezone)
+	if err != nil {
+		return time.Time{}, time.Time{}, fmt.Errorf("invalid timezone %q", s.timezone)
+	}
 	startClock, err := time.Parse("15:04", strings.TrimSpace(s.fromTime))
 	if err != nil {
-		return time.Time{}, time.Time{}, errors.New("invalid from time (expected HH:MM)")
+		return time.Time{}, time.Time{}, errors.New("invalid start time (expected HH:mm)")
 	}
 	endClock, err := time.Parse("15:04", strings.TrimSpace(s.toTime))
 	if err != nil {
-		return time.Time{}, time.Time{}, errors.New("invalid to time (expected HH:MM)")
+		return time.Time{}, time.Time{}, errors.New("invalid end time (expected HH:mm)")
 	}
-	start := time.Date(startDate.Year(), startDate.Month(), startDate.Day(), startClock.Hour(), startClock.Minute(), 0, 0, time.Local)
-	end := time.Date(endDate.Year(), endDate.Month(), endDate.Day(), endClock.Hour(), endClock.Minute(), 0, 0, time.Local)
+	start := time.Date(startDate.Year(), startDate.Month(), startDate.Day(), startClock.Hour(), startClock.Minute(), 0, 0, loc)
+	end := time.Date(endDate.Year(), endDate.Month(), endDate.Day(), endClock.Hour(), endClock.Minute(), 0, 0, loc)
+	if sameDate(startDate, endDate) && !end.After(start) {
+		end = end.AddDate(0, 0, 1)
+	}
 	if !end.After(start) {
 		return time.Time{}, time.Time{}, errors.New("end must be after start")
 	}

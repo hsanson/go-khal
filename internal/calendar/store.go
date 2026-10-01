@@ -417,6 +417,7 @@ func (s *Store) componentToEvents(comp *ical.Component, src calendarSource, file
 	}
 
 	allDay := eventPropsAllDay(comp.Props)
+	timezone := eventPropsTimezone(comp.Props)
 	recurring := comp.Props.Get(ical.PropRecurrenceRule) != nil || len(comp.Props.Values(ical.PropRecurrenceDates)) > 0
 	hasAlarm := false
 	for _, child := range comp.Children {
@@ -439,6 +440,7 @@ func (s *Store) componentToEvents(comp *ical.Component, src calendarSource, file
 		Recurrence:   recurrence,
 		Alarms:       alarms,
 		AllDay:       allDay,
+		Timezone:     timezone,
 		Recurring:    recurring || recurrence != nil || forceSingle,
 		HasAlarm:     hasAlarm || len(alarms) > 0,
 		Source:       src.sourceName,
@@ -1346,7 +1348,7 @@ func (s *Store) DeleteEvent(ev Event, scope DeleteRecurringScope) error {
 				removed = true
 				break
 			}
-			addEventExceptionDate(child, ev.Start, ev.AllDay)
+			addEventExceptionDate(child, ev.Start, ev.AllDay, ev.Timezone)
 			removed = true
 		case DeleteRecurringFuture:
 			if !current.Recurring || !ev.Start.After(current.Start) {
@@ -1429,11 +1431,11 @@ func (s *Store) CreateEvent(sourceName, calendarName string, e Event) error {
 	if organizer != "" {
 		setEventOrganizer(comp, organizer)
 	}
-	setEventTimeProps(comp, start.In(loc), end.In(loc), e.AllDay)
+	setEventTimeProps(comp, start, end, e.AllDay, e.Timezone)
 	setEventAttendees(comp, e.Attendees, organizer != "")
 	setEventAvailability(comp, e.Availability)
 	setEventVisibility(comp, e.Visibility)
-	setEventRecurrence(comp, e.Recurrence, start.In(loc))
+	setEventRecurrence(comp, e.Recurrence, eventTimeInTimezone(start, e.Timezone))
 	setEventAlarms(comp, e.Alarms)
 
 	newCal := ical.NewCalendar()
@@ -1548,8 +1550,8 @@ func (s *Store) updateAttendeeEventOccurrence(ev Event, update EventUpdate) erro
 	if override == nil {
 		override = cloneComponent(master)
 		removeEventRecurrenceProps(override)
-		setEventTimeProps(override, ev.Start, ev.End, ev.AllDay)
-		setRecurrenceID(override, boundary, ev.AllDay)
+		setEventTimeProps(override, ev.Start, ev.End, ev.AllDay, ev.Timezone)
+		setRecurrenceID(override, boundary, ev.AllDay, ev.Timezone)
 		cal.Children = append(cal.Children, override)
 	}
 	if !applyAttendeeEventUpdate(override, update, userEmail) {
@@ -1588,8 +1590,8 @@ func (s *Store) updateAttendeeEventFuture(ev Event, update EventUpdate) error {
 	if ranged == nil {
 		ranged = cloneComponent(master)
 		removeEventRecurrenceProps(ranged)
-		setEventTimeProps(ranged, ev.Start, ev.End, ev.AllDay)
-		setRecurrenceIDRange(ranged, boundary, ev.AllDay, "THISANDFUTURE")
+		setEventTimeProps(ranged, ev.Start, ev.End, ev.AllDay, ev.Timezone)
+		setRecurrenceIDRange(ranged, boundary, ev.AllDay, ev.Timezone, "THISANDFUTURE")
 		cal.Children = append(cal.Children, ranged)
 	}
 	updated := applyAttendeeEventUpdate(ranged, update, userEmail)
@@ -1783,7 +1785,7 @@ func (s *Store) updateEventOccurrence(ev Event, update EventUpdate) error {
 	if override == nil {
 		override = ical.NewComponent(ical.CompEvent)
 		override.Props.SetText(ical.PropUID, ev.UID)
-		setRecurrenceID(override, boundary, ev.AllDay)
+		setRecurrenceID(override, boundary, ev.AllDay, ev.Timezone)
 		cal.Children = append(cal.Children, override)
 	}
 	occ := ev
@@ -1791,7 +1793,7 @@ func (s *Store) updateEventOccurrence(ev Event, update EventUpdate) error {
 	occ.Recurring = false
 	applyEventUpdateToComponent(override, occ, update)
 	removeEventRecurrenceProps(override)
-	setRecurrenceID(override, boundary, ev.AllDay)
+	setRecurrenceID(override, boundary, ev.AllDay, ev.Timezone)
 	return writeCalendarFile(ev.FilePath, cal)
 }
 
@@ -1876,6 +1878,7 @@ func eventBaseFromComponent(comp *ical.Component, fallback Event, loc *time.Loca
 		base.End = end.In(loc)
 	}
 	base.AllDay = eventPropsAllDay(comp.Props)
+	base.Timezone = eventPropsTimezone(comp.Props)
 	base.Recurring = base.Recurrence != nil
 	return base
 }
@@ -2002,32 +2005,39 @@ func applyEventUpdateToComponent(comp *ical.Component, base Event, update EventU
 
 	nextStart := base.Start
 	nextEnd := base.End
+	timezone := base.Timezone
 	if update.Start != nil {
 		nextStart = *update.Start
 	}
 	if update.End != nil {
 		nextEnd = *update.End
 	}
+	if update.Timezone != nil {
+		timezone = *update.Timezone
+	}
 	allDay := base.AllDay
 	if update.AllDay != nil {
 		allDay = *update.AllDay
 	}
-	if allDay {
-		nextStart = time.Date(nextStart.Year(), nextStart.Month(), nextStart.Day(), 0, 0, 0, 0, nextStart.Location())
-		nextEnd = time.Date(nextEnd.Year(), nextEnd.Month(), nextEnd.Day(), 0, 0, 0, 0, nextEnd.Location())
-		if !nextEnd.After(nextStart) {
-			nextEnd = nextStart.Add(24 * time.Hour)
+	timeUpdated := update.Start != nil || update.End != nil || update.Timezone != nil || update.AllDay != nil
+	if timeUpdated {
+		if allDay {
+			nextStart = time.Date(nextStart.Year(), nextStart.Month(), nextStart.Day(), 0, 0, 0, 0, nextStart.Location())
+			nextEnd = time.Date(nextEnd.Year(), nextEnd.Month(), nextEnd.Day(), 0, 0, 0, 0, nextEnd.Location())
+			if !nextEnd.After(nextStart) {
+				nextEnd = nextStart.Add(24 * time.Hour)
+			}
+		} else if !nextEnd.After(nextStart) {
+			nextEnd = nextStart.Add(time.Hour)
 		}
-	} else if !nextEnd.After(nextStart) {
-		nextEnd = nextStart.Add(time.Hour)
+		setEventTimeProps(comp, nextStart, nextEnd, allDay, timezone)
 	}
-	setEventTimeProps(comp, nextStart, nextEnd, allDay)
 
 	rec := base.Recurrence
 	if update.Recurrence != nil {
 		rec = *update.Recurrence
 	}
-	setEventRecurrence(comp, rec, nextStart)
+	setEventRecurrence(comp, rec, eventTimeInTimezone(nextStart, timezone))
 }
 
 func setLocalEventRSVP(comp *ical.Component, value string) {
@@ -2238,17 +2248,17 @@ func eventRecurrenceID(comp *ical.Component, loc *time.Location) (time.Time, boo
 	return rid.In(loc), true
 }
 
-func setRecurrenceID(comp *ical.Component, start time.Time, allDay bool) {
-	setRecurrenceIDRange(comp, start, allDay, "")
+func setRecurrenceID(comp *ical.Component, start time.Time, allDay bool, timezone string) {
+	setRecurrenceIDRange(comp, start, allDay, timezone, "")
 }
 
-func setRecurrenceIDRange(comp *ical.Component, start time.Time, allDay bool, recurrenceRange string) {
+func setRecurrenceIDRange(comp *ical.Component, start time.Time, allDay bool, timezone, recurrenceRange string) {
 	comp.Props.Del(ical.PropRecurrenceID)
 	prop := ical.NewProp(ical.PropRecurrenceID)
 	if allDay {
 		prop.SetDate(start)
 	} else {
-		prop.SetDateTime(start.UTC())
+		setEventDateTimeValue(prop, start, timezone)
 	}
 	if strings.TrimSpace(recurrenceRange) != "" {
 		prop.Params.Set(ical.ParamRange, strings.ToUpper(strings.TrimSpace(recurrenceRange)))
@@ -2283,17 +2293,6 @@ func sameOccurrence(a, b time.Time, allDay bool) bool {
 		return sameDate(a, b)
 	}
 	return a.Equal(b)
-}
-
-func masterEventStart(comp *ical.Component, loc *time.Location, fallback time.Time) time.Time {
-	start, err := comp.Props.DateTime(ical.PropDateTimeStart, loc)
-	if err != nil || start.IsZero() {
-		return fallback
-	}
-	if loc != nil {
-		return start.In(loc)
-	}
-	return start
 }
 
 func removeEventOverrides(children []*ical.Component, uid string) []*ical.Component {
@@ -2443,12 +2442,12 @@ func formatICalDuration(d time.Duration) string {
 	return fmt.Sprintf("%sP%dDT%dH%dM%dS", prefix, days, hours, minutes, seconds)
 }
 
-func addEventExceptionDate(comp *ical.Component, start time.Time, allDay bool) {
+func addEventExceptionDate(comp *ical.Component, start time.Time, allDay bool, timezone string) {
 	prop := ical.NewProp(ical.PropExceptionDates)
 	if allDay {
 		prop.SetDate(start)
 	} else {
-		prop.SetDateTime(start.UTC())
+		setEventDateTimeValue(prop, start, timezone)
 	}
 	comp.Props.Add(prop)
 }
@@ -2619,7 +2618,7 @@ func setEventURL(comp *ical.Component, raw string) {
 	comp.Props.SetText(ical.PropURL, trimmed)
 }
 
-func setEventTimeProps(comp *ical.Component, start, end time.Time, allDay bool) {
+func setEventTimeProps(comp *ical.Component, start, end time.Time, allDay bool, timezone string) {
 	comp.Props.Del(ical.PropDateTimeStart)
 	comp.Props.Del(ical.PropDateTimeEnd)
 	if allDay {
@@ -2632,8 +2631,53 @@ func setEventTimeProps(comp *ical.Component, start, end time.Time, allDay bool) 
 		comp.Props.SetDate(ical.PropDateTimeEnd, endDate)
 		return
 	}
-	comp.Props.SetDateTime(ical.PropDateTimeStart, start.UTC())
-	comp.Props.SetDateTime(ical.PropDateTimeEnd, end.UTC())
+	startProp := ical.NewProp(ical.PropDateTimeStart)
+	setEventDateTimeValue(startProp, start, timezone)
+	comp.Props.Set(startProp)
+	endProp := ical.NewProp(ical.PropDateTimeEnd)
+	setEventDateTimeValue(endProp, end, timezone)
+	comp.Props.Set(endProp)
+}
+
+func setEventDateTimeValue(prop *ical.Prop, value time.Time, timezone string) {
+	switch strings.ToUpper(strings.TrimSpace(timezone)) {
+	case EventTimezoneFloating:
+		prop.Value = value.Format("20060102T150405")
+	default:
+		prop.SetDateTime(eventTimeInTimezone(value, timezone))
+	}
+}
+
+func eventTimeInTimezone(value time.Time, timezone string) time.Time {
+	timezone = strings.TrimSpace(timezone)
+	if timezone == "" || strings.EqualFold(timezone, EventTimezoneUTC) {
+		return value.UTC()
+	}
+	if strings.EqualFold(timezone, EventTimezoneFloating) {
+		return value
+	}
+	loc, err := time.LoadLocation(timezone)
+	if err != nil {
+		return value.UTC()
+	}
+	return value.In(loc)
+}
+
+func eventPropsTimezone(props ical.Props) string {
+	if eventPropsAllDay(props) {
+		return ""
+	}
+	start := props.Get(ical.PropDateTimeStart)
+	if start == nil {
+		return ""
+	}
+	if timezone := strings.TrimSpace(start.Params.Get(ical.ParamTimezoneID)); timezone != "" {
+		return timezone
+	}
+	if strings.HasSuffix(strings.ToUpper(strings.TrimSpace(start.Value)), "Z") {
+		return EventTimezoneUTC
+	}
+	return EventTimezoneFloating
 }
 
 func eventPropsAllDay(props ical.Props) bool {

@@ -121,6 +121,7 @@ func eventUpdateFromImport(event calendar.Event) calendar.EventUpdate {
 		Alarms:       &event.Alarms,
 		Start:        &event.Start,
 		End:          &event.End,
+		Timezone:     &event.Timezone,
 		AllDay:       &event.AllDay,
 	}
 }

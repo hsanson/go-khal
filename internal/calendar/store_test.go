@@ -732,8 +732,8 @@ func TestRecurringAllFromOverrideUsesMasterTimingAndRule(t *testing.T) {
 		t.Fatalf("UpdateEventScoped all: %v", err)
 	}
 	raw := readEventFile(t, path)
-	if !strings.Contains(raw, "RRULE:FREQ=WEEKLY;INTERVAL=1;COUNT=4") || !strings.Contains(raw, "DTSTART:20260713T040000Z") {
-		t.Fatalf("all edit did not retain master recurrence identity\n%s", raw)
+	if !strings.Contains(raw, "RRULE:FREQ=WEEKLY;INTERVAL=1;COUNT=4") || !strings.Contains(raw, "DTSTART;TZID=Asia/Tokyo:20260713T130000") {
+		t.Fatalf("all edit did not preserve master recurrence timing\n%s", raw)
 	}
 	if strings.Count(raw, "SUMMARY:Updated series") != 1 {
 		t.Fatalf("all edit should update the master component\n%s", raw)

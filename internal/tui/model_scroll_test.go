@@ -7,7 +7,6 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/huh"
 	"github.com/hsanson/go-khal/internal/calendar"
 	"github.com/hsanson/go-khal/internal/config"
 )
@@ -655,34 +654,6 @@ func TestMultiFieldFormKeyMapPrefersCtrlJK(t *testing.T) {
 	}
 }
 
-func TestEventWhenDialogEnterAdvancesThenSubmits(t *testing.T) {
-	cal := calendar.Calendar{Source: "src", Name: "cal"}
-	m := NewModel(&config.Config{SidebarWidth: 30}, calendar.Dataset{Calendars: []calendar.Calendar{cal}}, nil)
-	m.openEventFormNew()
-	setEventEditorCursor(t, &m, "when")
-	m.openEventEditorForm()
-	legend := activeFormModalView(m.eventForm.activeForm, 70, 20, "")
-	if !strings.Contains(legend, "ctrl+j") || strings.Contains(legend, "shift+tab") {
-		t.Fatalf("multi-field dialog should prefer ctrl+j/ctrl+k legend: %q", legend)
-	}
-
-	var model tea.Model = &m
-	model = updateModelAndRunHuhNavigation(model, tea.KeyMsg{Type: tea.KeyEnter})
-	if got := modelValue(t, model).eventForm.activeForm.GetFocusedField().GetKey(); got != "from-time" {
-		t.Fatalf("first enter focused %q, want from-time", got)
-	}
-	for range 2 {
-		model = updateModelAndRunHuhNavigation(model, tea.KeyMsg{Type: tea.KeyEnter})
-	}
-	if got := modelValue(t, model).eventForm.activeForm.GetFocusedField().GetKey(); got != "to-time" {
-		t.Fatalf("third enter focused %q, want to-time", got)
-	}
-	model = updateModelAndRunHuhNavigation(model, tea.KeyMsg{Type: tea.KeyEnter})
-	if modelValue(t, model).eventForm.activeForm != nil {
-		t.Fatal("enter on final event time field should submit dialog")
-	}
-}
-
 func TestTaskDateDialogEnterAdvancesThenSubmits(t *testing.T) {
 	cal := calendar.Calendar{Source: "src", Name: "cal"}
 	m := NewTaskModeModel(&config.Config{SidebarWidth: 30}, calendar.Dataset{Calendars: []calendar.Calendar{cal}}, nil)
@@ -701,59 +672,6 @@ func TestTaskDateDialogEnterAdvancesThenSubmits(t *testing.T) {
 	}
 }
 
-func TestMultiFieldDialogCtrlJAndCtrlKNavigate(t *testing.T) {
-	cal := calendar.Calendar{Source: "src", Name: "cal"}
-	m := NewModel(&config.Config{SidebarWidth: 30}, calendar.Dataset{Calendars: []calendar.Calendar{cal}}, nil)
-	m.openEventFormNew()
-	setEventEditorCursor(t, &m, "when")
-	m.openEventEditorForm()
-	fromTime := m.eventForm.fromTime
-
-	var model tea.Model = &m
-	model = updateModelAndRunHuhNavigation(model, tea.KeyMsg{Type: tea.KeyCtrlJ})
-	if got := modelValue(t, model).eventForm.activeForm.GetFocusedField().GetKey(); got != "from-time" {
-		t.Fatalf("ctrl+j focused %q, want from-time", got)
-	}
-	model = updateModelAndRunHuhNavigation(model, tea.KeyMsg{Type: tea.KeyCtrlK})
-	if got := modelValue(t, model).eventForm.activeForm.GetFocusedField().GetKey(); got != "from-date" {
-		t.Fatalf("ctrl+k focused %q, want from-date", got)
-	}
-	if got := modelValue(t, model).eventForm.fromTime; got != fromTime {
-		t.Fatalf("ctrl+k changed field value from %q to %q", fromTime, got)
-	}
-}
-
-func TestDialogErrorCanBeCorrectedAndDoesNotPersist(t *testing.T) {
-	cal := calendar.Calendar{Source: "src", Name: "cal"}
-	m := NewModel(&config.Config{SidebarWidth: 30}, calendar.Dataset{Calendars: []calendar.Calendar{cal}}, nil)
-	m.openEventFormNew()
-	setEventEditorCursor(t, &m, "when")
-	m.openEventEditorForm()
-	m.eventForm.fromDate = "invalid"
-	m.eventForm.activeForm.State = huh.StateCompleted
-
-	m.updateActiveEventEditorForm(tea.WindowSizeMsg{Width: 80, Height: 24})
-	if m.eventForm.activeForm == nil {
-		t.Fatal("dialog should remain open after apply error")
-	}
-	if m.eventForm.errMsg == "" {
-		t.Fatal("dialog should show apply error")
-	}
-	if got := m.eventForm.activeForm.GetFocusedField().GetKey(); got != "from-date" {
-		t.Fatalf("rebuilt dialog focused %q, want from-date", got)
-	}
-
-	m.updateEventEditor(tea.KeyMsg{Type: tea.KeyCtrlC})
-	if m.eventForm.activeForm != nil || m.eventForm.errMsg != "" {
-		t.Fatalf("cancel should clear dialog and error: active=%v error=%q", m.eventForm.activeForm != nil, m.eventForm.errMsg)
-	}
-	setEventEditorCursor(t, &m, "title")
-	m.openEventEditorForm()
-	if m.eventForm.errMsg != "" {
-		t.Fatalf("error persisted into next dialog: %q", m.eventForm.errMsg)
-	}
-}
-
 func containsString(values []string, target string) bool {
 	for _, value := range values {
 		if value == target {
@@ -761,17 +679,6 @@ func containsString(values []string, target string) bool {
 		}
 	}
 	return false
-}
-
-func setEventEditorCursor(t *testing.T, m *Model, key string) {
-	t.Helper()
-	for i, row := range m.eventEditorRows() {
-		if row.key == key {
-			m.eventForm.cursor = i
-			return
-		}
-	}
-	t.Fatalf("event editor row %q not found", key)
 }
 
 func setTodoEditorCursor(t *testing.T, m *Model, key string) {

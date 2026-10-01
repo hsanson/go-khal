@@ -18,6 +18,7 @@ type Event struct {
 	Alarms       []Alarm
 	Start        time.Time
 	End          time.Time
+	Timezone     string
 	AllDay       bool
 	Kind         string
 	Recurring    bool
@@ -62,6 +63,9 @@ const (
 
 	SpecialSourceBirthdays   = "__special__"
 	SpecialCalendarBirthdays = "birthdays-anniversaries"
+
+	EventTimezoneUTC      = "UTC"
+	EventTimezoneFloating = "FLOATING"
 )
 
 type EventUserRole string
@@ -135,6 +139,7 @@ type EventUpdate struct {
 	Alarms       *[]Alarm
 	Start        *time.Time
 	End          *time.Time
+	Timezone     *string
 	AllDay       *bool
 }
 
