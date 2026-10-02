@@ -563,8 +563,153 @@ func TestLegendRendersBelowMainView(t *testing.T) {
 		t.Fatalf("legend should render below main view: agenda=%d legend=%d", agendaAt, legendAt)
 	}
 }
+func TestDatePickerLegendRendersBelowMainView(t *testing.T) {
+	m := NewModel(&config.Config{SidebarWidth: 30}, calendar.Dataset{}, nil)
+	m.width = 120
+	m.height = 30
+	m.openEventFormNew()
+	setEventEditorCursor(t, &m, "date")
+	m.openEventEditorForm()
 
-func TestEditDialogDoesNotOpenApplicationHelp(t *testing.T) {
+	want := "[spc] Multi-day  [t] Today  [enter] Apply  [esc/q] Cancel"
+	if got := m.shortcutsLegend(); got != want {
+		t.Fatalf("date picker legend = %q, want %q", got, want)
+	}
+	view := m.View()
+	legendAt := strings.Index(view, want)
+	dateAt := strings.Index(view, m.eventForm.datePicker.start.Format("Jan 2, 2006"))
+	if legendAt < 0 || dateAt < 0 || legendAt < dateAt {
+		t.Fatalf("date picker legend should render below main view: date=%d legend=%d", dateAt, legendAt)
+	}
+}
+
+func TestAttendeeDialogShowsStateIconsAndFooterKeybindings(t *testing.T) {
+	cal := calendar.Calendar{Source: "src", Name: "cal"}
+	m := NewModel(&config.Config{SidebarWidth: 30}, calendar.Dataset{Calendars: []calendar.Calendar{cal}}, nil)
+	m.width = 140
+	m.height = 40
+	m.openEventFormNew()
+	m.eventForm.attendees = attendeesInput([]calendar.Attendee{
+		{Name: "Ada Lovelace", Email: "ada@example.test"},
+		{Name: "Grace Hopper", Email: "grace@example.test", Role: "optional"},
+	})
+	setEventEditorCursor(t, &m, "attendees")
+	m.openEventEditorForm()
+
+	view := m.View()
+	for _, label := range []string{"", "Required", "", "Optional", "", "Removed"} {
+		if !strings.Contains(view, label) {
+			t.Fatalf("attendee dialog is missing %q:\n%s", label, view)
+		}
+	}
+	want := "[j/k] Move  [spc] State  [o] Optional  [x] Remove  [tab] Actions  [enter] Apply  [esc/q] Cancel"
+	if got := m.shortcutsLegend(); got != want {
+		t.Fatalf("attendee footer = %q, want %q", got, want)
+	}
+	if strings.Index(view, want) < strings.Index(view, "Ada Lovelace") {
+		t.Fatal("attendee keybindings should render below the dialog")
+	}
+}
+func TestNotificationDialogExplainsStateIcons(t *testing.T) {
+	cal := calendar.Calendar{Source: "src", Name: "cal"}
+	m := NewModel(&config.Config{SidebarWidth: 30}, calendar.Dataset{Calendars: []calendar.Calendar{cal}}, nil)
+	m.width = 120
+	m.height = 40
+	m.openEventFormNew()
+	m.eventForm.alarms = "10m before; 1h before"
+	setEventEditorCursor(t, &m, "alarms")
+	m.openEventEditorForm()
+	m.eventForm.notificationManager.cycle(1)
+
+	view := m.View()
+	for _, label := range []string{"", "Focused", "󰀠", "Active", "", "Removed"} {
+		if !strings.Contains(view, label) {
+			t.Fatalf("notification dialog is missing %q:\n%s", label, view)
+		}
+	}
+	want := "[j/k] Move  [spc] Remove  [tab] Actions  [enter] Apply  [esc/q] Cancel"
+	if got := m.shortcutsLegend(); got != want {
+		t.Fatalf("notification footer = %q, want %q", got, want)
+	}
+}
+func TestChoiceAndSearchDialogsExplainListMarkers(t *testing.T) {
+	t.Run("choice", func(t *testing.T) {
+		calendars := []calendar.Calendar{{Source: "src", Name: "one"}, {Source: "src", Name: "two"}}
+		m := NewModel(&config.Config{SidebarWidth: 30}, calendar.Dataset{Calendars: calendars}, nil)
+		m.width = 120
+		m.height = 40
+		m.openEventFormNew()
+		setEventEditorCursor(t, &m, "calendar")
+		m.openEventEditorForm()
+
+		view := m.View()
+		for _, label := range []string{" Focused", "(•) Selected", "( ) Not selected"} {
+			if !strings.Contains(view, label) {
+				t.Fatalf("choice dialog is missing %q:\n%s", label, view)
+			}
+		}
+		want := "[j/k] Move  [spc] Select  [tab] Actions  [enter] Apply  [esc/q] Cancel"
+		if got := m.shortcutsLegend(); got != want {
+			t.Fatalf("choice footer = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("multi-choice", func(t *testing.T) {
+		m := NewModel(&config.Config{SidebarWidth: 30}, calendar.Dataset{}, nil)
+		m.width = 120
+		m.height = 40
+		m.openEventFormNew()
+		m.eventForm.recur = true
+		m.eventForm.recurFreq = "WEEKLY"
+		m.eventForm.recurWeekdays = []string{"Mo"}
+		setEventEditorCursor(t, &m, "recur-weekdays")
+		m.openEventEditorForm()
+
+		view := m.View()
+		for _, label := range []string{" Focused", "[x] Selected", "[ ] Not selected"} {
+			if !strings.Contains(view, label) {
+				t.Fatalf("multi-choice dialog is missing %q:\n%s", label, view)
+			}
+		}
+	})
+
+	t.Run("search", func(t *testing.T) {
+		m := NewModel(&config.Config{SidebarWidth: 30}, calendar.Dataset{}, nil)
+		m.width = 120
+		m.height = 40
+		m.openEventFormNew()
+		m.eventForm.activeKey = "attendees-add"
+		m.eventForm.searchPicker = newSearchPicker("Contacts", []searchOption{{label: "Ada", value: "ada"}}, "")
+
+		if view := m.View(); !strings.Contains(view, " Focused") {
+			t.Fatalf("search dialog is missing its focus icon legend:\n%s", view)
+		}
+		want := "[type] Search  [↑/↓ ctrl-j/ctrl-k] Move  [tab] Actions  [enter] Apply  [esc] Cancel"
+		if got := m.shortcutsLegend(); got != want {
+			t.Fatalf("search footer = %q, want %q", got, want)
+		}
+	})
+}
+func TestTimeDialogKeybindingsRenderOnlyInFooter(t *testing.T) {
+	cal := calendar.Calendar{Source: "src", Name: "cal"}
+	m := NewModel(&config.Config{SidebarWidth: 30}, calendar.Dataset{Calendars: []calendar.Calendar{cal}}, nil)
+	m.width = 120
+	m.height = 40
+	m.openEventFormNew()
+	setEventEditorCursor(t, &m, "time")
+	m.openEventEditorForm()
+
+	want := "[←/→] Digit  [↑/↓] Adjust  [tab] Actions  [enter] Apply  [esc/q] Cancel"
+	if got := m.shortcutsLegend(); got != want {
+		t.Fatalf("time footer = %q, want %q", got, want)
+	}
+	view := m.View()
+	if count := strings.Count(view, "[←/→] Digit"); count != 1 {
+		t.Fatalf("time keybindings rendered %d times, want footer only:\n%s", count, view)
+	}
+}
+
+func TestEditDialogUsesFooterWithoutOpeningApplicationHelp(t *testing.T) {
 	cal := calendar.Calendar{Source: "src", Name: "cal"}
 	m := NewModel(&config.Config{SidebarWidth: 30}, calendar.Dataset{Calendars: []calendar.Calendar{cal}}, nil)
 	m.openEventFormNew()
@@ -582,12 +727,70 @@ func TestEditDialogDoesNotOpenApplicationHelp(t *testing.T) {
 	if updatedModel.showHelpOverlay {
 		t.Fatal("? should not open application help from edit dialog")
 	}
-	if got := updatedModel.shortcutsLegend(); got != "" {
-		t.Fatalf("application legend should be hidden behind edit dialog: %q", got)
+	want := "[tab] Actions  [enter] Apply  [esc] Cancel"
+	if got := updatedModel.shortcutsLegend(); got != want {
+		t.Fatalf("edit dialog footer = %q, want %q", got, want)
+	}
+	view := updatedModel.View()
+	if strings.Contains(strings.ToLower(view), "enter apply") {
+		t.Fatalf("edit dialog still renders inline keybindings:\n%s", view)
+	}
+}
+func TestSpecialFieldFormsUseContextualFooters(t *testing.T) {
+	t.Run("event description", func(t *testing.T) {
+		m := NewModel(&config.Config{SidebarWidth: 30}, calendar.Dataset{}, nil)
+		m.openEventFormNew()
+		setEventEditorCursor(t, &m, "description")
+		m.openEventEditorForm()
+
+		want := "[ctrl+enter] New line  [tab] Actions  [enter] Apply  [esc] Cancel"
+		if got := m.shortcutsLegend(); got != want {
+			t.Fatalf("event description footer = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("task description", func(t *testing.T) {
+		m := NewTaskModeModel(&config.Config{SidebarWidth: 30}, calendar.Dataset{}, nil)
+		m.openTodoFormNew()
+		setTodoEditorCursor(t, &m, "description")
+		m.openTodoEditorForm()
+
+		want := "[ctrl+enter] New line  [tab] Actions  [enter] Apply  [esc] Cancel"
+		if got := m.shortcutsLegend(); got != want {
+			t.Fatalf("task description footer = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("recurring edit scope", func(t *testing.T) {
+		m := NewModel(&config.Config{SidebarWidth: 30}, calendar.Dataset{}, nil)
+		m.openEventFormNew()
+		m.eventForm.activeKey = "edit-scope"
+		m.eventForm.activeForm = m.buildEventEditorForm("edit-scope")
+
+		want := "[j/k] Move  [enter] Apply  [esc/q] Cancel"
+		if got := m.shortcutsLegend(); got != want {
+			t.Fatalf("edit scope footer = %q, want %q", got, want)
+		}
+	})
+}
+
+func TestDeleteDialogKeybindingsRenderInFooter(t *testing.T) {
+	m := NewModel(&config.Config{SidebarWidth: 30}, calendar.Dataset{}, nil)
+	m.deleteConfirm = &deleteConfirmState{kind: "event", stage: "scope", scope: string(calendar.DeleteRecurringOccurrence)}
+
+	scopeWant := "[j/k] Move  [enter] Continue  [esc/q] Cancel"
+	if got := m.shortcutsLegend(); got != scopeWant {
+		t.Fatalf("delete scope footer = %q, want %q", got, scopeWant)
+	}
+
+	m.deleteConfirm.stage = "confirm"
+	confirmWant := "[h/l] Choose  [enter] Delete  [esc/q] Cancel"
+	if got := m.shortcutsLegend(); got != confirmWant {
+		t.Fatalf("delete confirmation footer = %q, want %q", got, confirmWant)
 	}
 }
 
-func TestEmptyNotificationsOpenMessageInsteadOfChoice(t *testing.T) {
+func TestEmptyNotificationsOpenManager(t *testing.T) {
 	cal := calendar.Calendar{Source: "src", Name: "cal"}
 	m := NewModel(&config.Config{SidebarWidth: 30}, calendar.Dataset{Calendars: []calendar.Calendar{cal}}, nil)
 	m.openEventFormNew()
@@ -600,12 +803,12 @@ func TestEmptyNotificationsOpenMessageInsteadOfChoice(t *testing.T) {
 	}
 
 	m.openEventEditorForm()
-	if !m.eventForm.noNotifications || m.eventForm.activeForm != nil {
-		t.Fatal("empty notifications should open message dialog")
+	if m.eventForm.notificationManager == nil || m.eventForm.activeForm != nil {
+		t.Fatal("empty notifications should open the notification manager")
 	}
 	view := m.renderEventFormMainPanel(100, 34)
-	if !strings.Contains(view, "No notifications") || strings.Contains(view, "None") {
-		t.Fatalf("unexpected empty notification dialog: %q", view)
+	if !strings.Contains(view, "No notifications") || !strings.Contains(view, "Apply") {
+		t.Fatalf("unexpected empty notification manager: %q", view)
 	}
 }
 

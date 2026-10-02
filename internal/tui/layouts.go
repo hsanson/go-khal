@@ -11,7 +11,7 @@ import (
 	"github.com/hsanson/go-khal/internal/calendar"
 )
 
-func renderWeekViewport(startWeek, selected time.Time, events []calendar.Event, width, maxHeight int, weekStart time.Weekday, styles Styles) string {
+func renderWeekViewport(startWeek, selected time.Time, events []calendar.Event, width, maxHeight int, weekStart time.Weekday, styles Styles, recordDay func(x, y int, day time.Time)) string {
 	var lines []string
 	used := 0
 	lastHeaderMonth := time.Time{}
@@ -32,6 +32,15 @@ func renderWeekViewport(startWeek, selected time.Time, events []calendar.Event, 
 
 		if used+1 > maxHeight {
 			break
+		}
+		if recordDay != nil {
+			for dayIndex := 0; dayIndex < 7; dayIndex++ {
+				x := dayIndex * 3
+				if x >= width {
+					break
+				}
+				recordDay(x, len(lines), week.AddDate(0, 0, dayIndex))
+			}
 		}
 		weekLine := renderWeekRow(week, selected, events, width, weekStart, styles)
 		lines = append(lines, weekLine)
@@ -85,6 +94,12 @@ type agendaRender struct {
 	Text                  string
 	EventCount            int
 	LastVisibleEventIndex int
+	ItemLines             []agendaItemLine
+}
+
+type agendaItemLine struct {
+	Index int
+	Y     int
 }
 
 type AgendaListItem struct {
@@ -111,6 +126,7 @@ func renderAgendaFromItems(items []AgendaListItem, width, maxLines int, timeFmt 
 		offset = len(items)
 	}
 
+	rendered := agendaRender{}
 	lines := make([]string, 0, maxLines)
 	lastVisible := -1
 	var currentDay string
@@ -182,6 +198,9 @@ func renderAgendaFromItems(items []AgendaListItem, width, maxLines int, timeFmt 
 		if highlight && i == cursor {
 			line = lipgloss.NewStyle().Background(lipgloss.Color("238")).Render(line)
 		}
+		if item.Event != nil || item.Todo != nil {
+			rendered.ItemLines = append(rendered.ItemLines, agendaItemLine{Index: i, Y: len(lines)})
+		}
 		lines = append(lines, line)
 		lastVisible = i
 	}
@@ -190,11 +209,10 @@ func renderAgendaFromItems(items []AgendaListItem, width, maxLines int, timeFmt 
 		lines = append(lines, styles.Subtle.Render("No agenda items"))
 	}
 
-	return agendaRender{
-		Text:                  lipgloss.NewStyle().Width(width).MaxHeight(maxLines).Render(strings.Join(lines, "\n")),
-		EventCount:            len(items),
-		LastVisibleEventIndex: lastVisible,
-	}
+	rendered.Text = lipgloss.NewStyle().Width(width).MaxHeight(maxLines).Render(strings.Join(lines, "\n"))
+	rendered.EventCount = len(items)
+	rendered.LastVisibleEventIndex = lastVisible
+	return rendered
 }
 
 func buildAgendaItems(startDay time.Time, events []calendar.Event, days int, includeFree bool) []AgendaListItem {

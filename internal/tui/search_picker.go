@@ -119,13 +119,14 @@ func (p *searchPicker) ensureVisible() {
 	}
 }
 
-func (p *searchPicker) View(width int, styles Styles) string {
+func (p *searchPicker) render(width int, styles Styles) (string, []mouseHit) {
 	if p == nil {
-		return ""
+		return "", nil
 	}
 	width = max(32, width)
 	search := styles.Accent.Render("Search: ") + p.query + "█"
 	lines := make([]string, 0, searchPickerVisibleRows)
+	hits := make([]mouseHit, 0, searchPickerVisibleRows)
 	if len(p.filtered) == 0 {
 		lines = append(lines, styles.Subtle.Render("No matches"))
 	} else {
@@ -138,20 +139,26 @@ func (p *searchPicker) View(width int, styles Styles) string {
 				style = style.Background(lipgloss.Color("238")).Foreground(lipgloss.Color("230")).Bold(true)
 			}
 			label := p.options[p.filtered[i]].label
+			hits = append(hits, mouseHit{rect: mouseRect{x: 0, y: 3 + len(lines), width: width, height: 1}, kind: mouseSearchOption, index: i})
 			lines = append(lines, style.Render(prefix+truncate(label, width-2)))
 		}
 	}
 	for len(lines) < searchPickerVisibleRows {
 		lines = append(lines, "")
 	}
-	legend := styles.Subtle.Render("[↑/↓ ctrl-j/ctrl-k] Navigate  [enter] Select  [esc] Cancel")
+	legend := styles.Subtle.Render(" Focused")
 	return lipgloss.JoinVertical(lipgloss.Left,
 		styles.PanelTitle.Render(p.title),
 		search,
 		"",
 		strings.Join(lines, "\n"),
 		legend,
-	)
+	), hits
+}
+
+func (p *searchPicker) View(width int, styles Styles) string {
+	view, _ := p.render(width, styles)
+	return view
 }
 
 func normalizeSearchText(value string) string {

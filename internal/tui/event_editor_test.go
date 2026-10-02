@@ -8,6 +8,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/hsanson/go-khal/internal/calendar"
 	"github.com/hsanson/go-khal/internal/config"
 )
@@ -86,16 +87,6 @@ func TestTimeRangeEditorAdjustsFocusedComponents(t *testing.T) {
 	editor.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
 	if editor.cursor != 7 {
 		t.Fatalf("right edge wrapped to cursor %d", editor.cursor)
-	}
-
-	view := editor.View(Styles{})
-	for _, label := range []string{"[←/→] Digit", "[↑/↓] Adjust", "[enter] Ok", "[esc/q] Cancel"} {
-		if !strings.Contains(view, label) {
-			t.Fatalf("time editor is missing %q:\n%s", label, view)
-		}
-	}
-	if strings.Contains(view, "[backspace]") || strings.Contains(view, "[enter] Apply") {
-		t.Fatalf("time editor still shows obsolete labels:\n%s", view)
 	}
 
 	editor.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
@@ -213,12 +204,12 @@ func TestTaskScheduleUsesSeparateOptionalPickers(t *testing.T) {
 
 func TestTaskDatePickerStagesClearAndNavigationRestoresSelection(t *testing.T) {
 	picker := newTaskDatePicker("2026-10-03")
-	if view := picker.View(Styles{}); !strings.Contains(view, "spc  clear") || !strings.Contains(view, "End: Oct 3, 2026") {
+	if view := picker.View(Styles{}); !strings.Contains(view, "[ Clear ]") || !strings.Contains(view, "Date: Oct 3, 2026") {
 		t.Fatalf("task date picker is missing clear controls:\n%s", view)
 	}
 
 	picker.Update(tea.KeyMsg{Type: tea.KeySpace})
-	if !picker.cleared || !strings.Contains(picker.View(Styles{}), "End: —") {
+	if !picker.cleared || !strings.Contains(picker.View(Styles{}), "Date: —") {
 		t.Fatalf("Space did not stage a clear:\n%s", picker.View(Styles{}))
 	}
 	picker.Update(tea.KeyMsg{Type: tea.KeySpace})
@@ -333,6 +324,36 @@ func TestTimeRangeEditorMakesOvernightEndDateVisible(t *testing.T) {
 	}
 }
 
+func TestDateRangePickerKeepsWidthWhenEndDateChanges(t *testing.T) {
+	picker := newDateRangePicker("2026-09-30", "2026-09-30")
+	picker.toggleRange()
+	withoutEnd := lipgloss.Width(picker.View(Styles{}))
+
+	picker.selectByMouse(time.Date(2026, time.October, 2, 0, 0, 0, 0, time.UTC))
+	withEnd := lipgloss.Width(picker.View(Styles{}))
+
+	if withoutEnd != withEnd {
+		t.Fatalf("date picker width changed from %d to %d after selecting end date", withoutEnd, withEnd)
+	}
+	if withEnd < lipgloss.Width("Start: Sep 30, 2026    End: Oct 2, 2026") {
+		t.Fatalf("date picker width %d cannot contain full start and end dates", withEnd)
+	}
+}
+func TestDateRangePickerMultiDayUsesSelectedStartThenSelectsEnd(t *testing.T) {
+	picker := newDateRangePicker("2026-10-01", "2026-10-01")
+	picker.selectByMouse(time.Date(2026, time.October, 5, 0, 0, 0, 0, time.UTC))
+	picker.toggleRange()
+	picker.selectByMouse(time.Date(2026, time.October, 7, 0, 0, 0, 0, time.UTC))
+
+	start, end := picker.dates()
+	if got := start.Format("2006-01-02"); got != "2026-10-05" {
+		t.Fatalf("multi-day start = %s, want selected start 2026-10-05", got)
+	}
+	if got := end.Format("2006-01-02"); got != "2026-10-07" {
+		t.Fatalf("multi-day end = %s, want next click 2026-10-07", got)
+	}
+}
+
 func TestDateRangePickerCrossesMonthsAndNormalizesReverseRange(t *testing.T) {
 	picker := newDateRangePicker("2026-10-01", "2026-10-01")
 	picker.Update(tea.KeyMsg{Type: tea.KeySpace})
@@ -350,7 +371,7 @@ func TestDateRangePickerCrossesMonthsAndNormalizesReverseRange(t *testing.T) {
 	}
 }
 
-func TestDatePickerHasNoFocusableControls(t *testing.T) {
+func TestDatePickerKeepsKeyboardShortcutsAndRendersMouseControls(t *testing.T) {
 	picker := newDateRangePicker("2026-10-01", "2026-10-01")
 	for _, key := range []tea.KeyMsg{
 		{Type: tea.KeyTab},
@@ -370,8 +391,8 @@ func TestDatePickerHasNoFocusableControls(t *testing.T) {
 			t.Fatalf("date picker still renders %q:\n%s", removed, view)
 		}
 	}
-	if !strings.Contains(view, "[ ] Multi-day") || !strings.Contains(view, "[enter] Apply") {
-		t.Fatalf("date picker is missing keyboard-only controls:\n%s", view)
+	if !strings.Contains(view, "[ Today ]") || !strings.Contains(view, "[ ] Multi-day") {
+		t.Fatalf("date picker is missing mouse controls:\n%s", view)
 	}
 
 	picker.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
@@ -403,7 +424,7 @@ func TestRepeatUntilUsesSingleDatePicker(t *testing.T) {
 		t.Fatalf("Repeat Until picker = %+v", picker)
 	}
 	view := picker.View(Styles{})
-	if !strings.Contains(view, "End: Oct 2, 2026") || strings.Contains(view, "Start:") || strings.Contains(view, "Multi-day") {
+	if !strings.Contains(view, "Date: Oct 2, 2026") || strings.Contains(view, "Start:") || strings.Contains(view, "Multi-day") {
 		t.Fatalf("unexpected Repeat Until picker:\n%s", view)
 	}
 
@@ -775,7 +796,7 @@ func TestEnterStillOpensNonBooleanChoicePopups(t *testing.T) {
 
 	updated, _ := eventModel.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	eventResult := modelValue(t, updated)
-	if eventResult.eventForm.activeKey != "recur-monthly-by" || eventResult.eventForm.activeForm == nil {
+	if eventResult.eventForm.activeKey != "recur-monthly-by" || eventResult.eventForm.choicePicker == nil {
 		t.Fatal("Enter did not open the two-choice By selector")
 	}
 
@@ -784,7 +805,7 @@ func TestEnterStillOpensNonBooleanChoicePopups(t *testing.T) {
 	setTodoEditorCursor(t, &todoModel, "priority")
 	updated, _ = todoModel.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	todoResult := modelValue(t, updated)
-	if todoResult.todoForm.activeKey != "priority" || todoResult.todoForm.activeForm == nil {
+	if todoResult.todoForm.activeKey != "priority" || todoResult.todoForm.choicePicker == nil {
 		t.Fatal("Enter did not open the Priority selector")
 	}
 }
@@ -806,7 +827,7 @@ func TestMultiSelectRowsIgnoreDirectCyclingAndStillOpen(t *testing.T) {
 
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = *modelValue(t, updated)
-	if m.eventForm.activeKey != "recur-weekdays" || m.eventForm.activeForm == nil {
+	if m.eventForm.activeKey != "recur-weekdays" || m.eventForm.choicePicker == nil {
 		t.Fatal("Enter did not open the weekday multiselect")
 	}
 }

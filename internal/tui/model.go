@@ -42,53 +42,58 @@ type Model struct {
 	deleteConfirm      *deleteConfirmState
 	showHelpOverlay    bool
 	actionErr          string
+	mouse              *mouseState
+	mouseMainX         int
+	mouseMainY         int
 }
 
 const calendarKeySeparator = "\x1f"
 
 type eventFormState struct {
-	mode            string
-	targetUID       string
-	targetEvent     *calendar.Event
-	editScope       string
-	form            *huh.Form
-	activeKey       string
-	activeForm      *huh.Form
-	attendeeManager *attendeeManagerState
-	noNotifications bool
-	backup          *eventFormSnapshot
-	datePicker      *dateRangePicker
-	timeEditor      *timeRangeEditor
-	searchPicker    *searchPicker
-	cursor          int
-	summary         string
-	calendarKey     string
-	location        string
-	description     string
-	url             string
-	attendees       string
-	rsvp            string
-	availability    string
-	visibility      string
-	alarms          string
-	recur           bool
-	recurFreq       string
-	recurEvery      string
-	recurWeekdays   []string
-	recurMonthlyBy  string
-	recurEnd        string
-	recurUntil      string
-	recurCount      string
-	allDay          bool
-	fromDate        string
-	fromTime        string
-	toDate          string
-	toTime          string
-	timezone        string
-	timezoneLocal   bool
-	timingDirty     bool
-	overnightAuto   bool
-	errMsg          string
+	mode                string
+	targetUID           string
+	targetEvent         *calendar.Event
+	editScope           string
+	form                *huh.Form
+	activeKey           string
+	activeForm          *huh.Form
+	attendeeManager     *attendeeManagerState
+	notificationManager *notificationManagerState
+	choicePicker        *choicePicker
+	dialogFocus         dialogFocus
+	backup              *eventFormSnapshot
+	datePicker          *dateRangePicker
+	timeEditor          *timeRangeEditor
+	searchPicker        *searchPicker
+	cursor              int
+	summary             string
+	calendarKey         string
+	location            string
+	description         string
+	url                 string
+	attendees           string
+	rsvp                string
+	availability        string
+	visibility          string
+	alarms              string
+	recur               bool
+	recurFreq           string
+	recurEvery          string
+	recurWeekdays       []string
+	recurMonthlyBy      string
+	recurEnd            string
+	recurUntil          string
+	recurCount          string
+	allDay              bool
+	fromDate            string
+	fromTime            string
+	toDate              string
+	toTime              string
+	timezone            string
+	timezoneLocal       bool
+	timingDirty         bool
+	overnightAuto       bool
+	errMsg              string
 }
 
 type attendeeManagerState struct {
@@ -123,6 +128,8 @@ type todoFormState struct {
 	backup        *todoFormSnapshot
 	datePicker    *dateRangePicker
 	timeEditor    *timeRangeEditor
+	choicePicker  *choicePicker
+	dialogFocus   dialogFocus
 	cursor        int
 	summary       string
 	description   string
@@ -219,6 +226,7 @@ func NewModel(cfg *config.Config, data calendar.Dataset, store *calendar.Store) 
 		calendarVisibility: vis,
 		calendarOrder:      order,
 		focusMain:          true,
+		mouse:              &mouseState{},
 	}
 	m.ensureEventSelectionValid()
 	m.ensureCalendarCursorVisible(m.calendarPaneHeight())
@@ -267,6 +275,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		m.scrollForSelection()
+	case tea.MouseMsg:
+		return m.updateMouse(tea.MouseEvent(msg))
 	case tea.KeyMsg:
 		key := msg.String()
 		if m.showHelpOverlay {
@@ -283,7 +293,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.eventForm != nil && m.eventForm.hasActiveDialog() {
 			return m.updateEventEditor(msg)
 		}
-		if m.todoForm != nil && m.todoForm.activeForm != nil {
+		if m.todoForm != nil && m.todoForm.hasActiveFieldDialog() {
 			return m.updateTodoEditor(msg)
 		}
 
@@ -549,6 +559,9 @@ func (m *Model) closeDeleteConfirm() {
 }
 
 func (m Model) View() string {
+	if m.mouse != nil {
+		m.mouse.reset()
+	}
 	if m.width == 0 {
 		m.width = 140
 	}
@@ -559,6 +572,8 @@ func (m Model) View() string {
 	leftWidth := m.sidebarWidth()
 	rightWidth := max(50, m.width-leftWidth-5)
 	left := m.renderLeftPanel(leftWidth)
+	m.mouseMainX = 1 + lipgloss.Width(left)
+	m.mouseMainY = 1
 	right := m.renderMainPanel(rightWidth)
 
 	root := lipgloss.JoinHorizontal(lipgloss.Top, left, right)
@@ -588,8 +603,10 @@ func (m Model) renderLeftPanel(width int) string {
 		bottomHeight = 4
 		topHeight = panelHeight - bottomHeight - 1
 	}
-	weeks := renderWeekViewport(m.weekViewportStart, m.selected, filteredEvents(m.data.Events, m.calendarVisibility, true), width-2, max(3, topHeight-2), m.weekStart(), m.styles)
-	calPane := m.renderCalendarListPane(width-2, bottomHeight)
+	weeks := renderWeekViewport(m.weekViewportStart, m.selected, filteredEvents(m.data.Events, m.calendarVisibility, true), width-2, max(3, topHeight-2), m.weekStart(), m.styles, func(x, y int, day time.Time) {
+		m.addMouseHit(mouseHit{rect: mouseRect{x: 3 + x, y: 3 + y, width: min(3, width-2-x), height: 1}, kind: mouseCalendarDay, day: day})
+	})
+	calPane := m.renderCalendarListPane(width-2, bottomHeight, 3, 4+lipgloss.Height(weeks))
 	divider := m.styles.Subtle.Render(strings.Repeat("-", max(8, width-2)))
 	panel := lipgloss.JoinVertical(lipgloss.Left, m.styles.PanelTitle.Render("Calendar"), weeks, divider, calPane)
 	return m.styles.Sidebar.Width(width).Height(panelHeight).Render(panel)
@@ -629,6 +646,13 @@ func (m Model) renderMainPanel(width int) string {
 	}
 
 	rendered := renderAgendaFromItems(items, width-2, topHeight, m.cfg.TimeFormat, m.styles, m.eventCursor, m.eventListOffset, true)
+	for _, line := range rendered.ItemLines {
+		m.addMouseHit(mouseHit{
+			rect:  mouseRect{x: m.mouseMainX + 2, y: m.mouseMainY + 3 + line.Y, width: width - 2, height: 1},
+			kind:  mouseAgendaItem,
+			index: line.Index,
+		})
+	}
 	top := lipgloss.NewStyle().Height(topHeight).MaxHeight(topHeight).Render(rendered.Text)
 	detail := m.renderEventDetailsPane(width-2, bottomHeight)
 	header := m.styles.PanelTitle.Render(fmt.Sprintf("Agenda from %s", m.agendaStart.Format("Mon Jan 2, 2006")))
@@ -668,30 +692,51 @@ func (m Model) renderEventFormMainPanel(width, panelHeight int) string {
 	content := lipgloss.JoinVertical(lipgloss.Left, header, "", body)
 	panel := m.styles.MainPanel.Width(width).Height(panelHeight).Render(content)
 	if m.eventForm.attendeeManager != nil {
-		modal := m.renderAttendeeManager(min(78, max(36, width-8)), max(9, min(panelHeight-4, (panelHeight*2)/3)))
-		return overlayCentered(panel, modal, width, panelHeight)
+		modal, hits := m.renderAttendeeManager(min(78, max(36, width-8)), max(9, min(panelHeight-4, (panelHeight*2)/3)))
+		modal, hits = addDialogActions(modal, hits, m.eventForm.dialogFocus)
+		return m.overlayCenteredWithHits(panel, modal, width, panelHeight, hits)
 	}
-	if m.eventForm.noNotifications {
-		modal := m.renderEmptyEditorDialog("Notifications", "No notifications", min(70, max(30, width-10)), max(7, panelHeight/3))
-		return overlayCentered(panel, modal, width, panelHeight)
+	if m.eventForm.notificationManager != nil {
+		modal, hits := m.eventForm.notificationManager.render(min(70, max(30, width-10)), max(7, panelHeight/3), m.styles)
+		modal, hits = addDialogActions(modal, hits, m.eventForm.dialogFocus)
+		return m.overlayCenteredWithHits(panel, modal, width, panelHeight, hits)
+	}
+	if m.eventForm.choicePicker != nil {
+		modal, hits := m.eventForm.choicePicker.render(m.styles)
+		modal, hits = addDialogActions(modal, hits, m.eventForm.dialogFocus)
+		return m.overlayCenteredWithHits(panel, modal, width, panelHeight, hits)
 	}
 	if m.eventForm.datePicker != nil {
-		return overlayCentered(panel, m.eventForm.datePicker.View(m.styles), width, panelHeight)
+		modal, hits := m.eventForm.datePicker.render(m.styles)
+		modal, hits = addDialogActions(modal, hits, m.eventForm.dialogFocus)
+		return m.overlayCenteredWithHits(panel, modal, width, panelHeight, hits)
 	}
 	if m.eventForm.timeEditor != nil {
-		return overlayCentered(panel, m.eventForm.timeEditor.View(m.styles), width, panelHeight)
+		modal, hits := m.eventForm.timeEditor.render(m.styles)
+		modal, hits = addDialogActions(modal, hits, m.eventForm.dialogFocus)
+		return m.overlayCenteredWithHits(panel, modal, width, panelHeight, hits)
 	}
 	if m.eventForm.searchPicker != nil {
-		modal := m.eventForm.searchPicker.View(min(70, max(38, width-12)), m.styles)
-		return overlayCentered(panel, modal, width, panelHeight)
+		modal, hits := m.eventForm.searchPicker.render(min(70, max(38, width-12)), m.styles)
+		modal, hits = addDialogActions(modal, hits, m.eventForm.dialogFocus)
+		return m.overlayCenteredWithHits(panel, modal, width, panelHeight, hits)
 	}
 	if m.eventForm.activeForm != nil {
+		if m.eventForm.activeKey == "edit-scope" {
+			modal, hits := workflowChoiceView("Edit recurring event", []editorChoice{
+				{"Only this occurrence", string(calendar.EditRecurringOccurrence)},
+				{"This and following occurrences", string(calendar.EditRecurringFuture)},
+				{"All occurrences", string(calendar.EditRecurringAll)},
+			}, m.eventForm.editScope, mouseEditScope, m.styles)
+			return m.overlayCenteredWithHits(panel, modal, width, panelHeight, hits)
+		}
 		formHeight := max(7, panelHeight/3)
 		if m.eventForm.activeKey == "description" {
 			formHeight = max(12, (panelHeight*2)/3)
 		}
 		modal := activeFormModalView(m.eventForm.activeForm, min(70, max(30, width-10)), formHeight, m.eventForm.errMsg)
-		return overlayCentered(panel, modal, width, panelHeight)
+		modal, hits := addDialogActions(modal, nil, m.eventForm.dialogFocus)
+		return m.overlayCenteredWithHits(panel, modal, width, panelHeight, hits)
 	}
 	return panel
 }
@@ -710,11 +755,20 @@ func (m Model) renderTodoFormMainPanel(width, panelHeight int) string {
 	}
 	content := lipgloss.JoinVertical(lipgloss.Left, header, "", body)
 	panel := m.styles.MainPanel.Width(width).Height(panelHeight).Render(content)
+	if m.todoForm.choicePicker != nil {
+		modal, hits := m.todoForm.choicePicker.render(m.styles)
+		modal, hits = addDialogActions(modal, hits, m.todoForm.dialogFocus)
+		return m.overlayCenteredWithHits(panel, modal, width, panelHeight, hits)
+	}
 	if m.todoForm.datePicker != nil {
-		return overlayCentered(panel, m.todoForm.datePicker.View(m.styles), width, panelHeight)
+		modal, hits := m.todoForm.datePicker.render(m.styles)
+		modal, hits = addDialogActions(modal, hits, m.todoForm.dialogFocus)
+		return m.overlayCenteredWithHits(panel, modal, width, panelHeight, hits)
 	}
 	if m.todoForm.timeEditor != nil {
-		return overlayCentered(panel, m.todoForm.timeEditor.View(m.styles), width, panelHeight)
+		modal, hits := m.todoForm.timeEditor.render(m.styles)
+		modal, hits = addDialogActions(modal, hits, m.todoForm.dialogFocus)
+		return m.overlayCenteredWithHits(panel, modal, width, panelHeight, hits)
 	}
 	if m.todoForm.activeForm != nil {
 		formHeight := max(7, panelHeight/3)
@@ -722,7 +776,8 @@ func (m Model) renderTodoFormMainPanel(width, panelHeight int) string {
 			formHeight = max(12, (panelHeight*2)/3)
 		}
 		modal := activeFormModalView(m.todoForm.activeForm, min(70, max(30, width-10)), formHeight, m.todoForm.errMsg)
-		return overlayCentered(panel, modal, width, panelHeight)
+		modal, hits := addDialogActions(modal, nil, m.todoForm.dialogFocus)
+		return m.overlayCenteredWithHits(panel, modal, width, panelHeight, hits)
 	}
 	return panel
 }
@@ -732,20 +787,26 @@ func (m Model) renderDeleteConfirmMainPanel(width, panelHeight int) string {
 		return m.styles.MainPanel.Width(width).Height(panelHeight).Render("")
 	}
 	header := m.styles.PanelTitle.Render("Confirm Delete")
-	formView := m.deleteConfirm.form.WithWidth(width - 2).WithHeight(panelHeight - 2).WithShowHelp(true).WithShowErrors(true).View()
+	formView, hits := deleteWorkflowView(m.deleteConfirm, m.styles)
+	hitY := m.mouseMainY + 3
 	if strings.TrimSpace(m.deleteConfirm.errMsg) != "" {
 		formView = lipgloss.JoinVertical(lipgloss.Left, errorText("Error: "+m.deleteConfirm.errMsg), "", formView)
+		hitY += 2
 	}
+	m.addOffsetMouseHits(hits, m.mouseMainX+2, hitY)
 	content := lipgloss.JoinVertical(lipgloss.Left, header, "", formView)
 	return m.styles.MainPanel.Width(width).Height(panelHeight).Render(content)
 }
 
-func overlayCentered(base, modal string, width, height int) string {
-	box := lipgloss.NewStyle().
+func centeredOverlayBox(modal string, width int) string {
+	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		Padding(1, 2).
-		Width(min(width-8, max(30, lipgloss.Width(modal)+4))).
+		Width(min(width-4, max(30, lipgloss.Width(modal)+4))).
 		Render(modal)
+}
+
+func placeCenteredBox(_ string, box string, width, height int) string {
 	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, box)
 }
 
@@ -754,10 +815,10 @@ func activeFormModalView(form *huh.Form, width, height int, errMsg string) strin
 		return ""
 	}
 	if strings.TrimSpace(errMsg) == "" {
-		return form.WithWidth(width).WithHeight(height).WithShowHelp(true).WithShowErrors(true).View()
+		return form.WithWidth(width).WithHeight(height).WithShowHelp(false).WithShowErrors(true).View()
 	}
 	formHeight := max(3, height-2)
-	view := form.WithWidth(width).WithHeight(formHeight).WithShowHelp(true).WithShowErrors(true).View()
+	view := form.WithWidth(width).WithHeight(formHeight).WithShowHelp(false).WithShowErrors(true).View()
 	err := lipgloss.NewStyle().Width(width).Render(errorText("Error: " + errMsg))
 	return lipgloss.NewStyle().
 		Width(width).
@@ -773,14 +834,15 @@ func errorText(msg string) string {
 		Render(msg)
 }
 
-func (m Model) renderAttendeeManager(width, height int) string {
+func (m Model) renderAttendeeManager(width, height int) (string, []mouseHit) {
 	width = max(28, width)
 	height = max(6, height)
 	mgr := m.eventForm.attendeeManager
 	title := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("117")).Render("Attendees")
-	legend := m.styles.Subtle.Render("[j/k] Move  [space/o] Optional  [x/d] Remove  [enter] Apply  [esc/q] Cancel")
+	legend := attendeeStateLegend(m.styles)
 	bodyHeight := max(1, height-2)
 	lines := make([]string, 0, bodyHeight)
+	hits := make([]mouseHit, 0, bodyHeight)
 	if mgr == nil || len(mgr.attendees) == 0 {
 		lines = append(lines, m.styles.Subtle.Render("No attendees"))
 	} else {
@@ -796,19 +858,14 @@ func (m Model) renderAttendeeManager(width, height int) string {
 			if selected {
 				prefix = " "
 			}
-			glyph := ""
-			glyphColor := lipgloss.Color("65")
-			if attendeeIsOptional(item.attendee) {
-				glyphColor = lipgloss.Color("244")
-			}
+			state := attendeeStateIcon(item.attendee)
 			if item.remove {
-				glyph = ""
-				glyphColor = lipgloss.Color("210")
+				state = lipgloss.NewStyle().Foreground(lipgloss.Color("210")).Bold(true).Render("")
 			}
-			state := lipgloss.NewStyle().Foreground(glyphColor).Bold(true).Render(glyph)
 			label := attendeeBaseLabel(item.attendee)
 			valueBudget := max(8, width-lipgloss.Width(prefix)-lipgloss.Width(state)-2)
 			line := prefix + state + " " + truncate(label, valueBudget)
+			hits = append(hits, mouseHit{rect: mouseRect{x: 0, y: 1 + len(lines), width: width, height: 1}, kind: mouseAttendeeRow, index: i})
 			lines = append(lines, editorRowStyle(selected, width).Render(line))
 		}
 	}
@@ -817,19 +874,7 @@ func (m Model) renderAttendeeManager(width, height int) string {
 		Width(width).
 		Height(height).
 		MaxHeight(height).
-		Render(lipgloss.JoinVertical(lipgloss.Left, title, body, legend))
-}
-
-func (m Model) renderEmptyEditorDialog(title, message string, width, height int) string {
-	width = max(28, width)
-	height = max(5, height)
-	header := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("117")).Render(title)
-	legend := m.styles.Subtle.Render("[enter/esc/q] Close")
-	bodyHeight := max(1, height-2)
-	body := lipgloss.NewStyle().Width(width).Height(bodyHeight).MaxHeight(bodyHeight).Render(m.styles.Subtle.Render(message))
-	return lipgloss.NewStyle().Width(width).Height(height).MaxHeight(height).Render(
-		lipgloss.JoinVertical(lipgloss.Left, header, body, legend),
-	)
+		Render(lipgloss.JoinVertical(lipgloss.Left, title, body, legend)), hits
 }
 
 func (m Model) renderEventEditorList(width, height int) string {
@@ -838,7 +883,11 @@ func (m Model) renderEventEditorList(width, height int) string {
 		return ""
 	}
 	cur := nearestSelectableEditorCursor(rows, m.eventForm.cursor)
-	return m.renderEditorRows(rows, cur, width, height)
+	offsetY := m.mouseMainY + 3
+	if strings.TrimSpace(m.eventForm.errMsg) != "" {
+		offsetY += 2
+	}
+	return m.renderEditorRows(rows, cur, width, height, m.mouseMainX+2, offsetY, mouseEventEditorRow, m.eventForm.mode != "view")
 }
 
 func (m Model) renderTodoEditorList(width, height int) string {
@@ -847,29 +896,67 @@ func (m Model) renderTodoEditorList(width, height int) string {
 		return ""
 	}
 	cur := nearestSelectableEditorCursor(rows, m.todoForm.cursor)
-	return m.renderEditorRows(rows, cur, width, height)
+	offsetY := m.mouseMainY + 3
+	if strings.TrimSpace(m.todoForm.errMsg) != "" {
+		offsetY += 2
+	}
+	return m.renderEditorRows(rows, cur, width, height, m.mouseMainX+2, offsetY, mouseTodoEditorRow, m.todoForm.mode != "view")
 }
 
-func (m Model) renderEditorRows(rows []editorRow, cur, width, height int) string {
+type editorLineHit struct {
+	row   int
+	x     int
+	width int
+}
+
+func (m Model) renderEditorRows(rows []editorRow, cur, width, height, offsetX, offsetY int, kind mouseTarget, interactive bool) string {
 	lines := make([]string, 0, len(rows))
+	lineHits := make([][]editorLineHit, 0, len(rows))
 	selectedLine := 0
-	for i, row := range rows {
+	for i := 0; i < len(rows); i++ {
+		row := rows[i]
 		if isEditorSeparator(row) && len(lines) > 0 {
 			lines = append(lines, "")
+			lineHits = append(lineHits, nil)
 		}
 		if i == cur {
 			selectedLine = len(lines)
 		}
-		lines = append(lines, strings.Split(m.renderEditorRow(row, i == cur, width), "\n")...)
-	}
-	if len(lines) > height {
-		start := 0
-		if selectedLine >= height {
-			start = selectedLine - height + 1
+		if i+1 == cur && editorRowKey(row) == "form-save" && i+1 < len(rows) && editorRowKey(rows[i+1]) == "form-cancel" {
+			selectedLine = len(lines)
 		}
-		lines = lines[start:min(len(lines), start+height)]
+		if editorRowKey(row) == "form-save" && i+1 < len(rows) && editorRowKey(rows[i+1]) == "form-cancel" {
+			line, saveWidth, cancelX, cancelWidth := m.renderEditorActions(i == cur, i+1 == cur, width)
+			lines = append(lines, line)
+			lineHits = append(lineHits, []editorLineHit{{row: i, width: saveWidth}, {row: i + 1, x: cancelX, width: cancelWidth}})
+			i++
+			continue
+		}
+		rendered := strings.Split(m.renderEditorRow(row, i == cur, width), "\n")
+		for _, line := range rendered {
+			lines = append(lines, line)
+			if interactive && isEditorSelectable(row) {
+				lineHits = append(lineHits, []editorLineHit{{row: i, width: width}})
+			} else {
+				lineHits = append(lineHits, nil)
+			}
+		}
 	}
-	return lipgloss.NewStyle().Width(width).Height(height).MaxHeight(height).Render(strings.Join(lines, "\n"))
+	start := 0
+	if len(lines) > height && selectedLine >= height {
+		start = selectedLine - height + 1
+	}
+	end := min(len(lines), start+height)
+	for y, hits := range lineHits[start:end] {
+		for _, hit := range hits {
+			m.addMouseHit(mouseHit{
+				rect:  mouseRect{x: offsetX + hit.x, y: offsetY + y, width: hit.width, height: 1},
+				kind:  kind,
+				index: hit.row,
+			})
+		}
+	}
+	return lipgloss.NewStyle().Width(width).Height(height).MaxHeight(height).Render(strings.Join(lines[start:end], "\n"))
 }
 
 func (m Model) renderEditorRow(row editorRow, selected bool, width int) string {
@@ -943,6 +1030,26 @@ func (m Model) renderEditorRow(row editorRow, selected bool, width int) string {
 	}
 	value := valueStyle.Render(truncate(displayValue, valueBudget))
 	return editorRowStyle(selected, width).Render(prefix + label + sep + value)
+}
+func (m Model) renderEditorActions(saveSelected, cancelSelected bool, width int) (line string, saveWidth, cancelX, cancelWidth int) {
+	button := func(label string, background lipgloss.Color, selected bool) string {
+		if selected {
+			background = lipgloss.Color("117")
+		}
+		return lipgloss.NewStyle().
+			Foreground(lipgloss.Color("230")).
+			Background(background).
+			Bold(true).
+			Padding(0, 1).
+			Render(label)
+	}
+	save := button("Save", lipgloss.Color("62"), saveSelected)
+	cancel := button("Cancel", lipgloss.Color("238"), cancelSelected)
+	saveWidth = lipgloss.Width(save)
+	cancelX = saveWidth + 2
+	cancelWidth = lipgloss.Width(cancel)
+	line = lipgloss.NewStyle().Width(width).Render(save + "  " + cancel)
+	return
 }
 
 func (m Model) eventEditorRows() []editorRow {
@@ -1091,12 +1198,30 @@ func (m *Model) updateEventEditor(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	}
-	if s.noNotifications {
+	if handled, cmd := m.updateEventDialogFocus(msg); handled {
+		return m, cmd
+	}
+	if s.choicePicker != nil {
+		apply, cancel := updateChoicePicker(s.choicePicker, msg)
+		if cancel {
+			s.cancelActive()
+		} else if apply {
+			m.applyEventChoicePicker()
+		}
+		return m, nil
+	}
+	if s.notificationManager != nil {
 		switch msg.String() {
-		case "enter", "esc", "ctrl+c", "q":
-			s.noNotifications = false
-			s.activeKey = ""
-			s.backup = nil
+		case "esc", "ctrl+c", "q":
+			s.cancelActive()
+		case "enter":
+			m.applyEventDialog()
+		case "j", "down":
+			s.notificationManager.cursor = min(len(s.notificationManager.items)-1, s.notificationManager.cursor+1)
+		case "k", "up":
+			s.notificationManager.cursor = max(0, s.notificationManager.cursor-1)
+		case " ", "space":
+			s.notificationManager.cycle(s.notificationManager.cursor)
 		}
 		return m, nil
 	}
@@ -1128,7 +1253,9 @@ func (m *Model) updateEventEditor(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			s.attendeeManager.cursor = min(len(s.attendeeManager.attendees)-1, s.attendeeManager.cursor+1)
 		case "k", "up", "shift+tab":
 			s.attendeeManager.cursor = max(0, s.attendeeManager.cursor-1)
-		case " ", "space", "o":
+		case " ", "space":
+			cycleAttendeeState(s.attendeeManager, s.attendeeManager.cursor)
+		case "o":
 			toggleAttendeeOptional(s.attendeeManager)
 		case "x", "d", "backspace":
 			toggleAttendeeRemove(s.attendeeManager)
@@ -1162,9 +1289,17 @@ func (m *Model) updateEventEditor(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "k", "up", "shift+tab":
 		s.cursor = moveEditorCursor(m.eventEditorRows(), s.cursor, -1)
 	case "h", "left":
-		m.cycleEventEditorValue(-1)
+		if next, ok := moveEditorActionCursor(m.eventEditorRows(), s.cursor, -1); ok {
+			s.cursor = next
+		} else {
+			m.cycleEventEditorValue(-1)
+		}
 	case "l", "right":
-		m.cycleEventEditorValue(1)
+		if next, ok := moveEditorActionCursor(m.eventEditorRows(), s.cursor, 1); ok {
+			s.cursor = next
+		} else {
+			m.cycleEventEditorValue(1)
+		}
 	case "enter":
 		if m.toggleEventEditorBoolean() {
 			return m, nil
@@ -1197,6 +1332,18 @@ func (m *Model) updateTodoEditor(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	}
+	if handled, cmd := m.updateTodoDialogFocus(msg); handled {
+		return m, cmd
+	}
+	if s.choicePicker != nil {
+		apply, cancel := updateChoicePicker(s.choicePicker, msg)
+		if cancel {
+			s.cancelActive()
+		} else if apply {
+			m.applyTodoChoicePicker()
+		}
+		return m, nil
+	}
 	if s.datePicker != nil {
 		m.updateTodoDatePicker(msg)
 		return m, nil
@@ -1225,9 +1372,17 @@ func (m *Model) updateTodoEditor(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "k", "up", "shift+tab":
 		s.cursor = moveEditorCursor(m.todoEditorRows(), s.cursor, -1)
 	case "h", "left":
-		m.cycleTodoEditorValue(-1)
+		if next, ok := moveEditorActionCursor(m.todoEditorRows(), s.cursor, -1); ok {
+			s.cursor = next
+		} else {
+			m.cycleTodoEditorValue(-1)
+		}
 	case "l", "right":
-		m.cycleTodoEditorValue(1)
+		if next, ok := moveEditorActionCursor(m.todoEditorRows(), s.cursor, 1); ok {
+			s.cursor = next
+		} else {
+			m.cycleTodoEditorValue(1)
+		}
 	case "delete":
 		m.clearTodoSchedule()
 	case "enter":
@@ -1255,6 +1410,7 @@ func (m *Model) openEventEditorForm() tea.Cmd {
 	s.activeKey = key
 	s.backup = s.snapshot()
 	s.errMsg = ""
+	s.dialogFocus = dialogFocusControl
 	if m.openCustomEventEditor(key) {
 		return nil
 	}
@@ -1262,8 +1418,12 @@ func (m *Model) openEventEditorForm() tea.Cmd {
 		s.attendeeManager = newAttendeeManager(parseAttendeesInput(s.attendees))
 		return nil
 	}
-	if key == "alarms" && len(splitListInput(s.alarms)) == 0 {
-		s.noNotifications = true
+	if key == "alarms" {
+		s.notificationManager = newNotificationManager(splitListInput(s.alarms))
+		return nil
+	}
+	if picker := m.newEventChoicePicker(key); picker != nil {
+		s.choicePicker = picker
 		return nil
 	}
 	s.activeForm = m.buildEventEditorForm(key)
@@ -1371,14 +1531,6 @@ var (
 	}
 )
 
-func editorChoiceOptions(choices []editorChoice) []huh.Option[string] {
-	options := make([]huh.Option[string], len(choices))
-	for i, choice := range choices {
-		options[i] = huh.NewOption(choice.label, choice.value)
-	}
-	return options
-}
-
 func cycleEditorChoice(current string, choices []editorChoice, delta int) string {
 	if len(choices) == 0 {
 		return current
@@ -1414,7 +1566,7 @@ func (m *Model) buildEventEditorForm(key string) *huh.Form {
 			huh.NewOption("Only this occurrence", string(calendar.EditRecurringOccurrence)),
 			huh.NewOption("This and following occurrences", string(calendar.EditRecurringFuture)),
 			huh.NewOption("All occurrences", string(calendar.EditRecurringAll)),
-		).Value(&s.editScope))).WithShowHelp(true).WithShowErrors(true)
+		).Value(&s.editScope))).WithShowHelp(false).WithShowErrors(true)
 	case "title":
 		return singleInputForm("Title", "value", &s.summary, func(v string) error {
 			if strings.TrimSpace(v) == "" {
@@ -1425,27 +1577,9 @@ func (m *Model) buildEventEditorForm(key string) *huh.Form {
 	case "location":
 		return singleInputForm("Location", "value", &s.location, nil)
 	case "description":
-		return huh.NewForm(huh.NewGroup(huh.NewText().Key("value").Title("Description").Value(&s.description).Lines(12))).WithShowHelp(true).WithShowErrors(true)
+		return huh.NewForm(huh.NewGroup(huh.NewText().Key("value").Title("Description").Value(&s.description).Lines(12))).WithShowHelp(false).WithShowErrors(true)
 	case "url":
 		return singleInputForm("URL", "value", &s.url, nil)
-	case "calendar":
-		return huh.NewForm(huh.NewGroup(huh.NewSelect[string]().Key("value").Title("Calendar").Options(m.calendarOptions()...).Value(&s.calendarKey))).WithShowHelp(true).WithShowErrors(true)
-	case "attendees":
-		values := splitListInput(s.attendees)
-		return huh.NewForm(huh.NewGroup(huh.NewMultiSelect[string]().Key("value").Title("Attendees").Options(selectedOptions(values)...).Value(&values).WithKeyMap(attendeeMultiSelectKeyMap()))).WithShowHelp(true).WithShowErrors(true)
-	case "attendees-add":
-		values := []string{}
-		return huh.NewForm(huh.NewGroup(huh.NewMultiSelect[string]().Key("value").Title("Add attendees").Options(m.attendeeOptions()...).Filterable(true).Value(&values).WithKeyMap(attendeeMultiSelectKeyMap()))).WithShowHelp(true).WithShowErrors(true)
-	case "rsvp":
-		value := s.rsvp
-		return huh.NewForm(huh.NewGroup(huh.NewSelect[string]().Key("value").Title("RSVP").Options(editorChoiceOptions(eventRSVPChoices[:])...).Value(&value))).WithShowHelp(true).WithShowErrors(true)
-	case "availability":
-		return huh.NewForm(huh.NewGroup(huh.NewSelect[string]().Key("value").Title("Availability").Options(editorChoiceOptions(eventAvailabilityChoices[:])...).Value(&s.availability))).WithShowHelp(true).WithShowErrors(true)
-	case "visibility":
-		return huh.NewForm(huh.NewGroup(huh.NewSelect[string]().Key("value").Title("Visibility").Options(editorChoiceOptions(eventVisibilityChoices[:])...).Value(&s.visibility))).WithShowHelp(true).WithShowErrors(true)
-	case "alarms":
-		values := splitListInput(s.alarms)
-		return huh.NewForm(huh.NewGroup(huh.NewMultiSelect[string]().Key("value").Title("Notifications").Options(selectedOptions(values)...).Filterable(false).Value(&values))).WithShowHelp(true).WithShowErrors(true)
 	case "alarms-add":
 		value := ""
 		return huh.NewForm(huh.NewGroup(huh.NewInput().
@@ -1454,56 +1588,21 @@ func (m *Model) buildEventEditorForm(key string) *huh.Form {
 			Description("Examples: 10m before, 2h before, 10d before, 1d after").
 			Value(&value).
 			Validate(validateAlarmsInput),
-		)).WithShowHelp(true).WithShowErrors(true)
-	case "recur":
-		value := repeatValue(s)
-		return huh.NewForm(huh.NewGroup(huh.NewSelect[string]().Key("value").Title("Repeat").Options(editorChoiceOptions(eventRepeatChoices[:])...).Value(&value))).WithShowHelp(true).WithShowErrors(true)
+		)).WithShowHelp(false).WithShowErrors(true)
 	case "recur-every":
 		return singleInputForm("Frequency", "value", &s.recurEvery, validateRecurrenceNumberInput)
-	case "recur-weekdays":
-		values := append([]string{}, s.recurWeekdays...)
-		return huh.NewForm(huh.NewGroup(huh.NewMultiSelect[string]().Key("value").Title("Weekday").Options(weekdayOptions(values)...).Value(&values))).WithShowHelp(true).WithShowErrors(true)
-	case "recur-monthly-by":
-		value := s.recurMonthlyBy
-		if value == "" {
-			value = "month day"
-		}
-		return huh.NewForm(huh.NewGroup(huh.NewSelect[string]().Key("value").Title("By").Options(editorChoiceOptions(eventMonthlyByChoices[:])...).Value(&value))).WithShowHelp(true).WithShowErrors(true)
-	case "recur-end":
-		value := s.recurEnd
-		return huh.NewForm(huh.NewGroup(huh.NewSelect[string]().Key("value").Title("Until").Options(editorChoiceOptions(eventRepeatEndChoices[:])...).Value(&value))).WithShowHelp(true).WithShowErrors(true)
-	case "recur-until":
-		return singleInputForm("Repeat until (YYYY-MM-DD)", "value", &s.recurUntil, validateEventDateInput)
 	case "recur-count":
 		return singleInputForm("Repeat count", "value", &s.recurCount, validateRecurrenceNumberInput)
-	case "all-day":
-		return huh.NewForm(huh.NewGroup(huh.NewConfirm().Key("value").Title("All-day").Value(&s.allDay))).WithShowHelp(true).WithShowErrors(true)
-	case "when":
-		return huh.NewForm(huh.NewGroup(
-			huh.NewInput().Key("from-date").Title("Start date").Value(&s.fromDate).Validate(validateEventDateInput),
-			huh.NewInput().Key("from-time").Title("Start time").Value(&s.fromTime).Validate(validateEventTimeInput),
-			huh.NewInput().Key("to-date").Title("End date").Value(&s.toDate).Validate(validateEventDateInput),
-			huh.NewInput().Key("to-time").Title("End time").Value(&s.toTime).Validate(validateEventTimeInput),
-		)).WithShowHelp(true).WithShowErrors(true)
 	}
 	return nil
 }
 
 func (m *Model) applyEventEditorForm() error {
 	s := m.eventForm
-	f := s.activeForm
-	value := activeFormValue(f)
+	value := activeFormValue(s.activeForm)
 	switch s.activeKey {
 	case "edit-scope":
 		s.editScope = anyString(value)
-	case "attendees":
-		s.attendees = strings.Join(anyStringSlice(value), "; ")
-	case "attendees-add":
-		s.attendees = mergeListInput(s.attendees, anyStringSlice(value))
-	case "rsvp":
-		s.rsvp = anyString(value)
-	case "alarms":
-		s.alarms = strings.Join(anyStringSlice(value), "; ")
 	case "alarms-add":
 		added := strings.TrimSpace(anyString(value))
 		if added != "" {
@@ -1512,8 +1611,6 @@ func (m *Model) applyEventEditorForm() error {
 			}
 			s.alarms = mergeListInput(s.alarms, []string{added})
 		}
-	case "recur":
-		setEventRepeat(s, anyString(value))
 	case "recur-every":
 		number, err := parseRecurrenceNumberInput(anyString(value))
 		if err != nil {
@@ -1526,24 +1623,6 @@ func (m *Model) applyEventEditorForm() error {
 			return err
 		}
 		s.recurCount = strconv.Itoa(number)
-	case "recur-weekdays":
-		s.recurWeekdays = anyStringSlice(value)
-	case "recur-monthly-by":
-		s.recurMonthlyBy = anyString(value)
-	case "recur-end":
-		s.recurEnd = anyString(value)
-	case "all-day":
-		if v, ok := value.(bool); ok {
-			if s.backup != nil && s.backup.allDay != v {
-				s.timingDirty = true
-			}
-			s.allDay = v
-		}
-	}
-	if s.activeKey == "when" {
-		if _, _, err := parseEventFormTimes(*s); err != nil {
-			return err
-		}
 	}
 	return nil
 }
@@ -1573,7 +1652,12 @@ func (m *Model) openTodoEditorForm() tea.Cmd {
 	s.activeKey = key
 	s.backup = s.snapshot()
 	s.errMsg = ""
+	s.dialogFocus = dialogFocusControl
 	if m.openCustomTodoEditor(key) {
+		return nil
+	}
+	if picker := m.newTodoChoicePicker(key); picker != nil {
+		s.choicePicker = picker
 		return nil
 	}
 	s.activeForm = m.buildTodoEditorForm(key)
@@ -1620,15 +1704,9 @@ func (m *Model) buildTodoEditorForm(key string) *huh.Form {
 			return nil
 		})
 	case "description":
-		return huh.NewForm(huh.NewGroup(huh.NewText().Key("value").Title("Description").Value(&s.description).Lines(12))).WithShowHelp(true).WithShowErrors(true)
+		return huh.NewForm(huh.NewGroup(huh.NewText().Key("value").Title("Description").Value(&s.description).Lines(12))).WithShowHelp(false).WithShowErrors(true)
 	case "location":
 		return singleInputForm("Location", "value", &s.location, nil)
-	case "calendar":
-		return huh.NewForm(huh.NewGroup(huh.NewSelect[string]().Key("value").Title("Calendar").Options(m.calendarOptions()...).Value(&s.calendarKey))).WithShowHelp(true).WithShowErrors(true)
-	case "completed":
-		return huh.NewForm(huh.NewGroup(huh.NewConfirm().Key("value").Title("Completed").Value(&s.completed))).WithShowHelp(true).WithShowErrors(true)
-	case "priority":
-		return huh.NewForm(huh.NewGroup(huh.NewSelect[string]().Key("value").Title("Priority").Options(editorChoiceOptions(todoPriorityChoices[:])...).Value(&s.priorityLabel))).WithShowHelp(true).WithShowErrors(true)
 	}
 	return nil
 }
@@ -1638,7 +1716,7 @@ func singleInputForm(title, key string, value *string, validate func(string) err
 	if validate != nil {
 		input.Validate(validate)
 	}
-	return huh.NewForm(huh.NewGroup(input)).WithShowHelp(true).WithShowErrors(true)
+	return huh.NewForm(huh.NewGroup(input)).WithShowHelp(false).WithShowErrors(true)
 }
 
 func (m Model) calendarOptionLabels() map[string]string {
@@ -1667,22 +1745,6 @@ func (m Model) calendarOptionLabels() map[string]string {
 		}
 	}
 	return labels
-}
-
-func (m Model) calendarOptions() []huh.Option[string] {
-	out := make([]huh.Option[string], 0, len(m.calendarOrder))
-	labels := m.calendarOptionLabels()
-	for _, key := range m.calendarOrder {
-		cal := m.calendarByKey(key)
-		if cal == nil || cal.Source == calendar.SpecialSourceBirthdays {
-			continue
-		}
-		out = append(out, huh.NewOption(labels[key], key))
-	}
-	if len(out) == 0 {
-		out = append(out, huh.NewOption("No writable calendar", ""))
-	}
-	return out
 }
 
 func (m Model) cycleCalendarKey(current string, delta int) string {
@@ -1826,39 +1888,6 @@ func (m *Model) toggleTodoEditorBoolean() bool {
 	return true
 }
 
-func (m Model) attendeeOptions() []huh.Option[string] {
-	suggestions := m.attendeeSuggestions()
-	out := make([]huh.Option[string], 0, len(suggestions))
-	for _, suggestion := range suggestions {
-		out = append(out, huh.NewOption(suggestion, suggestion))
-	}
-	if len(out) == 0 {
-		out = append(out, huh.NewOption("No contacts found", ""))
-	}
-	return out
-}
-
-func selectedOptions(values []string) []huh.Option[string] {
-	out := make([]huh.Option[string], 0, len(values))
-	for _, value := range values {
-		out = append(out, huh.NewOption(value, value).Selected(true))
-	}
-	return out
-}
-
-func weekdayOptions(selected []string) []huh.Option[string] {
-	selectedMap := map[string]bool{}
-	for _, v := range selected {
-		selectedMap[v] = true
-	}
-	days := []string{"Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"}
-	out := make([]huh.Option[string], 0, len(days))
-	for _, day := range days {
-		out = append(out, huh.NewOption(day, day).Selected(selectedMap[day]))
-	}
-	return out
-}
-
 func (s *eventFormState) snapshot() *eventFormSnapshot {
 	if s == nil {
 		return nil
@@ -1931,7 +1960,9 @@ func (s *eventFormState) cancelActive() {
 	}
 	s.activeForm = nil
 	s.attendeeManager = nil
-	s.noNotifications = false
+	s.notificationManager = nil
+	s.choicePicker = nil
+	s.dialogFocus = dialogFocusControl
 	s.datePicker = nil
 	s.timeEditor = nil
 	s.searchPicker = nil
@@ -1977,6 +2008,8 @@ func (s *todoFormState) cancelActive() {
 	s.activeForm = nil
 	s.datePicker = nil
 	s.timeEditor = nil
+	s.choicePicker = nil
+	s.dialogFocus = dialogFocusControl
 	s.activeKey = ""
 	s.backup = nil
 	s.errMsg = ""
@@ -2088,20 +2121,6 @@ func validateRecurrenceNumberInput(value string) error {
 	return err
 }
 
-func anyStringSlice(v any) []string {
-	switch typed := v.(type) {
-	case []string:
-		return typed
-	case *[]string:
-		if typed == nil {
-			return nil
-		}
-		return *typed
-	default:
-		return nil
-	}
-}
-
 func anyString(v any) string {
 	if s, ok := v.(string); ok {
 		return s
@@ -2128,8 +2147,8 @@ func appendEditorFormActions(rows []editorRow, mode string) []editorRow {
 	}
 	return append(rows,
 		editorSeparatorRow("Actions"),
-		editorRow{"form-cancel", "", ""},
 		editorRow{"form-save", "", ""},
+		editorRow{"form-cancel", "", ""},
 	)
 }
 
@@ -2180,6 +2199,21 @@ func editorDisplayValue(row editorRow) string {
 	return row.value
 }
 
+func attendeeStateIcon(attendee calendar.Attendee) string {
+	if attendeeIsOptional(attendee) {
+		return ""
+	}
+	return lipgloss.NewStyle().Foreground(lipgloss.Color("65")).Bold(true).Render("")
+}
+
+func attendeeStateLegend(styles Styles) string {
+	removed := lipgloss.NewStyle().Foreground(lipgloss.Color("210")).Bold(true).Render("")
+	return styles.Subtle.Render(" Focused  ") +
+		attendeeStateIcon(calendar.Attendee{}) + styles.Subtle.Render(" Required  ") +
+		"" + styles.Subtle.Render(" Optional  ") +
+		removed + styles.Subtle.Render(" Removed")
+}
+
 func attendeeEditorDisplayLines(raw string, width int, valueStyle lipgloss.Style) []string {
 	attendees := parseAttendeesInput(raw)
 	if len(attendees) == 0 {
@@ -2188,17 +2222,12 @@ func attendeeEditorDisplayLines(raw string, width int, valueStyle lipgloss.Style
 	width = max(1, width)
 	lines := make([]string, 0, len(attendees))
 	for _, attendee := range attendees {
-		glyph := ""
-		glyphColor := lipgloss.Color("65")
-		if attendeeIsOptional(attendee) {
-			glyphColor = lipgloss.Color("244")
-		}
-		icon := lipgloss.NewStyle().Foreground(glyphColor).Bold(true).Render(glyph)
+		icon := attendeeStateIcon(attendee)
 		label := attendeeBaseLabel(attendee)
 		if label == "" {
 			continue
 		}
-		labelBudget := max(1, width-lipgloss.Width(glyph)-1)
+		labelBudget := max(1, width-lipgloss.Width(icon)-1)
 		lines = append(lines, icon+" "+valueStyle.Render(truncate(label, labelBudget)))
 	}
 	if len(lines) == 0 {
@@ -2273,6 +2302,23 @@ func moveEditorCursor(rows []editorRow, cursor, delta int) int {
 	}
 	return cursor
 }
+func moveEditorActionCursor(rows []editorRow, cursor, delta int) (int, bool) {
+	if cursor < 0 || cursor >= len(rows) {
+		return cursor, false
+	}
+	key := editorRowKey(rows[cursor])
+	if key != "form-save" && key != "form-cancel" {
+		return cursor, false
+	}
+	next := moveEditorCursor(rows, cursor, delta)
+	if next >= 0 && next < len(rows) {
+		nextKey := editorRowKey(rows[next])
+		if nextKey == "form-save" || nextKey == "form-cancel" {
+			return next, true
+		}
+	}
+	return cursor, true
+}
 
 func editorButtonLabel(key string) string {
 	switch key {
@@ -2308,6 +2354,13 @@ func NewPreferredFormKeyMap() *huh.KeyMap {
 	keymap.FilePicker.Down.SetHelp("j", "next")
 	keymap.Confirm.Toggle.SetKeys("j", "k", "h", "l", "left", "right")
 	keymap.Confirm.Toggle.SetHelp("j/k", "toggle")
+	keymap.Input.Submit.SetHelp("enter", "apply")
+	keymap.Text.Submit.SetHelp("enter", "apply")
+	keymap.Select.Submit.SetHelp("enter", "apply")
+	keymap.MultiSelect.Submit.SetHelp("enter", "apply")
+	keymap.FilePicker.Submit.SetHelp("enter", "apply")
+	keymap.Confirm.Submit.SetHelp("enter", "apply")
+	keymap.Note.Submit.SetHelp("enter", "apply")
 	keymap.Text.NewLine.SetKeys("ctrl+enter", "ctrl+j")
 	keymap.Text.NewLine.SetHelp("ctrl+enter / ctrl+j", "new line")
 	return keymap
@@ -2362,34 +2415,16 @@ func NewPreferredMultiFieldFormKeyMap() *huh.KeyMap {
 	return keymap
 }
 
-func eventEditorFormKeyMap(key string) *huh.KeyMap {
-	if key == "when" {
-		return NewPreferredMultiFieldFormKeyMap()
-	}
-	if key == "attendees-add" {
-		return attendeeMultiSelectKeyMap()
-	}
+func eventEditorFormKeyMap(_ string) *huh.KeyMap {
 	return NewPreferredFormKeyMap()
 }
 
-func todoEditorFormKeyMap(key string) *huh.KeyMap {
-	if key == "start" || key == "due" {
-		return NewPreferredMultiFieldFormKeyMap()
-	}
+func todoEditorFormKeyMap(_ string) *huh.KeyMap {
 	return NewPreferredFormKeyMap()
 }
 
 func deleteConfirmFormKeyMap(_ *deleteConfirmState) *huh.KeyMap {
 	return NewPreferredFormKeyMap()
-}
-
-func attendeeMultiSelectKeyMap() *huh.KeyMap {
-	keymap := NewPreferredFormKeyMap()
-	keymap.MultiSelect.SelectAll.Unbind()
-	keymap.MultiSelect.SelectNone.Unbind()
-	keymap.MultiSelect.SetFilter.SetKeys("enter")
-	keymap.MultiSelect.SetFilter.SetHelp("enter", "set filter")
-	return keymap
 }
 
 func mergeListInput(existing string, added []string) string {
@@ -2414,8 +2449,8 @@ func mergeListInput(existing string, added []string) string {
 }
 
 func (s *eventFormState) hasActiveDialog() bool {
-	return s != nil && (s.activeForm != nil || s.attendeeManager != nil || s.noNotifications ||
-		s.datePicker != nil || s.timeEditor != nil || s.searchPicker != nil)
+	return s != nil && (s.activeForm != nil || s.attendeeManager != nil || s.notificationManager != nil ||
+		s.choicePicker != nil || s.datePicker != nil || s.timeEditor != nil || s.searchPicker != nil)
 }
 
 func newAttendeeManager(attendees []calendar.Attendee) *attendeeManagerState {
@@ -2461,6 +2496,23 @@ func toggleAttendeeRemove(mgr *attendeeManagerState) {
 	}
 	idx := clamp(mgr.cursor, 0, len(mgr.attendees)-1)
 	mgr.attendees[idx].remove = !mgr.attendees[idx].remove
+}
+
+func cycleAttendeeState(mgr *attendeeManagerState, index int) {
+	if mgr == nil || index < 0 || index >= len(mgr.attendees) {
+		return
+	}
+	mgr.cursor = index
+	item := &mgr.attendees[index]
+	switch {
+	case item.remove:
+		item.remove = false
+		item.attendee.Role = ""
+	case attendeeIsOptional(item.attendee):
+		item.remove = true
+	default:
+		item.attendee.Role = "optional"
+	}
 }
 
 func attendeeIsOptional(attendee calendar.Attendee) bool {
@@ -2613,11 +2665,7 @@ func detailAttendeeLines(attendees []calendar.Attendee, width, limit int) []stri
 	out := make([]string, 0, min(limit, len(attendees)))
 	prefix := strings.Repeat(" ", 16)
 	for _, attendee := range attendees[:min(limit, len(attendees))] {
-		glyphColor := lipgloss.Color("65")
-		if attendeeIsOptional(attendee) {
-			glyphColor = lipgloss.Color("244")
-		}
-		icon := lipgloss.NewStyle().Foreground(glyphColor).Bold(true).Render("")
+		icon := attendeeStateIcon(attendee)
 		label := attendeeBaseLabel(attendee)
 		valueBudget := max(1, width-lipgloss.Width(prefix)-lipgloss.Width(icon)-1)
 		out = append(out, prefix+icon+" "+lipgloss.NewStyle().Foreground(lipgloss.Color("252")).Render(truncate(label, valueBudget)))
@@ -2751,7 +2799,7 @@ func (m *Model) moveAgendaWindowBackward(needed int) int {
 	return prepended
 }
 
-func (m Model) renderCalendarListPane(width, height int) string {
+func (m Model) renderCalendarListPane(width, height, offsetX, offsetY int) string {
 	if height < 3 {
 		height = 3
 	}
@@ -2792,6 +2840,11 @@ func (m Model) renderCalendarListPane(width, height int) string {
 		if name == "" {
 			name = cal.Name
 		}
+		m.addMouseHit(mouseHit{
+			rect:  mouseRect{x: offsetX, y: offsetY + len(lines), width: width, height: 1},
+			kind:  mouseCalendarRow,
+			index: i,
+		})
 		line := fmt.Sprintf("%s%s %s", prefix, stateIcon, truncate(name, max(4, width-8)))
 		lines = append(lines, line)
 	}
@@ -3022,7 +3075,58 @@ func (m *Model) ensureCalendarCursorVisible(height int) {
 }
 
 func (m Model) shortcutsLegend() string {
-	if m.deleteConfirm != nil || (m.eventForm != nil && m.eventForm.hasActiveDialog()) || (m.todoForm != nil && m.todoForm.activeForm != nil) {
+	if m.deleteConfirm != nil {
+		if m.deleteConfirm.stage == "scope" {
+			return "[j/k] Move  [enter] Continue  [esc/q] Cancel"
+		}
+		return "[h/l] Choose  [enter] Delete  [esc/q] Cancel"
+	}
+	if m.eventForm != nil && m.eventForm.attendeeManager != nil {
+		return "[j/k] Move  [spc] State  [o] Optional  [x] Remove  [tab] Actions  [enter] Apply  [esc/q] Cancel"
+	}
+	if m.eventForm != nil && m.eventForm.notificationManager != nil {
+		return "[j/k] Move  [spc] Remove  [tab] Actions  [enter] Apply  [esc/q] Cancel"
+	}
+	if (m.eventForm != nil && m.eventForm.choicePicker != nil) || (m.todoForm != nil && m.todoForm.choicePicker != nil) {
+		return "[j/k] Move  [spc] Select  [tab] Actions  [enter] Apply  [esc/q] Cancel"
+	}
+	if m.eventForm != nil && m.eventForm.searchPicker != nil {
+		return "[type] Search  [↑/↓ ctrl-j/ctrl-k] Move  [tab] Actions  [enter] Apply  [esc] Cancel"
+	}
+	if (m.eventForm != nil && m.eventForm.timeEditor != nil) || (m.todoForm != nil && m.todoForm.timeEditor != nil) {
+		return "[←/→] Digit  [↑/↓] Adjust  [tab] Actions  [enter] Apply  [esc/q] Cancel"
+	}
+	var datePicker *dateRangePicker
+	if m.eventForm != nil {
+		datePicker = m.eventForm.datePicker
+	} else if m.todoForm != nil {
+		datePicker = m.todoForm.datePicker
+	}
+	if datePicker != nil {
+		prefix := ""
+		if datePicker.clearable {
+			prefix = "[spc] Clear  "
+		} else if !datePicker.singleDate {
+			prefix = "[spc] Multi-day  "
+		}
+		return prefix + "[t] Today  [enter] Apply  [esc/q] Cancel"
+	}
+	activeKey := ""
+	if m.eventForm != nil && m.eventForm.activeForm != nil {
+		activeKey = m.eventForm.activeKey
+	} else if m.todoForm != nil && m.todoForm.activeForm != nil {
+		activeKey = m.todoForm.activeKey
+	}
+	if activeKey != "" {
+		if activeKey == "edit-scope" {
+			return "[j/k] Move  [enter] Apply  [esc/q] Cancel"
+		}
+		if activeKey == "description" {
+			return "[ctrl+enter] New line  [tab] Actions  [enter] Apply  [esc] Cancel"
+		}
+		return "[tab] Actions  [enter] Apply  [esc] Cancel"
+	}
+	if (m.eventForm != nil && m.eventForm.hasActiveDialog()) || (m.todoForm != nil && m.todoForm.activeForm != nil) {
 		return ""
 	}
 	if (m.eventForm != nil && m.eventForm.mode == "view") || (m.todoForm != nil && m.todoForm.mode == "view") {
@@ -3707,7 +3811,7 @@ func (m *Model) buildTodoForm(s *todoFormState) *huh.Form {
 		huh.NewConfirm().Key("completed").Title("Completed").Value(&s.completed),
 		huh.NewSelect[string]().Key("priority").Title("Priority").Options(priorityOptions...).Value(&s.priorityLabel),
 	).Title(title)
-	return huh.NewForm(group).WithShowErrors(true).WithShowHelp(true)
+	return huh.NewForm(group).WithShowErrors(true).WithShowHelp(false)
 }
 
 func (m *Model) commitTodoForm() error {
@@ -4000,7 +4104,7 @@ func (m *Model) buildEventForm(s *eventFormState) *huh.Form {
 		}),
 	).Title(modeTitle)
 
-	return huh.NewForm(mainGroup).WithShowHelp(true).WithShowErrors(true)
+	return huh.NewForm(mainGroup).WithShowHelp(false).WithShowErrors(true)
 }
 
 func (m *Model) commitEventForm() error {
@@ -4177,7 +4281,7 @@ func (m *Model) buildDeleteConfirmForm(s *deleteConfirmState) *huh.Form {
 				huh.NewOption("This and following occurrences", string(calendar.DeleteRecurringFuture)),
 				huh.NewOption("All occurrences", string(calendar.DeleteRecurringAll)),
 			).
-			Value(&s.scope)).Title("Delete")).WithShowHelp(true).WithShowErrors(true)
+			Value(&s.scope)).Title("Delete")).WithShowHelp(false).WithShowErrors(true)
 	}
 	title := "Delete " + s.kind
 	if strings.TrimSpace(s.itemLabel) != "" {
@@ -4189,7 +4293,7 @@ func (m *Model) buildDeleteConfirmForm(s *deleteConfirmState) *huh.Form {
 	}
 	return huh.NewForm(huh.NewGroup(
 		huh.NewConfirm().Key("confirm").Title(title).Description(description).Value(&s.confirm),
-	).Title("Confirm deletion")).WithShowHelp(true).WithShowErrors(true)
+	).Title("Confirm deletion")).WithShowHelp(false).WithShowErrors(true)
 }
 
 func (m *Model) commitDeleteConfirm() error {

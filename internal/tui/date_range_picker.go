@@ -20,6 +20,7 @@ type dateRangePicker struct {
 	cleared    bool
 	done       bool
 	cancelled  bool
+	mousePhase int
 }
 
 func newDateRangePicker(startValue, endValue string) *dateRangePicker {
@@ -39,6 +40,7 @@ func newDateRangePicker(startValue, endValue string) *dateRangePicker {
 		picker.cursor = end
 		picker.month = firstOfMonth(end)
 		picker.end = &end
+		picker.mousePhase = 2
 	}
 	return picker
 }
@@ -125,11 +127,13 @@ func (p *dateRangePicker) toggleRange() {
 	if p.rangeMode {
 		p.start = p.cursor
 		p.end = nil
+		p.mousePhase = 1
 		return
 	}
 	p.cursor = p.start
 	p.month = firstOfMonth(p.cursor)
 	p.end = nil
+	p.mousePhase = 0
 }
 
 func (p *dateRangePicker) updateSelection() {
@@ -143,14 +147,50 @@ func (p *dateRangePicker) updateSelection() {
 	p.end = nil
 }
 
-func (p *dateRangePicker) View(styles Styles) string {
+func (p *dateRangePicker) selectByMouse(date time.Time) {
 	if p == nil {
-		return ""
+		return
+	}
+	date = time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, time.UTC)
+	p.cursor = date
+	p.month = firstOfMonth(date)
+	p.cleared = false
+	if p.singleDate || !p.rangeMode {
+		p.start = date
+		p.end = nil
+		return
+	}
+	switch p.mousePhase {
+	case 1:
+		p.end = &date
+		p.mousePhase = 2
+	default:
+		p.start = date
+		p.end = nil
+		p.mousePhase = 1
+	}
+}
+
+func (p *dateRangePicker) selectToday() {
+	now := time.Now()
+	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+	p.cursor = today
+	p.month = firstOfMonth(today)
+	p.updateSelection()
+}
+
+func (p *dateRangePicker) render(styles Styles) (string, []mouseHit) {
+	if p == nil {
+		return "", nil
 	}
 	header := fmt.Sprintf("%-18s ‹ ›", p.month.Format("January 2006"))
 	lines := []string{
 		styles.PanelTitle.Render(header),
 		styles.Subtle.Render("Mo Tu We Th Fr Sa Su"),
+	}
+	hits := []mouseHit{
+		{rect: mouseRect{x: 19, y: 0, width: 1, height: 1}, kind: mouseDatePreviousMonth},
+		{rect: mouseRect{x: 21, y: 0, width: 1, height: 1}, kind: mouseDateNextMonth},
 	}
 	firstWeekday := (int(p.month.Weekday()) + 6) % 7
 	monthEnd := p.month.AddDate(0, 1, -1).Day()
@@ -172,54 +212,55 @@ func (p *dateRangePicker) View(styles Styles) string {
 			case p.rangeContains(date):
 				cell = lipgloss.NewStyle().Background(lipgloss.Color("238")).Foreground(lipgloss.Color("230")).Render(cell)
 			}
+			hits = append(hits, mouseHit{
+				rect: mouseRect{x: weekday * 3, y: len(lines), width: 2, height: 1},
+				kind: mouseDateDay,
+				day:  date,
+			})
 			cells = append(cells, cell)
 		}
-		line := strings.Join(cells, " ")
-		switch week {
-		case 1:
-			line += styles.Subtle.Render("   ←↓↑→ navigate")
-		case 2:
-			line += styles.Subtle.Render("   t    today")
-		case 3:
-			if p.clearable {
-				line += styles.Subtle.Render("   spc  clear")
-			} else if !p.singleDate {
-				line += styles.Subtle.Render("   spc  multi-day")
-			}
-		}
-		lines = append(lines, line)
+		lines = append(lines, strings.Join(cells, " "))
 	}
+	lines = append(lines, "")
+	controlsY := len(lines)
+	today := "[ Today ]"
+	controls := today
+	hits = append(hits, mouseHit{rect: mouseRect{x: 0, y: controlsY, width: len(today), height: 1}, kind: mouseDateToday})
+	if p.clearable {
+		clear := "[ Clear ]"
+		clearX := len(today) + 2
+		controls += "  " + clear
+		hits = append(hits, mouseHit{rect: mouseRect{x: clearX, y: controlsY, width: len(clear), height: 1}, kind: mouseDateClear})
+	} else if !p.singleDate {
+		check := "[ ]"
+		if p.rangeMode {
+			check = "[x]"
+		}
+		multi := check + " Multi-day"
+		multiX := len(today) + 2
+		controls += "  " + multi
+		hits = append(hits, mouseHit{rect: mouseRect{x: multiX, y: controlsY, width: len(multi), height: 1}, kind: mouseDateMultiDay})
+	}
+	lines = append(lines, controls)
 	if p.singleDate {
 		endLabel := p.start.Format("Jan 2, 2006")
 		if p.cleared {
 			endLabel = "—"
 		}
-		lines = append(lines,
-			"",
-			fmt.Sprintf("End: %s", endLabel),
-			"",
-			styles.Subtle.Render("[enter] Apply  [esc/q] Cancel"),
-		)
-		return lipgloss.JoinVertical(lipgloss.Left, lines...)
+		lines = append(lines, "", fmt.Sprintf("Date: %-12s", endLabel))
+		return strings.Join(lines, "\n"), hits
 	}
-	check := "[ ]"
-	if p.rangeMode {
-		check = "[x]"
-	}
-	rangeLine := check + " Multi-day"
-	start := p.start
 	endLabel := "—"
 	if p.rangeMode && p.end != nil {
 		endLabel = p.end.Format("Jan 2, 2006")
 	}
-	lines = append(lines,
-		"",
-		rangeLine,
-		fmt.Sprintf("Start: %s    End: %s", start.Format("Jan 2, 2006"), endLabel),
-		"",
-		styles.Subtle.Render("[enter] Apply  [esc/q] Cancel"),
-	)
-	return lipgloss.JoinVertical(lipgloss.Left, lines...)
+	lines = append(lines, "", fmt.Sprintf("Start: %-12s    End: %-12s", p.start.Format("Jan 2, 2006"), endLabel))
+	return strings.Join(lines, "\n"), hits
+}
+
+func (p *dateRangePicker) View(styles Styles) string {
+	view, _ := p.render(styles)
+	return view
 }
 
 func (p *dateRangePicker) rangeContains(date time.Time) bool {

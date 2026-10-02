@@ -155,17 +155,21 @@ func (e *timeRangeEditor) values() (string, string, error) {
 	return start, end, nil
 }
 
-func (e *timeRangeEditor) View(styles Styles) string {
+func (e *timeRangeEditor) render(styles Styles) (string, []mouseHit) {
 	if e == nil {
-		return ""
+		return "", nil
 	}
 	parts := make([]string, 0, e.slotCount+3)
+	hits := make([]mouseHit, 0, e.slotCount)
+	x := 0
 	for i := 0; i < e.slotCount; i++ {
 		if i == 2 || i == 6 {
 			parts = append(parts, styles.Subtle.Render(":"))
+			x++
 		}
 		if i == 4 {
 			parts = append(parts, styles.Subtle.Render(" -> "))
+			x += 4
 		}
 		value := e.slots[i]
 		if value == 0 {
@@ -178,7 +182,9 @@ func (e *timeRangeEditor) View(styles Styles) string {
 		if i == e.cursor {
 			style = style.Reverse(true).Bold(true)
 		}
+		hits = append(hits, mouseHit{rect: mouseRect{x: x, y: 2, width: 1, height: 1}, kind: mouseTimeDigit, index: i})
 		parts = append(parts, style.Render(string(value)))
+		x++
 	}
 	lines := []string{
 		styles.PanelTitle.Render("Time"),
@@ -188,8 +194,12 @@ func (e *timeRangeEditor) View(styles Styles) string {
 	if e.err != "" {
 		lines = append(lines, "", errorText(e.err))
 	}
-	lines = append(lines, "", styles.Subtle.Render("[←/→] Digit  [↑/↓] Adjust  [enter] Ok  [esc/q] Cancel"))
-	return lipgloss.JoinVertical(lipgloss.Left, lines...)
+	return strings.Join(lines, "\n"), hits
+}
+
+func (e *timeRangeEditor) View(styles Styles) string {
+	view, _ := e.render(styles)
+	return view
 }
 
 func asciiDigits(value string) []rune {
