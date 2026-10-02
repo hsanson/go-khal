@@ -241,3 +241,10 @@ In multi-field popups, use `ctrl+j` / `ctrl+k` for next/previous field; `tab` / 
 - Events and tasks are created/updated/deleted directly in source `.ics` files.
 - Address-book `.vcf` files are parsed for attendee suggestions.
 - Notifications are written as display alarms.
+
+## TUI Editor Controls
+
+- Use `h`/`l` or Left/Right to cycle choice fields; Enter toggles yes/no fields.
+- In date pickers, Enter applies the selection. Space toggles an event between single-day and multi-day mode.
+- In time editors, Left/Right selects a digit group; Up/Down adjusts hours by one or minutes by fifteen.
+- Task due/start dates and times are independent. A time is available only after its date is set; Delete clears the selected date/time pair.
