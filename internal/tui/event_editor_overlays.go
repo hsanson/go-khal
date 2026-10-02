@@ -17,6 +17,12 @@ func (m *Model) openCustomEventEditor(key string) bool {
 	switch key {
 	case "date":
 		s.datePicker = newDateRangePicker(s.fromDate, s.toDate)
+	case "recur-until":
+		value := s.recurUntil
+		if value == "" {
+			value = s.fromDate
+		}
+		s.datePicker = newSingleDatePicker(value)
 	case "time":
 		s.timeEditor = newTimeRangeEditor(s.fromTime, s.toTime)
 	case "timezone":
@@ -48,10 +54,14 @@ func (m *Model) updateEventDatePicker(msg tea.KeyMsg) {
 		return
 	}
 	start, end := picker.dates()
-	s.fromDate = start.Format("2006-01-02")
-	s.toDate = end.Format("2006-01-02")
-	s.timingDirty = true
-	s.overnightAuto = false
+	if s.activeKey == "recur-until" {
+		s.recurUntil = start.Format("2006-01-02")
+	} else {
+		s.fromDate = start.Format("2006-01-02")
+		s.toDate = end.Format("2006-01-02")
+		s.timingDirty = true
+		s.overnightAuto = false
+	}
 	s.datePicker = nil
 	s.activeKey = ""
 	s.backup = nil

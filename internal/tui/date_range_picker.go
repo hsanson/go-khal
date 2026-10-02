@@ -9,25 +9,17 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-type datePickerFocus int
-
-const (
-	datePickerGrid datePickerFocus = iota
-	datePickerRange
-	datePickerCancel
-	datePickerOK
-	datePickerFocusCount
-)
-
 type dateRangePicker struct {
-	cursor    time.Time
-	start     time.Time
-	end       *time.Time
-	month     time.Time
-	rangeMode bool
-	focus     datePickerFocus
-	done      bool
-	cancelled bool
+	cursor     time.Time
+	start      time.Time
+	end        *time.Time
+	month      time.Time
+	rangeMode  bool
+	singleDate bool
+	clearable  bool
+	cleared    bool
+	done       bool
+	cancelled  bool
 }
 
 func newDateRangePicker(startValue, endValue string) *dateRangePicker {
@@ -51,6 +43,18 @@ func newDateRangePicker(startValue, endValue string) *dateRangePicker {
 	return picker
 }
 
+func newSingleDatePicker(value string) *dateRangePicker {
+	picker := newDateRangePicker(value, value)
+	picker.singleDate = true
+	return picker
+}
+
+func newTaskDatePicker(value string) *dateRangePicker {
+	picker := newSingleDatePicker(value)
+	picker.clearable = true
+	return picker
+}
+
 func (p *dateRangePicker) Update(msg tea.KeyMsg) {
 	if p == nil || p.done || p.cancelled {
 		return
@@ -58,40 +62,18 @@ func (p *dateRangePicker) Update(msg tea.KeyMsg) {
 	switch msg.String() {
 	case "esc", "q", "ctrl+c":
 		p.cancelled = true
-		return
-	case "ctrl+s":
+	case "enter":
 		p.done = true
-		return
-	case "tab":
-		p.focus = (p.focus + 1) % datePickerFocusCount
-		return
-	case "shift+tab":
-		p.focus = (p.focus - 1 + datePickerFocusCount) % datePickerFocusCount
-		return
-	case "r":
-		p.toggleRange()
-		return
+	case "space", " ":
+		if p.clearable {
+			p.cleared = true
+		} else if !p.singleDate {
+			p.toggleRange()
+		}
 	case "[", "pgup":
 		p.moveMonth(-1)
-		return
 	case "]", "pgdown":
 		p.moveMonth(1)
-		return
-	case "enter", "space", " ":
-		switch p.focus {
-		case datePickerRange:
-			p.toggleRange()
-		case datePickerCancel:
-			p.cancelled = true
-		case datePickerOK:
-			p.done = true
-		}
-		return
-	}
-	if p.focus != datePickerGrid {
-		return
-	}
-	switch msg.String() {
 	case "left", "h":
 		p.moveDays(-1)
 	case "right", "l":
@@ -151,6 +133,7 @@ func (p *dateRangePicker) toggleRange() {
 }
 
 func (p *dateRangePicker) updateSelection() {
+	p.cleared = false
 	if p.rangeMode {
 		cursor := p.cursor
 		p.end = &cursor
@@ -198,18 +181,32 @@ func (p *dateRangePicker) View(styles Styles) string {
 		case 2:
 			line += styles.Subtle.Render("   t    today")
 		case 3:
-			line += styles.Subtle.Render("   r    range")
+			if p.clearable {
+				line += styles.Subtle.Render("   spc  clear")
+			} else if !p.singleDate {
+				line += styles.Subtle.Render("   spc  multi-day")
+			}
 		}
 		lines = append(lines, line)
+	}
+	if p.singleDate {
+		endLabel := p.start.Format("Jan 2, 2006")
+		if p.cleared {
+			endLabel = "—"
+		}
+		lines = append(lines,
+			"",
+			fmt.Sprintf("End: %s", endLabel),
+			"",
+			styles.Subtle.Render("[enter] Apply  [esc/q] Cancel"),
+		)
+		return lipgloss.JoinVertical(lipgloss.Left, lines...)
 	}
 	check := "[ ]"
 	if p.rangeMode {
 		check = "[x]"
 	}
 	rangeLine := check + " Multi-day"
-	if p.focus == datePickerRange {
-		rangeLine = lipgloss.NewStyle().Reverse(true).Render(rangeLine)
-	}
 	start := p.start
 	endLabel := "—"
 	if p.rangeMode && p.end != nil {
@@ -220,9 +217,7 @@ func (p *dateRangePicker) View(styles Styles) string {
 		rangeLine,
 		fmt.Sprintf("Start: %s    End: %s", start.Format("Jan 2, 2006"), endLabel),
 		"",
-		styles.Subtle.Render(strings.Repeat("─", 38)),
-		"     "+datePickerButton("Cancel", p.focus == datePickerCancel)+"   "+datePickerButton("Ok", p.focus == datePickerOK),
-		styles.Subtle.Render("[esc/q] Cancel  [ctrl-s] Ok  [tab] Focus"),
+		styles.Subtle.Render("[enter] Apply  [esc/q] Cancel"),
 	)
 	return lipgloss.JoinVertical(lipgloss.Left, lines...)
 }
@@ -230,14 +225,6 @@ func (p *dateRangePicker) View(styles Styles) string {
 func (p *dateRangePicker) rangeContains(date time.Time) bool {
 	start, end := p.dates()
 	return !date.Before(start) && !date.After(end)
-}
-
-func datePickerButton(label string, focused bool) string {
-	style := lipgloss.NewStyle().Padding(0, 1).Foreground(lipgloss.Color("230")).Background(lipgloss.Color("62"))
-	if focused {
-		style = style.Reverse(true).Bold(true)
-	}
-	return style.Render(label)
 }
 
 func firstOfMonth(value time.Time) time.Time {
