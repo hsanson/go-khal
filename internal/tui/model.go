@@ -121,6 +121,8 @@ type todoFormState struct {
 	activeKey     string
 	activeForm    *huh.Form
 	backup        *todoFormSnapshot
+	datePicker    *dateRangePicker
+	timeEditor    *timeRangeEditor
 	cursor        int
 	summary       string
 	description   string
@@ -708,6 +710,12 @@ func (m Model) renderTodoFormMainPanel(width, panelHeight int) string {
 	}
 	content := lipgloss.JoinVertical(lipgloss.Left, header, "", body)
 	panel := m.styles.MainPanel.Width(width).Height(panelHeight).Render(content)
+	if m.todoForm.datePicker != nil {
+		return overlayCentered(panel, m.todoForm.datePicker.View(m.styles), width, panelHeight)
+	}
+	if m.todoForm.timeEditor != nil {
+		return overlayCentered(panel, m.todoForm.timeEditor.View(m.styles), width, panelHeight)
+	}
 	if m.todoForm.activeForm != nil {
 		formHeight := max(7, panelHeight/3)
 		if m.todoForm.activeKey == "description" {
@@ -1033,6 +1041,14 @@ func (m Model) todoEditorRows() []editorRow {
 		return nil
 	}
 	s := m.todoForm
+	dueTimeKey := "due-time"
+	if strings.TrimSpace(s.dueDate) == "" {
+		dueTimeKey += editorDisabledSuffix
+	}
+	startTimeKey := "start-time"
+	if strings.TrimSpace(s.startDate) == "" {
+		startTimeKey += editorDisabledSuffix
+	}
 	rows := []editorRow{
 		editorSeparatorRow("󰉢 Title"),
 		{"summary", "Title", emptyDefault(strings.TrimSpace(s.summary), "(untitled task)")},
@@ -1042,8 +1058,10 @@ func (m Model) todoEditorRows() []editorRow {
 		editorSeparatorRow("󰦨 Description"),
 		{"description", "Description", multilineValue(s.description)},
 		editorSeparatorRow("󰥔 Schedule"),
-		{"start", "Start", optionalDateTimeValue(s.startDate, s.startTime)},
-		{"due", "Due", optionalDateTimeValue(s.dueDate, s.dueTime)},
+		{"due-date", "Due date", emptyDefault(s.dueDate, "-")},
+		{dueTimeKey, "Due time", emptyDefault(s.dueTime, "-")},
+		{"start-date", "Start date", emptyDefault(s.startDate, "-")},
+		{startTimeKey, "Start time", emptyDefault(s.startTime, "-")},
 		editorSeparatorRow("󰄬 Status"),
 		{"completed", "Completed", yesNo(s.completed)},
 		{"priority", "Priority", emptyDefault(s.priorityLabel, "mid")},
@@ -1179,6 +1197,14 @@ func (m *Model) updateTodoEditor(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	}
+	if s.datePicker != nil {
+		m.updateTodoDatePicker(msg)
+		return m, nil
+	}
+	if s.timeEditor != nil {
+		m.updateTodoTimeEditor(msg)
+		return m, nil
+	}
 	if s.activeForm != nil {
 		switch msg.String() {
 		case "esc", "ctrl+c":
@@ -1202,6 +1228,8 @@ func (m *Model) updateTodoEditor(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.cycleTodoEditorValue(-1)
 	case "l", "right":
 		m.cycleTodoEditorValue(1)
+	case "delete":
+		m.clearTodoSchedule()
 	case "enter":
 		if m.toggleTodoEditorBoolean() {
 			return m, nil
@@ -1545,6 +1573,9 @@ func (m *Model) openTodoEditorForm() tea.Cmd {
 	s.activeKey = key
 	s.backup = s.snapshot()
 	s.errMsg = ""
+	if m.openCustomTodoEditor(key) {
+		return nil
+	}
 	s.activeForm = m.buildTodoEditorForm(key)
 	if s.activeForm == nil {
 		s.activeKey = ""
@@ -1569,15 +1600,6 @@ func (m *Model) updateActiveTodoEditorForm(msg tea.Msg) tea.Cmd {
 		return nil
 	}
 	if s.activeForm.State == huh.StateCompleted {
-		if err := m.applyTodoEditorForm(); err != nil {
-			s.errMsg = err.Error()
-			s.activeForm = m.buildTodoEditorForm(s.activeKey)
-			if s.activeForm == nil {
-				return nil
-			}
-			s.activeForm.WithKeyMap(todoEditorFormKeyMap(s.activeKey))
-			return s.activeForm.Init()
-		}
 		s.errMsg = ""
 		s.activeForm = nil
 		s.activeKey = ""
@@ -1603,32 +1625,10 @@ func (m *Model) buildTodoEditorForm(key string) *huh.Form {
 		return singleInputForm("Location", "value", &s.location, nil)
 	case "calendar":
 		return huh.NewForm(huh.NewGroup(huh.NewSelect[string]().Key("value").Title("Calendar").Options(m.calendarOptions()...).Value(&s.calendarKey))).WithShowHelp(true).WithShowErrors(true)
-	case "start":
-		return huh.NewForm(huh.NewGroup(
-			huh.NewInput().Key("start-date").Title("Start date").Value(&s.startDate).Validate(validateOptionalDateInput),
-			huh.NewInput().Key("start-time").Title("Start time").Value(&s.startTime).Validate(validateOptionalTimeInput),
-		)).WithShowHelp(true).WithShowErrors(true)
-	case "due":
-		return huh.NewForm(huh.NewGroup(
-			huh.NewInput().Key("due-date").Title("Due date").Value(&s.dueDate).Validate(validateOptionalDateInput),
-			huh.NewInput().Key("due-time").Title("Due time").Value(&s.dueTime).Validate(validateOptionalTimeInput),
-		)).WithShowHelp(true).WithShowErrors(true)
 	case "completed":
 		return huh.NewForm(huh.NewGroup(huh.NewConfirm().Key("value").Title("Completed").Value(&s.completed))).WithShowHelp(true).WithShowErrors(true)
 	case "priority":
-		return huh.NewForm(huh.NewGroup(huh.NewSelect[string]().Key("value").Title("Priority").Options(
-			huh.NewOption("Low", "low"),
-			huh.NewOption("Mid", "mid"),
-			huh.NewOption("High", "high"),
-		).Value(&s.priorityLabel))).WithShowHelp(true).WithShowErrors(true)
-	}
-	return nil
-}
-
-func (m *Model) applyTodoEditorForm() error {
-	if m.todoForm.activeKey == "start" || m.todoForm.activeKey == "due" {
-		_, _, err := parseTodoFormTimesOptional(*m.todoForm)
-		return err
+		return huh.NewForm(huh.NewGroup(huh.NewSelect[string]().Key("value").Title("Priority").Options(editorChoiceOptions(todoPriorityChoices[:])...).Value(&s.priorityLabel))).WithShowHelp(true).WithShowErrors(true)
 	}
 	return nil
 }
@@ -1975,6 +1975,8 @@ func (s *todoFormState) cancelActive() {
 		s.priorityLabel = b.priorityLabel
 	}
 	s.activeForm = nil
+	s.datePicker = nil
+	s.timeEditor = nil
 	s.activeKey = ""
 	s.backup = nil
 	s.errMsg = ""
@@ -2947,15 +2949,6 @@ func multilineValue(v string) string {
 	return v
 }
 
-func optionalDateTimeValue(date, clock string) string {
-	date = strings.TrimSpace(date)
-	clock = strings.TrimSpace(clock)
-	if date == "" && clock == "" {
-		return "-"
-	}
-	return strings.TrimSpace(date + " " + clock)
-}
-
 func (m Model) sidebarWidth() int {
 	if m.cfg == nil || m.cfg.SidebarWidth <= 0 {
 		return 30
@@ -3462,13 +3455,10 @@ func (m *Model) openTodoFormEditSelected() bool {
 
 func (m *Model) openTodoFormNew() {
 	defaultKey := m.firstWritableCalendarKey()
-	start, due := m.defaultCreationRange()
 	td := calendar.Todo{
 		Summary:  "",
 		Source:   splitCalendarKey(defaultKey).source,
 		Calendar: splitCalendarKey(defaultKey).name,
-		Start:    &start,
-		Due:      &due,
 		Priority: 5,
 	}
 	m.todoForm = m.newTodoFormState("create", "", td)
@@ -3487,18 +3477,6 @@ func (m *Model) openTodoFormNewWith(td calendar.Todo) {
 	}
 	if td.Priority == 0 {
 		td.Priority = 5
-	}
-	if td.Start == nil || td.Due == nil {
-		start, due := m.defaultCreationRange()
-		if td.Start != nil {
-			start = *td.Start
-			due = start.Add(time.Hour)
-		} else if td.Due != nil {
-			due = *td.Due
-			start = due.Add(-time.Hour)
-		}
-		td.Start = &start
-		td.Due = &due
 	}
 	m.todoForm = m.newTodoFormState("create", "", td)
 	m.focusDetails = true
@@ -3684,24 +3662,6 @@ func (m *Model) buildTodoForm(s *todoFormState) *huh.Form {
 			}
 			return nil
 		}),
-		huh.NewInput().Key("start-date").Title("Start date (YYYY-MM-DD)").Value(&s.startDate).Validate(func(v string) error {
-			if err := validateOptionalDateInput(v); err != nil {
-				return err
-			}
-			if strings.TrimSpace(v) != "" && strings.TrimSpace(s.startTime) == "" {
-				return errors.New("start time is required when start date is set")
-			}
-			return nil
-		}),
-		huh.NewInput().Key("start-time").Title("Start time (HH:MM)").Value(&s.startTime).Validate(func(v string) error {
-			if err := validateOptionalTimeInput(v); err != nil {
-				return err
-			}
-			if strings.TrimSpace(v) != "" && strings.TrimSpace(s.startDate) == "" {
-				return errors.New("start date is required when start time is set")
-			}
-			return nil
-		}),
 		huh.NewInput().Key("due-date").Title("Due date (YYYY-MM-DD)").Value(&s.dueDate).Validate(func(v string) error {
 			if err := validateOptionalDateInput(v); err != nil {
 				return err
@@ -3723,6 +3683,24 @@ func (m *Model) buildTodoForm(s *todoFormState) *huh.Form {
 			}
 			if !todoRangeIsValid(s.startDate, s.startTime, s.dueDate, v) {
 				return errors.New("due must be after start")
+			}
+			return nil
+		}),
+		huh.NewInput().Key("start-date").Title("Start date (YYYY-MM-DD)").Value(&s.startDate).Validate(func(v string) error {
+			if err := validateOptionalDateInput(v); err != nil {
+				return err
+			}
+			if strings.TrimSpace(v) != "" && strings.TrimSpace(s.startTime) == "" {
+				return errors.New("start time is required when start date is set")
+			}
+			return nil
+		}),
+		huh.NewInput().Key("start-time").Title("Start time (HH:MM)").Value(&s.startTime).Validate(func(v string) error {
+			if err := validateOptionalTimeInput(v); err != nil {
+				return err
+			}
+			if strings.TrimSpace(v) != "" && strings.TrimSpace(s.startDate) == "" {
+				return errors.New("start date is required when start time is set")
 			}
 			return nil
 		}),
