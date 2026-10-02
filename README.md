@@ -244,7 +244,10 @@ In multi-field popups, use `ctrl+j` / `ctrl+k` for next/previous field; `tab` / 
 
 ## TUI Editor Controls
 
-- Use `h`/`l` or Left/Right to cycle choice fields; Enter toggles yes/no fields.
-- In date pickers, Enter applies the selection. Space toggles an event between single-day and multi-day mode.
-- In time editors, Left/Right selects a digit group; Up/Down adjusts hours by one or minutes by fifteen.
+- Use `j`/`k`, Tab/Shift-Tab, or the mouse to select editor fields. Use `h`/`l` or Left/Right to cycle choice fields; Enter or a click toggles yes/no fields.
+- Left-click calendar days, calendar visibility rows, agenda items, editor fields, options, and visible action buttons. The mouse wheel follows the focused view's Up/Down navigation.
+- Field forms add clickable **Apply** and **Cancel** buttons. Their keybindings stay in the footer; list dialogs use the freed space for icon-state legends. A clicked single-choice option remains staged until **Apply**; multiselect clicks toggle options.
+- Attendees use a green `` for required contacts, a default-color `` for optional contacts, and a red `` for staged removal. Notifications use `󰀠` for active entries and `` for staged removal.
+- In date pickers, click a day, month arrow, **Today**, or **Multi-day**. Enabling **Multi-day** keeps the selected date as Start; the next day click sets End, and the following click begins a new range. The date-picker keymap stays at the bottom of the screen.
+- In time editors, click a digit to focus it. Left/Right selects a digit; Up/Down adjusts hours by one or minutes by fifteen.
 - Task due/start dates and times are independent. A time is available only after its date is set; Delete clears the selected date/time pair.
