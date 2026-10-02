@@ -1118,6 +1118,13 @@ func (m *Model) updateEventEditor(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if s.activeForm != nil {
+		if s.activeKey == "recur-every" || s.activeKey == "recur-count" {
+			filtered, ok := filterRecurrenceNumberKey(msg)
+			if !ok {
+				return m, nil
+			}
+			msg = filtered
+		}
 		switch msg.String() {
 		case "esc", "ctrl+c":
 			s.cancelActive()
@@ -1136,7 +1143,14 @@ func (m *Model) updateEventEditor(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		s.cursor = moveEditorCursor(m.eventEditorRows(), s.cursor, 1)
 	case "k", "up", "shift+tab":
 		s.cursor = moveEditorCursor(m.eventEditorRows(), s.cursor, -1)
+	case "h", "left":
+		m.cycleEventEditorValue(-1)
+	case "l", "right":
+		m.cycleEventEditorValue(1)
 	case "enter":
+		if m.toggleEventEditorBoolean() {
+			return m, nil
+		}
 		cmd := m.openEventEditorForm()
 		return m, cmd
 	}
@@ -1184,7 +1198,14 @@ func (m *Model) updateTodoEditor(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		s.cursor = moveEditorCursor(m.todoEditorRows(), s.cursor, 1)
 	case "k", "up", "shift+tab":
 		s.cursor = moveEditorCursor(m.todoEditorRows(), s.cursor, -1)
+	case "h", "left":
+		m.cycleTodoEditorValue(-1)
+	case "l", "right":
+		m.cycleTodoEditorValue(1)
 	case "enter":
+		if m.toggleTodoEditorBoolean() {
+			return m, nil
+		}
 		cmd := m.openTodoEditorForm()
 		return m, cmd
 	}
@@ -1275,6 +1296,88 @@ func (m *Model) updateActiveEventEditorForm(msg tea.Msg) tea.Cmd {
 	return cmd
 }
 
+type editorChoice struct {
+	label string
+	value string
+}
+
+var (
+	eventRSVPChoices = [...]editorChoice{
+		{"Unspecified", ""},
+		{"Yes", "yes"},
+		{"No", "no"},
+		{"Maybe", "maybe"},
+		{"No response", "needs-action"},
+	}
+	eventAvailabilityChoices = [...]editorChoice{
+		{"Calendar default", ""},
+		{"Busy", "busy"},
+		{"Free", "free"},
+	}
+	eventVisibilityChoices = [...]editorChoice{
+		{"Calendar default", "default"},
+		{"Public", "public"},
+		{"Private", "private"},
+		{"Confidential", "confidential"},
+	}
+	eventRepeatChoices = [...]editorChoice{
+		{"None", "none"},
+		{"Daily", "daily"},
+		{"Weekly", "weekly"},
+		{"Monthly", "monthly"},
+		{"Yearly", "yearly"},
+	}
+	eventMonthlyByChoices = [...]editorChoice{
+		{"On every month day", "month day"},
+		{"On every weekday ordinal", "weekday ordinal"},
+	}
+	eventRepeatEndChoices = [...]editorChoice{
+		{"Forever", "forever"},
+		{"Until date", "until"},
+		{"Fixed count", "count"},
+	}
+	todoPriorityChoices = [...]editorChoice{
+		{"Low", "low"},
+		{"Mid", "mid"},
+		{"High", "high"},
+	}
+)
+
+func editorChoiceOptions(choices []editorChoice) []huh.Option[string] {
+	options := make([]huh.Option[string], len(choices))
+	for i, choice := range choices {
+		options[i] = huh.NewOption(choice.label, choice.value)
+	}
+	return options
+}
+
+func cycleEditorChoice(current string, choices []editorChoice, delta int) string {
+	if len(choices) == 0 {
+		return current
+	}
+	for i, choice := range choices {
+		if choice.value != current {
+			continue
+		}
+		next := (i + delta) % len(choices)
+		if next < 0 {
+			next += len(choices)
+		}
+		return choices[next].value
+	}
+	if delta < 0 {
+		return choices[len(choices)-1].value
+	}
+	return choices[0].value
+}
+
+func setEventRepeat(s *eventFormState, repeat string) {
+	s.recur = repeat != "none"
+	if s.recur {
+		s.recurFreq = strings.ToUpper(repeat)
+	}
+}
+
 func (m *Model) buildEventEditorForm(key string) *huh.Form {
 	s := m.eventForm
 	switch key {
@@ -1307,26 +1410,11 @@ func (m *Model) buildEventEditorForm(key string) *huh.Form {
 		return huh.NewForm(huh.NewGroup(huh.NewMultiSelect[string]().Key("value").Title("Add attendees").Options(m.attendeeOptions()...).Filterable(true).Value(&values).WithKeyMap(attendeeMultiSelectKeyMap()))).WithShowHelp(true).WithShowErrors(true)
 	case "rsvp":
 		value := s.rsvp
-		return huh.NewForm(huh.NewGroup(huh.NewSelect[string]().Key("value").Title("RSVP").Options(
-			huh.NewOption("Unspecified", ""),
-			huh.NewOption("Yes", "yes"),
-			huh.NewOption("No", "no"),
-			huh.NewOption("Maybe", "maybe"),
-			huh.NewOption("No response", "needs-action"),
-		).Value(&value))).WithShowHelp(true).WithShowErrors(true)
+		return huh.NewForm(huh.NewGroup(huh.NewSelect[string]().Key("value").Title("RSVP").Options(editorChoiceOptions(eventRSVPChoices[:])...).Value(&value))).WithShowHelp(true).WithShowErrors(true)
 	case "availability":
-		return huh.NewForm(huh.NewGroup(huh.NewSelect[string]().Key("value").Title("Availability").Options(
-			huh.NewOption("Calendar default", ""),
-			huh.NewOption("Busy", "busy"),
-			huh.NewOption("Free", "free"),
-		).Value(&s.availability))).WithShowHelp(true).WithShowErrors(true)
+		return huh.NewForm(huh.NewGroup(huh.NewSelect[string]().Key("value").Title("Availability").Options(editorChoiceOptions(eventAvailabilityChoices[:])...).Value(&s.availability))).WithShowHelp(true).WithShowErrors(true)
 	case "visibility":
-		return huh.NewForm(huh.NewGroup(huh.NewSelect[string]().Key("value").Title("Visibility").Options(
-			huh.NewOption("Calendar default", "default"),
-			huh.NewOption("Public", "public"),
-			huh.NewOption("Private", "private"),
-			huh.NewOption("Confidential", "confidential"),
-		).Value(&s.visibility))).WithShowHelp(true).WithShowErrors(true)
+		return huh.NewForm(huh.NewGroup(huh.NewSelect[string]().Key("value").Title("Visibility").Options(editorChoiceOptions(eventVisibilityChoices[:])...).Value(&s.visibility))).WithShowHelp(true).WithShowErrors(true)
 	case "alarms":
 		values := splitListInput(s.alarms)
 		return huh.NewForm(huh.NewGroup(huh.NewMultiSelect[string]().Key("value").Title("Notifications").Options(selectedOptions(values)...).Filterable(false).Value(&values))).WithShowHelp(true).WithShowErrors(true)
@@ -1341,15 +1429,9 @@ func (m *Model) buildEventEditorForm(key string) *huh.Form {
 		)).WithShowHelp(true).WithShowErrors(true)
 	case "recur":
 		value := repeatValue(s)
-		return huh.NewForm(huh.NewGroup(huh.NewSelect[string]().Key("value").Title("Repeat").Options(
-			huh.NewOption("None", "none"),
-			huh.NewOption("Daily", "daily"),
-			huh.NewOption("Weekly", "weekly"),
-			huh.NewOption("Monthly", "monthly"),
-			huh.NewOption("Yearly", "yearly"),
-		).Value(&value))).WithShowHelp(true).WithShowErrors(true)
+		return huh.NewForm(huh.NewGroup(huh.NewSelect[string]().Key("value").Title("Repeat").Options(editorChoiceOptions(eventRepeatChoices[:])...).Value(&value))).WithShowHelp(true).WithShowErrors(true)
 	case "recur-every":
-		return singleInputForm("Frequency", "value", &s.recurEvery, validatePositiveInput)
+		return singleInputForm("Frequency", "value", &s.recurEvery, validateRecurrenceNumberInput)
 	case "recur-weekdays":
 		values := append([]string{}, s.recurWeekdays...)
 		return huh.NewForm(huh.NewGroup(huh.NewMultiSelect[string]().Key("value").Title("Weekday").Options(weekdayOptions(values)...).Value(&values))).WithShowHelp(true).WithShowErrors(true)
@@ -1358,21 +1440,14 @@ func (m *Model) buildEventEditorForm(key string) *huh.Form {
 		if value == "" {
 			value = "month day"
 		}
-		return huh.NewForm(huh.NewGroup(huh.NewSelect[string]().Key("value").Title("By").Options(
-			huh.NewOption("On every month day", "month day"),
-			huh.NewOption("On every weekday ordinal", "weekday ordinal"),
-		).Value(&value))).WithShowHelp(true).WithShowErrors(true)
+		return huh.NewForm(huh.NewGroup(huh.NewSelect[string]().Key("value").Title("By").Options(editorChoiceOptions(eventMonthlyByChoices[:])...).Value(&value))).WithShowHelp(true).WithShowErrors(true)
 	case "recur-end":
 		value := s.recurEnd
-		return huh.NewForm(huh.NewGroup(huh.NewSelect[string]().Key("value").Title("Until").Options(
-			huh.NewOption("Forever", "forever"),
-			huh.NewOption("Until date", "until"),
-			huh.NewOption("Fixed count", "count"),
-		).Value(&value))).WithShowHelp(true).WithShowErrors(true)
+		return huh.NewForm(huh.NewGroup(huh.NewSelect[string]().Key("value").Title("Until").Options(editorChoiceOptions(eventRepeatEndChoices[:])...).Value(&value))).WithShowHelp(true).WithShowErrors(true)
 	case "recur-until":
 		return singleInputForm("Repeat until (YYYY-MM-DD)", "value", &s.recurUntil, validateEventDateInput)
 	case "recur-count":
-		return singleInputForm("Repeat count", "value", &s.recurCount, validatePositiveInput)
+		return singleInputForm("Repeat count", "value", &s.recurCount, validateRecurrenceNumberInput)
 	case "all-day":
 		return huh.NewForm(huh.NewGroup(huh.NewConfirm().Key("value").Title("All-day").Value(&s.allDay))).WithShowHelp(true).WithShowErrors(true)
 	case "when":
@@ -1410,11 +1485,19 @@ func (m *Model) applyEventEditorForm() error {
 			s.alarms = mergeListInput(s.alarms, []string{added})
 		}
 	case "recur":
-		repeat := anyString(value)
-		s.recur = repeat != "none"
-		if s.recur {
-			s.recurFreq = strings.ToUpper(repeat)
+		setEventRepeat(s, anyString(value))
+	case "recur-every":
+		number, err := parseRecurrenceNumberInput(anyString(value))
+		if err != nil {
+			return err
 		}
+		s.recurEvery = strconv.Itoa(number)
+	case "recur-count":
+		number, err := parseRecurrenceNumberInput(anyString(value))
+		if err != nil {
+			return err
+		}
+		s.recurCount = strconv.Itoa(number)
 	case "recur-weekdays":
 		s.recurWeekdays = anyStringSlice(value)
 	case "recur-monthly-by":
@@ -1600,6 +1683,147 @@ func (m Model) calendarOptions() []huh.Option[string] {
 		out = append(out, huh.NewOption("No writable calendar", ""))
 	}
 	return out
+}
+
+func (m Model) cycleCalendarKey(current string, delta int) string {
+	first := ""
+	last := ""
+	previous := ""
+	useNext := false
+	for _, key := range m.calendarOrder {
+		cal := m.calendarByKey(key)
+		if cal == nil || cal.Source == calendar.SpecialSourceBirthdays {
+			continue
+		}
+		if first == "" {
+			first = key
+		}
+		last = key
+		if useNext {
+			return key
+		}
+		if key == current {
+			if delta < 0 && previous != "" {
+				return previous
+			}
+			useNext = delta > 0
+		}
+		previous = key
+	}
+	if first == "" {
+		return current
+	}
+	if delta < 0 {
+		return last
+	}
+	return first
+}
+
+func cycleRecurrenceValue(value string, delta int) string {
+	number, err := strconv.Atoi(value)
+	if err != nil || number < 1 {
+		number = 1
+	}
+	if number > 99 {
+		if delta < 0 {
+			return "99"
+		}
+		return "1"
+	}
+	number += delta
+	if number < 1 {
+		number = 99
+	} else if number > 99 {
+		number = 1
+	}
+	return strconv.Itoa(number)
+}
+
+func (m *Model) cycleEventEditorValue(delta int) {
+	rows := m.eventEditorRows()
+	if len(rows) == 0 {
+		return
+	}
+	s := m.eventForm
+	s.cursor = nearestSelectableEditorCursor(rows, s.cursor)
+	if !isEditorSelectable(rows[s.cursor]) {
+		return
+	}
+	switch editorRowKey(rows[s.cursor]) {
+	case "calendar":
+		s.calendarKey = m.cycleCalendarKey(s.calendarKey, delta)
+	case "rsvp":
+		s.rsvp = cycleEditorChoice(s.rsvp, eventRSVPChoices[:], delta)
+	case "availability":
+		s.availability = cycleEditorChoice(s.availability, eventAvailabilityChoices[:], delta)
+	case "visibility":
+		s.visibility = cycleEditorChoice(s.visibility, eventVisibilityChoices[:], delta)
+	case "all-day":
+		toggleEventAllDay(s)
+	case "recur":
+		setEventRepeat(s, cycleEditorChoice(repeatValue(s), eventRepeatChoices[:], delta))
+	case "recur-every":
+		s.recurEvery = cycleRecurrenceValue(s.recurEvery, delta)
+	case "recur-count":
+		s.recurCount = cycleRecurrenceValue(s.recurCount, delta)
+	case "recur-monthly-by":
+		s.recurMonthlyBy = cycleEditorChoice(s.recurMonthlyBy, eventMonthlyByChoices[:], delta)
+	case "recur-end":
+		s.recurEnd = cycleEditorChoice(s.recurEnd, eventRepeatEndChoices[:], delta)
+	}
+}
+
+func toggleEventAllDay(s *eventFormState) {
+	s.allDay = !s.allDay
+	s.timingDirty = true
+}
+
+func (m *Model) toggleEventEditorBoolean() bool {
+	rows := m.eventEditorRows()
+	if len(rows) == 0 {
+		return false
+	}
+	s := m.eventForm
+	s.cursor = nearestSelectableEditorCursor(rows, s.cursor)
+	if !isEditorSelectable(rows[s.cursor]) || editorRowKey(rows[s.cursor]) != "all-day" {
+		return false
+	}
+	toggleEventAllDay(s)
+	return true
+}
+
+func (m *Model) cycleTodoEditorValue(delta int) {
+	rows := m.todoEditorRows()
+	if len(rows) == 0 {
+		return
+	}
+	s := m.todoForm
+	s.cursor = nearestSelectableEditorCursor(rows, s.cursor)
+	if !isEditorSelectable(rows[s.cursor]) {
+		return
+	}
+	switch editorRowKey(rows[s.cursor]) {
+	case "calendar":
+		s.calendarKey = m.cycleCalendarKey(s.calendarKey, delta)
+	case "completed":
+		s.completed = !s.completed
+	case "priority":
+		s.priorityLabel = cycleEditorChoice(s.priorityLabel, todoPriorityChoices[:], delta)
+	}
+}
+
+func (m *Model) toggleTodoEditorBoolean() bool {
+	rows := m.todoEditorRows()
+	if len(rows) == 0 {
+		return false
+	}
+	s := m.todoForm
+	s.cursor = nearestSelectableEditorCursor(rows, s.cursor)
+	if !isEditorSelectable(rows[s.cursor]) || editorRowKey(rows[s.cursor]) != "completed" {
+		return false
+	}
+	s.completed = !s.completed
+	return true
 }
 
 func (m Model) attendeeOptions() []huh.Option[string] {
@@ -1813,12 +2037,53 @@ func eventEditScopeLabel(scope string) string {
 	}
 }
 
-func validatePositiveInput(v string) error {
-	n, err := parsePositiveIntDefault(v, 0)
-	if err != nil || n <= 0 {
-		return errors.New("value must be a positive number")
+var errInvalidRecurrenceNumber = errors.New("value must be a number from 1 to 99")
+
+func filterRecurrenceNumberKey(msg tea.KeyMsg) (tea.KeyMsg, bool) {
+	if msg.Type != tea.KeyRunes {
+		return msg, true
 	}
-	return nil
+	digitCount := 0
+	for _, r := range msg.Runes {
+		if r >= '0' && r <= '9' {
+			digitCount++
+		}
+	}
+	if digitCount == 0 {
+		return msg, false
+	}
+	if digitCount == len(msg.Runes) {
+		return msg, true
+	}
+	digits := make([]rune, 0, digitCount)
+	for _, r := range msg.Runes {
+		if r >= '0' && r <= '9' {
+			digits = append(digits, r)
+		}
+	}
+	msg.Runes = digits
+	return msg, true
+}
+
+func parseRecurrenceNumberInput(value string) (int, error) {
+	if value == "" {
+		return 0, errInvalidRecurrenceNumber
+	}
+	for i := 0; i < len(value); i++ {
+		if value[i] < '0' || value[i] > '9' {
+			return 0, errInvalidRecurrenceNumber
+		}
+	}
+	number, err := strconv.Atoi(value)
+	if err != nil || number < 1 || number > 99 {
+		return 0, errInvalidRecurrenceNumber
+	}
+	return number, nil
+}
+
+func validateRecurrenceNumberInput(value string) error {
+	_, err := parseRecurrenceNumberInput(value)
+	return err
 }
 
 func anyStringSlice(v any) []string {
@@ -2771,7 +3036,7 @@ func (m Model) shortcutsLegend() string {
 		return "[esc/q] Back  [j/k] Next / Previous  [e] Edit  [?] Help"
 	}
 	if m.eventForm != nil || m.todoForm != nil {
-		return "[esc/q] Cancel  [ctrl+s] Save  [j/k] Next / Prev  [enter] Edit  [?] Help"
+		return "[esc/q] Cancel  [ctrl+s] Save  [j/k] Next / Prev  [h/l/←/→] Change  [enter] Edit  [?] Help"
 	}
 	if m.focusCalendarPane {
 		return "[esc/q] Back  [j/k] Next / Previous  [enter/spc] Hide/Show  [?] Help"
@@ -2806,7 +3071,8 @@ func (m Model) helpLines() []string {
 			"↑/↓         Next / previous field",
 			"tab         Next field",
 			"shift+tab   Previous field",
-			"enter       Edit selected field",
+			"h/l, ←/→    Previous / next option",
+			"enter       Edit field or toggle yes/no",
 			"?           Toggle help",
 		}
 	}
