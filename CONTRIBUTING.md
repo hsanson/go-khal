@@ -46,3 +46,11 @@ golangci-lint run ./...
 ```
 
 There is no project-specific golangci-lint configuration yet, so the active rules are the default rules from the installed `golangci-lint` version.
+
+## Agent Coding Policy
+
+`go-khal` was written mostly by OpenAI agents. Contributions using agents are
+welcome but please ensure to review and throughtly test the changes before
+submitting pull requests.
+
+

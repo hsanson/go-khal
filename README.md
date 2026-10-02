@@ -1,23 +1,26 @@
 # go-khal
 
 `go-khal` is a terminal calendar and task manager inspired by `pimutils/khal`.
-It reads calendars and todos from local vdir directories (for example synced by `vdirsyncer`) and renders an interactive agenda with calendar visibility controls, event details, and task management.
+It reads calendars and todos from local vdir directories (for example synced by
+`vdirsyncer`) and renders an interactive agenda with calendar visibility
+controls, event details, and task management.
 
 ## Status
 
-`go-khal` is still under active development. Use it at your own risk, especially when editing or deleting events and tasks. These operations write directly to local `.ics` files and bugs may result in data loss. Keep backups or use versioned/synced calendar directories before trying write operations.
-
-This project is fully vibe coded using Codex.
+Use `go-khal` at your own risk, especially when editing or deleting events and
+tasks. These operations write directly to local `.ics` files and bugs may result
+in data loss. Keep backups or use versioned/synced calendar directories before
+trying destructive operations. I use it personally with Radicale and Google calendars
+without issues but cannot guarantee there won't be issues with other calendars.
 
 ## Features
 
-- Keyboard-driven terminal calendar with agenda, week overview, details pane, and calendar toggles
+- Keyboard- and mouse-driven terminal calendar with months list, agenda, details pane, and calendar toggles
 - Separate agenda and task modes, agenda page movement, and show-all mode
 - Event and task create/edit/delete support from the interactive calendar
-- Itemized event and task editors with compact popup controls
-- Event attendees, notifications, recurrence, all-day, URL, location, and description editing
-- Task list/show/create/edit support from the CLI
-- Configurable calendar and addressbook sources that point directly at vdir folders
+- Event attendees auto-completion from VCARD contacts.
+- Birthday events from VCARD contacts.
+- Configurable calendar and addressbook sources that point directly at vdirsyncer folders
 - Per-calendar metadata (display name, color) including discovery from `displayname`/`color` files
 - Per-calendar show/hide controls to include/exclude all events and todos
 - Optional Nerd Font glyphs for the richest terminal rendering
@@ -26,7 +29,7 @@ This project is fully vibe coded using Codex.
 
 Requirements:
 
-- Local vdir calendar/task data, commonly synced by `vdirsyncer`
+- Local vdir calendar/task/contact data, commonly synced by `vdirsyncer`
 - A terminal that supports color and alternate screen applications
 - A Nerd Font-compatible terminal font is recommended
 - `$EDITOR` or `$VISUAL` is used for description editing with `ctrl+e`; if neither is set, `nano` is used
@@ -35,19 +38,19 @@ Requirements:
 
 Download the archive for your platform from the [GitHub releases page](https://github.com/hsanson/go-khal/releases).
 
-Release artifacts are named by version, OS, and CPU architecture, for example `go-khal_v0.0.1_linux_amd64.tar.gz`, `go-khal_v0.0.1_darwin_arm64.tar.gz`, and `go-khal_v0.0.1_windows_amd64.zip`.
+Release artifacts are named by version, OS, and CPU architecture, for example `go-khal_v0.0.9_linux_amd64.tar.gz`, `go-khal_v0.0.9_darwin_arm64.tar.gz`, and `go-khal_v0.0.9_windows_amd64.zip`.
 
 Linux x86_64 example:
 
 ```bash
-curl -LO https://github.com/hsanson/go-khal/releases/download/v0.0.1/go-khal_v0.0.1_linux_amd64.tar.gz
-curl -LO https://github.com/hsanson/go-khal/releases/download/v0.0.1/SHA256SUMS
+curl -LO https://github.com/hsanson/go-khal/releases/download/v0.0.9/go-khal_v0.0.9_linux_amd64.tar.gz
+curl -LO https://github.com/hsanson/go-khal/releases/download/v0.0.9/SHA256SUMS
 sha256sum -c SHA256SUMS --ignore-missing
-tar -xzf go-khal_v0.0.1_linux_amd64.tar.gz
+tar -xzf go-khal_v0.0.9_linux_amd64.tar.gz
 install -m 0755 go-khal ~/.local/bin/go-khal
 ```
 
-Replace `v0.0.1` with the release version you want. Release pages include checksums in `SHA256SUMS` for verification.
+Replace `v0.0.9` with the release version you want. Release pages include checksums in `SHA256SUMS` for verification.
 
 ### Install From Source
 
@@ -166,8 +169,6 @@ Create a task directly in the same editor used by the interactive calendar:
 go-khal todo new
 ```
 
-Use `j/k` to move between task fields, `enter` to edit the selected field, `ctrl+s` to save, and `esc`, `q`, or `ctrl+c` to cancel. After saving or canceling, go-khal remains in task mode so the created task can be reviewed or edited.
-
 ## Configuration
 
 Default config path: `~/.config/go-khal/config.json`
@@ -206,31 +207,6 @@ Example:
 }
 ```
 
-## Editing Events And Tasks
-
-The interactive calendar uses itemized editors for events and tasks. Move with `j/k` or `tab`/`shift+tab`, and press `enter` to edit the selected item. Select the `Save` or `Cancel` action at the bottom of the editor, or use `ctrl+s` to save. `esc`, `q`, or `ctrl+c` cancel the editor or active popup.
-
-Event editing supports:
-
-- Title and calendar
-- Location, URL, and description
-- Attendees, including required/optional roles and direct fuzzy search from address-book contacts
-- RSVP, availability, and visibility
-- Notifications such as `10m before`, `2h before`, `10d before`, or `1d after`
-- Recurrence: daily, weekly, monthly, yearly, interval, weekdays, monthly mode, until date, and fixed count
-- Inclusive date ranges selected from a calendar popup; use the arrows or `h/j/k/l` to move, `r` for a range, and `t` for today
-- Fixed-slot `HH:mm -> HH:mm` time ranges
-- Searchable IANA timezones with the UTC offset for the event date; changing the timezone keeps the displayed wall-clock time
-- All-day ranges; Date remains editable while Time and Timezone are disabled
-
-When an event has attendees, go-khal uses the calendar source `email` as the iCalendar `ORGANIZER`. If `email` is omitted, calendar names that look like email addresses are used as a fallback. Events where the configured email is an attendee but not the organizer are treated as attendee-owned: only local calendar placement, RSVP, availability/visibility, and notifications are editable.
-
-Recurring RSVP edits preserve the organizer's series: editing one occurrence creates or updates its `RECURRENCE-ID` exception, editing all occurrences updates the user's response on the master and existing exceptions, and editing this and following occurrences uses `RANGE=THISANDFUTURE`. Organizer-owned structural edits to this and following occurrences split the recurrence into past and future series; exceptions at or after the split are reset.
-
-Task editing supports title, calendar, description, location, start/due times, completion, and priority.
-
-In multi-field popups, use `ctrl+j` / `ctrl+k` for next/previous field; `tab` / `shift+tab` remain supported. `enter` advances to the next field and submits only from the final field. In single-field description popups, `ctrl+enter` or `ctrl+j` inserts a newline, and `ctrl+e` opens `$EDITOR`/`$VISUAL` for larger edits. In multiselect popups, `space` or `x` toggles selections. Attendee and timezone pickers search as you type; use the arrow keys or `ctrl+j` / `ctrl+k` to move and `enter` to select one result.
-
 ## Notes
 
 - Source paths must be absolute paths to folders that directly contain `.ics` or `.vcf` files.
@@ -241,13 +217,3 @@ In multi-field popups, use `ctrl+j` / `ctrl+k` for next/previous field; `tab` / 
 - Events and tasks are created/updated/deleted directly in source `.ics` files.
 - Address-book `.vcf` files are parsed for attendee suggestions.
 - Notifications are written as display alarms.
-
-## TUI Editor Controls
-
-- Use `j`/`k`, Tab/Shift-Tab, or the mouse to select editor fields. Use `h`/`l` or Left/Right to cycle choice fields; Enter or a click toggles yes/no fields.
-- Left-click calendar days, calendar visibility rows, agenda items, editor fields, options, and visible action buttons. The mouse wheel follows the focused view's Up/Down navigation.
-- Field forms add clickable **Apply** and **Cancel** buttons. Their keybindings stay in the footer; list dialogs use the freed space for icon-state legends. A clicked single-choice option remains staged until **Apply**; multiselect clicks toggle options.
-- Attendees use a green `` for required contacts, a default-color `` for optional contacts, and a red `` for staged removal. Notifications use `󰀠` for active entries and `` for staged removal.
-- In date pickers, click a day, month arrow, **Today**, or **Multi-day**. Enabling **Multi-day** keeps the selected date as Start; the next day click sets End, and the following click begins a new range. The date-picker keymap stays at the bottom of the screen.
-- In time editors, click a digit to focus it. Left/Right selects a digit; Up/Down adjusts hours by one or minutes by fifteen.
-- Task due/start dates and times are independent. A time is available only after its date is set; Delete clears the selected date/time pair.
