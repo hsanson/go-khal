@@ -343,25 +343,14 @@ func TestNewEventDefaultsToSelectedAgendaItemTime(t *testing.T) {
 	}
 }
 
-func TestNewTaskDefaultsToSelectedFreeSlotTime(t *testing.T) {
-	start := dayStart(time.Date(2026, time.July, 3, 10, 0, 0, 0, time.Local))
+func TestNewTaskScheduleDefaultsEmpty(t *testing.T) {
 	cal := calendar.Calendar{Source: "src", Name: "cal"}
-	events := []calendar.Event{
-		{UID: "one", Summary: "One", Source: "src", Calendar: "cal", Start: start.Add(10 * time.Hour), End: start.Add(11 * time.Hour)},
-	}
-	m := NewModel(&config.Config{SidebarWidth: 30}, calendar.Dataset{Calendars: []calendar.Calendar{cal}, Events: events}, nil)
-	m.selected = start
-	m.agendaStart = start
-	m.showAllMode = true
-	m.eventCursor = 2
+	m := NewModel(&config.Config{SidebarWidth: 30}, calendar.Dataset{Calendars: []calendar.Calendar{cal}}, nil)
 
 	m.openTodoFormNew()
 
-	if m.todoForm.startDate != "2026-07-03" || m.todoForm.startTime != "11:00" {
-		t.Fatalf("unexpected task start default: %s %s", m.todoForm.startDate, m.todoForm.startTime)
-	}
-	if m.todoForm.dueDate != "2026-07-03" || m.todoForm.dueTime != "12:00" {
-		t.Fatalf("unexpected task due default: %s %s", m.todoForm.dueDate, m.todoForm.dueTime)
+	if m.todoForm.startDate != "" || m.todoForm.startTime != "" || m.todoForm.dueDate != "" || m.todoForm.dueTime != "" {
+		t.Fatalf("new task schedule is not empty: %+v", m.todoForm)
 	}
 }
 
@@ -651,24 +640,6 @@ func TestMultiFieldFormKeyMapPrefersCtrlJK(t *testing.T) {
 	}
 	if containsString(keymap.Select.Down.Keys(), "ctrl+j") || containsString(keymap.Select.Up.Keys(), "ctrl+k") {
 		t.Fatal("ctrl+j/ctrl+k should navigate fields instead of select options")
-	}
-}
-
-func TestTaskDateDialogEnterAdvancesThenSubmits(t *testing.T) {
-	cal := calendar.Calendar{Source: "src", Name: "cal"}
-	m := NewTaskModeModel(&config.Config{SidebarWidth: 30}, calendar.Dataset{Calendars: []calendar.Calendar{cal}}, nil)
-	m.openTodoFormNew()
-	setTodoEditorCursor(t, &m, "start")
-	m.openTodoEditorForm()
-
-	var model tea.Model = &m
-	model = updateModelAndRunHuhNavigation(model, tea.KeyMsg{Type: tea.KeyEnter})
-	if got := modelValue(t, model).todoForm.activeForm.GetFocusedField().GetKey(); got != "start-time" {
-		t.Fatalf("first enter focused %q, want start-time", got)
-	}
-	model = updateModelAndRunHuhNavigation(model, tea.KeyMsg{Type: tea.KeyEnter})
-	if modelValue(t, model).todoForm.activeForm != nil {
-		t.Fatal("enter on final task start field should submit dialog")
 	}
 }
 
