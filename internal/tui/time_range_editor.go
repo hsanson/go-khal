@@ -11,6 +11,7 @@ import (
 
 type timeRangeEditor struct {
 	slots     [8]rune
+	slotCount int
 	cursor    int
 	done      bool
 	cancelled bool
@@ -18,10 +19,18 @@ type timeRangeEditor struct {
 }
 
 func newTimeRangeEditor(start, end string) *timeRangeEditor {
-	editor := &timeRangeEditor{}
-	digits := asciiDigits(start + end)
+	return newTimeEditor(start+end, 8)
+}
+
+func newSingleTimeEditor(value string) *timeRangeEditor {
+	return newTimeEditor(value, 4)
+}
+
+func newTimeEditor(value string, slotCount int) *timeRangeEditor {
+	editor := &timeRangeEditor{slotCount: slotCount}
+	digits := asciiDigits(value)
 	for i, digit := range digits {
-		if i == len(editor.slots) {
+		if i == slotCount {
 			break
 		}
 		editor.slots[i] = digit
@@ -34,28 +43,24 @@ func (e *timeRangeEditor) Update(msg tea.KeyMsg) {
 		return
 	}
 	switch msg.String() {
-	case "esc", "ctrl+c":
+	case "esc", "ctrl+c", "q":
 		e.cancelled = true
-	case "left", "shift+tab":
+	case "left", "h", "shift+tab":
 		if e.cursor > 0 {
 			e.cursor--
 		}
-	case "right", "tab":
-		if e.cursor < len(e.slots)-1 {
+	case "right", "l", "tab":
+		if e.cursor < e.slotCount-1 {
 			e.cursor++
 		}
-	case "up":
-		if e.cursor >= 4 {
-			e.cursor -= 4
-		}
-	case "down":
-		if e.cursor < 4 {
-			e.cursor += 4
-		}
+	case "up", "k":
+		e.adjust(1)
+	case "down", "j":
+		e.adjust(-1)
 	case "home":
 		e.cursor = 0
 	case "end":
-		e.cursor = len(e.slots) - 1
+		e.cursor = e.slotCount - 1
 	case "backspace":
 		if e.cursor > 0 {
 			e.cursor--
@@ -66,7 +71,13 @@ func (e *timeRangeEditor) Update(msg tea.KeyMsg) {
 		e.slots[e.cursor] = 0
 		e.err = ""
 	case "enter", "ctrl+s":
-		if _, _, err := e.values(); err != nil {
+		var err error
+		if e.slotCount == 4 {
+			_, err = e.value()
+		} else {
+			_, _, err = e.values()
+		}
+		if err != nil {
 			e.err = err.Error()
 		} else {
 			e.done = true
@@ -75,9 +86,12 @@ func (e *timeRangeEditor) Update(msg tea.KeyMsg) {
 		if msg.Type != tea.KeyRunes {
 			return
 		}
-		for _, digit := range asciiDigits(string(msg.Runes)) {
+		for _, digit := range msg.Runes {
+			if digit < '0' || digit > '9' {
+				continue
+			}
 			e.slots[e.cursor] = digit
-			if e.cursor < len(e.slots)-1 {
+			if e.cursor < e.slotCount-1 {
 				e.cursor++
 			}
 		}
@@ -85,11 +99,47 @@ func (e *timeRangeEditor) Update(msg tea.KeyMsg) {
 	}
 }
 
+func (e *timeRangeEditor) adjust(delta int) {
+	base := e.cursor - e.cursor%4
+	limit, step := 24, 1
+	if e.cursor%4 >= 2 {
+		base += 2
+		limit, step = 60, 15
+	}
+	value := 0
+	if e.slots[base] >= '0' && e.slots[base] <= '9' {
+		value += int(e.slots[base]-'0') * 10
+	}
+	if e.slots[base+1] >= '0' && e.slots[base+1] <= '9' {
+		value += int(e.slots[base+1] - '0')
+	}
+	value = (value + delta*step + limit) % limit
+	e.slots[base] = rune('0' + value/10)
+	e.slots[base+1] = rune('0' + value%10)
+	e.err = ""
+}
+
+func (e *timeRangeEditor) value() (string, error) {
+	if e == nil || e.slotCount < 4 {
+		return "", fmt.Errorf("time editor is unavailable")
+	}
+	for _, slot := range e.slots[:4] {
+		if slot == 0 {
+			return "", fmt.Errorf("enter a time")
+		}
+	}
+	value := string(e.slots[0:2]) + ":" + string(e.slots[2:4])
+	if _, err := time.Parse("15:04", value); err != nil {
+		return "", fmt.Errorf("invalid time")
+	}
+	return value, nil
+}
+
 func (e *timeRangeEditor) values() (string, string, error) {
-	if e == nil {
+	if e == nil || e.slotCount < 8 {
 		return "", "", fmt.Errorf("time editor is unavailable")
 	}
-	for _, slot := range e.slots {
+	for _, slot := range e.slots[:8] {
 		if slot == 0 {
 			return "", "", fmt.Errorf("enter both start and end times")
 		}
@@ -109,8 +159,8 @@ func (e *timeRangeEditor) View(styles Styles) string {
 	if e == nil {
 		return ""
 	}
-	parts := make([]string, 0, 13)
-	for i := range e.slots {
+	parts := make([]string, 0, e.slotCount+3)
+	for i := 0; i < e.slotCount; i++ {
 		if i == 2 || i == 6 {
 			parts = append(parts, styles.Subtle.Render(":"))
 		}
@@ -138,7 +188,7 @@ func (e *timeRangeEditor) View(styles Styles) string {
 	if e.err != "" {
 		lines = append(lines, "", errorText(e.err))
 	}
-	lines = append(lines, "", styles.Subtle.Render("[←/→ ↑/↓] Move  [backspace] Clear  [enter] Apply  [esc] Cancel"))
+	lines = append(lines, "", styles.Subtle.Render("[←/→] Digit  [↑/↓] Adjust  [enter] Ok  [esc/q] Cancel"))
 	return lipgloss.JoinVertical(lipgloss.Left, lines...)
 }
 
