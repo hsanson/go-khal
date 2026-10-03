@@ -64,6 +64,7 @@ func newImportCommand() *cobra.Command {
 				imported.Calendar = dest.Name
 			}
 			model := tui.NewEventImportModel(cfg, ds, store, imported, existing)
+			defer model.Close()
 			if _, err := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion()).Run(); err != nil {
 				return fmt.Errorf("run import editor: %w", err)
 			}

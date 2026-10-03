@@ -20,6 +20,8 @@ type Model struct {
 	cfg                *config.Config
 	data               calendar.Dataset
 	styles             Styles
+	formTheme          *huh.Theme
+	themeMonitor       *themeMonitor
 	selected           time.Time
 	width              int
 	height             int
@@ -213,13 +215,17 @@ func NewModel(cfg *config.Config, data calendar.Dataset, store *calendar.Store) 
 		break
 	}
 
+	themeMonitor, theme := newThemeMonitor()
+
 	now := time.Now()
 	start := calendar.StartOfWeek(now, cfg.WeekStart())
 	m := Model{
 		store:              store,
 		cfg:                cfg,
 		data:               data,
-		styles:             DefaultStyles(),
+		styles:             theme.styles,
+		formTheme:          theme.formTheme,
+		themeMonitor:       themeMonitor,
 		selected:           now,
 		agendaStart:        dayStart(now),
 		weekViewportStart:  start,
@@ -267,10 +273,26 @@ func NewEventImportModel(cfg *config.Config, data calendar.Dataset, store *calen
 	return m
 }
 
-func (m Model) Init() tea.Cmd { return nil }
+func (m Model) Init() tea.Cmd { return m.themeMonitor.wait() }
+
+func (m Model) Close() {
+	m.themeMonitor.close()
+}
+
+func (m *Model) applyTheme(theme themeStyles) {
+	if m.formTheme == nil || theme.formTheme == nil {
+		m.formTheme = theme.formTheme
+	} else {
+		*m.formTheme = *theme.formTheme
+	}
+	m.styles = theme.styles
+}
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case themeStylesMsg:
+		m.applyTheme(msg.theme)
+		return m, m.themeMonitor.wait()
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
@@ -667,7 +689,7 @@ func (m Model) renderMainPanel(width int) string {
 		}
 	}
 	if strings.TrimSpace(m.actionErr) != "" {
-		header = lipgloss.JoinVertical(lipgloss.Left, header, errorText("Error: "+m.actionErr))
+		header = lipgloss.JoinVertical(lipgloss.Left, header, m.styles.Error.Render("Error: "+m.actionErr))
 	}
 	separator := m.styles.Subtle.Render(strings.Repeat("-", max(10, width-2)))
 	content := lipgloss.JoinVertical(lipgloss.Left, header, "", top, separator, detail)
@@ -687,38 +709,38 @@ func (m Model) renderEventFormMainPanel(width, panelHeight int) string {
 	}
 	body := m.renderEventEditorList(width-2, panelHeight-2)
 	if strings.TrimSpace(m.eventForm.errMsg) != "" {
-		body = lipgloss.JoinVertical(lipgloss.Left, errorText("Error: "+m.eventForm.errMsg), "", body)
+		body = lipgloss.JoinVertical(lipgloss.Left, m.styles.Error.Render("Error: "+m.eventForm.errMsg), "", body)
 	}
 	content := lipgloss.JoinVertical(lipgloss.Left, header, "", body)
 	panel := m.styles.MainPanel.Width(width).Height(panelHeight).Render(content)
 	if m.eventForm.attendeeManager != nil {
 		modal, hits := m.renderAttendeeManager(min(78, max(36, width-8)), max(9, min(panelHeight-4, (panelHeight*2)/3)))
-		modal, hits = addDialogActions(modal, hits, m.eventForm.dialogFocus)
+		modal, hits = addDialogActions(modal, hits, m.eventForm.dialogFocus, m.styles)
 		return m.overlayCenteredWithHits(panel, modal, width, panelHeight, hits)
 	}
 	if m.eventForm.notificationManager != nil {
 		modal, hits := m.eventForm.notificationManager.render(min(70, max(30, width-10)), max(7, panelHeight/3), m.styles)
-		modal, hits = addDialogActions(modal, hits, m.eventForm.dialogFocus)
+		modal, hits = addDialogActions(modal, hits, m.eventForm.dialogFocus, m.styles)
 		return m.overlayCenteredWithHits(panel, modal, width, panelHeight, hits)
 	}
 	if m.eventForm.choicePicker != nil {
 		modal, hits := m.eventForm.choicePicker.render(m.styles)
-		modal, hits = addDialogActions(modal, hits, m.eventForm.dialogFocus)
+		modal, hits = addDialogActions(modal, hits, m.eventForm.dialogFocus, m.styles)
 		return m.overlayCenteredWithHits(panel, modal, width, panelHeight, hits)
 	}
 	if m.eventForm.datePicker != nil {
 		modal, hits := m.eventForm.datePicker.render(m.styles)
-		modal, hits = addDialogActions(modal, hits, m.eventForm.dialogFocus)
+		modal, hits = addDialogActions(modal, hits, m.eventForm.dialogFocus, m.styles)
 		return m.overlayCenteredWithHits(panel, modal, width, panelHeight, hits)
 	}
 	if m.eventForm.timeEditor != nil {
 		modal, hits := m.eventForm.timeEditor.render(m.styles)
-		modal, hits = addDialogActions(modal, hits, m.eventForm.dialogFocus)
+		modal, hits = addDialogActions(modal, hits, m.eventForm.dialogFocus, m.styles)
 		return m.overlayCenteredWithHits(panel, modal, width, panelHeight, hits)
 	}
 	if m.eventForm.searchPicker != nil {
 		modal, hits := m.eventForm.searchPicker.render(min(70, max(38, width-12)), m.styles)
-		modal, hits = addDialogActions(modal, hits, m.eventForm.dialogFocus)
+		modal, hits = addDialogActions(modal, hits, m.eventForm.dialogFocus, m.styles)
 		return m.overlayCenteredWithHits(panel, modal, width, panelHeight, hits)
 	}
 	if m.eventForm.activeForm != nil {
@@ -734,8 +756,8 @@ func (m Model) renderEventFormMainPanel(width, panelHeight int) string {
 		if m.eventForm.activeKey == "description" {
 			formHeight = max(12, (panelHeight*2)/3)
 		}
-		modal := activeFormModalView(m.eventForm.activeForm, min(70, max(30, width-10)), formHeight, m.eventForm.errMsg)
-		modal, hits := addDialogActions(modal, nil, m.eventForm.dialogFocus)
+		modal := activeFormModalView(m.eventForm.activeForm, min(70, max(30, width-10)), formHeight, m.eventForm.errMsg, m.styles)
+		modal, hits := addDialogActions(modal, nil, m.eventForm.dialogFocus, m.styles)
 		return m.overlayCenteredWithHits(panel, modal, width, panelHeight, hits)
 	}
 	return panel
@@ -751,23 +773,23 @@ func (m Model) renderTodoFormMainPanel(width, panelHeight int) string {
 	}
 	body := m.renderTodoEditorList(width-2, panelHeight-2)
 	if strings.TrimSpace(m.todoForm.errMsg) != "" {
-		body = lipgloss.JoinVertical(lipgloss.Left, errorText("Error: "+m.todoForm.errMsg), "", body)
+		body = lipgloss.JoinVertical(lipgloss.Left, m.styles.Error.Render("Error: "+m.todoForm.errMsg), "", body)
 	}
 	content := lipgloss.JoinVertical(lipgloss.Left, header, "", body)
 	panel := m.styles.MainPanel.Width(width).Height(panelHeight).Render(content)
 	if m.todoForm.choicePicker != nil {
 		modal, hits := m.todoForm.choicePicker.render(m.styles)
-		modal, hits = addDialogActions(modal, hits, m.todoForm.dialogFocus)
+		modal, hits = addDialogActions(modal, hits, m.todoForm.dialogFocus, m.styles)
 		return m.overlayCenteredWithHits(panel, modal, width, panelHeight, hits)
 	}
 	if m.todoForm.datePicker != nil {
 		modal, hits := m.todoForm.datePicker.render(m.styles)
-		modal, hits = addDialogActions(modal, hits, m.todoForm.dialogFocus)
+		modal, hits = addDialogActions(modal, hits, m.todoForm.dialogFocus, m.styles)
 		return m.overlayCenteredWithHits(panel, modal, width, panelHeight, hits)
 	}
 	if m.todoForm.timeEditor != nil {
 		modal, hits := m.todoForm.timeEditor.render(m.styles)
-		modal, hits = addDialogActions(modal, hits, m.todoForm.dialogFocus)
+		modal, hits = addDialogActions(modal, hits, m.todoForm.dialogFocus, m.styles)
 		return m.overlayCenteredWithHits(panel, modal, width, panelHeight, hits)
 	}
 	if m.todoForm.activeForm != nil {
@@ -775,8 +797,8 @@ func (m Model) renderTodoFormMainPanel(width, panelHeight int) string {
 		if m.todoForm.activeKey == "description" {
 			formHeight = max(12, (panelHeight*2)/3)
 		}
-		modal := activeFormModalView(m.todoForm.activeForm, min(70, max(30, width-10)), formHeight, m.todoForm.errMsg)
-		modal, hits := addDialogActions(modal, nil, m.todoForm.dialogFocus)
+		modal := activeFormModalView(m.todoForm.activeForm, min(70, max(30, width-10)), formHeight, m.todoForm.errMsg, m.styles)
+		modal, hits := addDialogActions(modal, nil, m.todoForm.dialogFocus, m.styles)
 		return m.overlayCenteredWithHits(panel, modal, width, panelHeight, hits)
 	}
 	return panel
@@ -790,7 +812,7 @@ func (m Model) renderDeleteConfirmMainPanel(width, panelHeight int) string {
 	formView, hits := deleteWorkflowView(m.deleteConfirm, m.styles)
 	hitY := m.mouseMainY + 3
 	if strings.TrimSpace(m.deleteConfirm.errMsg) != "" {
-		formView = lipgloss.JoinVertical(lipgloss.Left, errorText("Error: "+m.deleteConfirm.errMsg), "", formView)
+		formView = lipgloss.JoinVertical(lipgloss.Left, m.styles.Error.Render("Error: "+m.deleteConfirm.errMsg), "", formView)
 		hitY += 2
 	}
 	m.addOffsetMouseHits(hits, m.mouseMainX+2, hitY)
@@ -798,10 +820,8 @@ func (m Model) renderDeleteConfirmMainPanel(width, panelHeight int) string {
 	return m.styles.MainPanel.Width(width).Height(panelHeight).Render(content)
 }
 
-func centeredOverlayBox(modal string, width int) string {
-	return lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		Padding(1, 2).
+func centeredOverlayBox(modal string, width int, styles Styles) string {
+	return styles.Overlay.
 		Width(min(width-4, max(30, lipgloss.Width(modal)+4))).
 		Render(modal)
 }
@@ -810,7 +830,7 @@ func placeCenteredBox(_ string, box string, width, height int) string {
 	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, box)
 }
 
-func activeFormModalView(form *huh.Form, width, height int, errMsg string) string {
+func activeFormModalView(form *huh.Form, width, height int, errMsg string, styles Styles) string {
 	if form == nil {
 		return ""
 	}
@@ -819,7 +839,7 @@ func activeFormModalView(form *huh.Form, width, height int, errMsg string) strin
 	}
 	formHeight := max(3, height-2)
 	view := form.WithWidth(width).WithHeight(formHeight).WithShowHelp(false).WithShowErrors(true).View()
-	err := lipgloss.NewStyle().Width(width).Render(errorText("Error: " + errMsg))
+	err := lipgloss.NewStyle().Width(width).Render(styles.Error.Render("Error: " + errMsg))
 	return lipgloss.NewStyle().
 		Width(width).
 		Height(height).
@@ -827,18 +847,11 @@ func activeFormModalView(form *huh.Form, width, height int, errMsg string) strin
 		Render(lipgloss.JoinVertical(lipgloss.Left, err, "", view))
 }
 
-func errorText(msg string) string {
-	return lipgloss.NewStyle().
-		Foreground(lipgloss.Color("210")).
-		Bold(true).
-		Render(msg)
-}
-
 func (m Model) renderAttendeeManager(width, height int) (string, []mouseHit) {
 	width = max(28, width)
 	height = max(6, height)
 	mgr := m.eventForm.attendeeManager
-	title := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("117")).Render("Attendees")
+	title := m.styles.Accent.Render("Attendees")
 	legend := attendeeStateLegend(m.styles)
 	bodyHeight := max(1, height-2)
 	lines := make([]string, 0, bodyHeight)
@@ -858,15 +871,15 @@ func (m Model) renderAttendeeManager(width, height int) (string, []mouseHit) {
 			if selected {
 				prefix = " "
 			}
-			state := attendeeStateIcon(item.attendee)
+			state := attendeeStateIcon(m.styles, item.attendee)
 			if item.remove {
-				state = lipgloss.NewStyle().Foreground(lipgloss.Color("210")).Bold(true).Render("")
+				state = m.styles.Error.Render("")
 			}
 			label := attendeeBaseLabel(item.attendee)
 			valueBudget := max(8, width-lipgloss.Width(prefix)-lipgloss.Width(state)-2)
 			line := prefix + state + " " + truncate(label, valueBudget)
 			hits = append(hits, mouseHit{rect: mouseRect{x: 0, y: 1 + len(lines), width: width, height: 1}, kind: mouseAttendeeRow, index: i})
-			lines = append(lines, editorRowStyle(selected, width).Render(line))
+			lines = append(lines, editorRowStyle(m.styles, selected, width).Render(line))
 		}
 	}
 	body := lipgloss.NewStyle().Width(width).Height(bodyHeight).MaxHeight(bodyHeight).Render(strings.Join(lines, "\n"))
@@ -964,9 +977,8 @@ func (m Model) renderEditorRow(row editorRow, selected bool, width int) string {
 	if isEditorSeparator(row) {
 		label := " " + row.label + " "
 		ruleWidth := max(0, width-lipgloss.Width(label)-2)
-		return lipgloss.NewStyle().
+		return m.styles.Disabled.
 			Width(width).
-			Foreground(lipgloss.Color("244")).
 			Bold(true).
 			Render(label + strings.Repeat("─", ruleWidth))
 	}
@@ -979,29 +991,25 @@ func (m Model) renderEditorRow(row editorRow, selected bool, width int) string {
 	}
 	key := editorRowKey(row)
 	if key == "attendees-add" || key == "alarms-add" || key == "form-cancel" || key == "form-save" {
-		buttonStyle := lipgloss.NewStyle().
-			Foreground(lipgloss.Color("230")).
-			Background(lipgloss.Color("62")).
-			Bold(true).
-			Padding(0, 1)
+		buttonStyle := m.styles.PrimaryButton
 		if key == "form-cancel" {
-			buttonStyle = buttonStyle.Background(lipgloss.Color("238"))
+			buttonStyle = m.styles.SecondaryButton
 		}
 		line := prefix + buttonStyle.Render(editorButtonLabel(key))
-		return editorRowStyle(selected, width).Render(line)
+		return editorRowStyle(m.styles, selected, width).Render(line)
 	}
 
-	labelStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("117")).Bold(true)
-	valueStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
+	labelStyle := m.styles.Accent
+	valueStyle := m.styles.Value
 	if disabled {
-		labelStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
-		valueStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
+		labelStyle = m.styles.Disabled
+		valueStyle = m.styles.Disabled
 	}
 	label := labelStyle.Render(row.label)
 	sep := m.styles.Subtle.Render(": ")
 	valueBudget := max(1, width-lipgloss.Width(prefix)-lipgloss.Width(row.label)-2)
 	if key == "attendees" {
-		lines := attendeeEditorDisplayLines(row.value, valueBudget, valueStyle)
+		lines := attendeeEditorDisplayLines(m.styles, row.value, valueBudget, valueStyle)
 		indent := strings.Repeat(" ", lipgloss.Width(prefix)+lipgloss.Width(row.label)+2)
 		rendered := make([]string, 0, len(lines))
 		for i, valueLine := range lines {
@@ -1011,7 +1019,7 @@ func (m Model) renderEditorRow(row editorRow, selected bool, width int) string {
 			}
 			rendered = append(rendered, indent+valueLine)
 		}
-		return editorRowStyle(selected, width).Render(strings.Join(rendered, "\n"))
+		return editorRowStyle(m.styles, selected, width).Render(strings.Join(rendered, "\n"))
 	}
 	displayValue := editorDisplayValue(row)
 	if editorRowWraps(row) {
@@ -1026,25 +1034,20 @@ func (m Model) renderEditorRow(row editorRow, selected bool, width int) string {
 			}
 			lines = append(lines, indent+value)
 		}
-		return editorRowStyle(selected, width).Render(strings.Join(lines, "\n"))
+		return editorRowStyle(m.styles, selected, width).Render(strings.Join(lines, "\n"))
 	}
 	value := valueStyle.Render(truncate(displayValue, valueBudget))
-	return editorRowStyle(selected, width).Render(prefix + label + sep + value)
+	return editorRowStyle(m.styles, selected, width).Render(prefix + label + sep + value)
 }
 func (m Model) renderEditorActions(saveSelected, cancelSelected bool, width int) (line string, saveWidth, cancelX, cancelWidth int) {
-	button := func(label string, background lipgloss.Color, selected bool) string {
+	button := func(label string, style lipgloss.Style, selected bool) string {
 		if selected {
-			background = lipgloss.Color("117")
+			style = m.styles.FocusedButton
 		}
-		return lipgloss.NewStyle().
-			Foreground(lipgloss.Color("230")).
-			Background(background).
-			Bold(true).
-			Padding(0, 1).
-			Render(label)
+		return style.Render(label)
 	}
-	save := button("Save", lipgloss.Color("62"), saveSelected)
-	cancel := button("Cancel", lipgloss.Color("238"), cancelSelected)
+	save := button("Save", m.styles.PrimaryButton, saveSelected)
+	cancel := button("Cancel", m.styles.SecondaryButton, cancelSelected)
 	saveWidth = lipgloss.Width(save)
 	cancelX = saveWidth + 2
 	cancelWidth = lipgloss.Width(cancel)
@@ -1566,20 +1569,20 @@ func (m *Model) buildEventEditorForm(key string) *huh.Form {
 			huh.NewOption("Only this occurrence", string(calendar.EditRecurringOccurrence)),
 			huh.NewOption("This and following occurrences", string(calendar.EditRecurringFuture)),
 			huh.NewOption("All occurrences", string(calendar.EditRecurringAll)),
-		).Value(&s.editScope))).WithShowHelp(false).WithShowErrors(true)
+		).Value(&s.editScope))).WithShowHelp(false).WithShowErrors(true).WithTheme(m.formTheme)
 	case "title":
 		return singleInputForm("Title", "value", &s.summary, func(v string) error {
 			if strings.TrimSpace(v) == "" {
 				return errors.New("title is required")
 			}
 			return nil
-		})
+		}, m.formTheme)
 	case "location":
-		return singleInputForm("Location", "value", &s.location, nil)
+		return singleInputForm("Location", "value", &s.location, nil, m.formTheme)
 	case "description":
-		return huh.NewForm(huh.NewGroup(huh.NewText().Key("value").Title("Description").Value(&s.description).Lines(12))).WithShowHelp(false).WithShowErrors(true)
+		return huh.NewForm(huh.NewGroup(huh.NewText().Key("value").Title("Description").Value(&s.description).Lines(12))).WithShowHelp(false).WithShowErrors(true).WithTheme(m.formTheme)
 	case "url":
-		return singleInputForm("URL", "value", &s.url, nil)
+		return singleInputForm("URL", "value", &s.url, nil, m.formTheme)
 	case "alarms-add":
 		value := ""
 		return huh.NewForm(huh.NewGroup(huh.NewInput().
@@ -1588,11 +1591,11 @@ func (m *Model) buildEventEditorForm(key string) *huh.Form {
 			Description("Examples: 10m before, 2h before, 10d before, 1d after").
 			Value(&value).
 			Validate(validateAlarmsInput),
-		)).WithShowHelp(false).WithShowErrors(true)
+		)).WithShowHelp(false).WithShowErrors(true).WithTheme(m.formTheme)
 	case "recur-every":
-		return singleInputForm("Frequency", "value", &s.recurEvery, validateRecurrenceNumberInput)
+		return singleInputForm("Frequency", "value", &s.recurEvery, validateRecurrenceNumberInput, m.formTheme)
 	case "recur-count":
-		return singleInputForm("Repeat count", "value", &s.recurCount, validateRecurrenceNumberInput)
+		return singleInputForm("Repeat count", "value", &s.recurCount, validateRecurrenceNumberInput, m.formTheme)
 	}
 	return nil
 }
@@ -1702,21 +1705,21 @@ func (m *Model) buildTodoEditorForm(key string) *huh.Form {
 				return errors.New("title is required")
 			}
 			return nil
-		})
+		}, m.formTheme)
 	case "description":
-		return huh.NewForm(huh.NewGroup(huh.NewText().Key("value").Title("Description").Value(&s.description).Lines(12))).WithShowHelp(false).WithShowErrors(true)
+		return huh.NewForm(huh.NewGroup(huh.NewText().Key("value").Title("Description").Value(&s.description).Lines(12))).WithShowHelp(false).WithShowErrors(true).WithTheme(m.formTheme)
 	case "location":
-		return singleInputForm("Location", "value", &s.location, nil)
+		return singleInputForm("Location", "value", &s.location, nil, m.formTheme)
 	}
 	return nil
 }
 
-func singleInputForm(title, key string, value *string, validate func(string) error) *huh.Form {
+func singleInputForm(title, key string, value *string, validate func(string) error, theme *huh.Theme) *huh.Form {
 	input := huh.NewInput().Key(key).Title(title).Value(value)
 	if validate != nil {
 		input.Validate(validate)
 	}
-	return huh.NewForm(huh.NewGroup(input)).WithShowHelp(false).WithShowErrors(true)
+	return huh.NewForm(huh.NewGroup(input)).WithShowHelp(false).WithShowErrors(true).WithTheme(theme)
 }
 
 func (m Model) calendarOptionLabels() map[string]string {
@@ -2199,22 +2202,22 @@ func editorDisplayValue(row editorRow) string {
 	return row.value
 }
 
-func attendeeStateIcon(attendee calendar.Attendee) string {
+func attendeeStateIcon(styles Styles, attendee calendar.Attendee) string {
 	if attendeeIsOptional(attendee) {
 		return ""
 	}
-	return lipgloss.NewStyle().Foreground(lipgloss.Color("65")).Bold(true).Render("")
+	return styles.Success.Render("")
 }
 
 func attendeeStateLegend(styles Styles) string {
-	removed := lipgloss.NewStyle().Foreground(lipgloss.Color("210")).Bold(true).Render("")
+	removed := styles.Error.Render("")
 	return styles.Subtle.Render(" Focused  ") +
-		attendeeStateIcon(calendar.Attendee{}) + styles.Subtle.Render(" Required  ") +
+		attendeeStateIcon(styles, calendar.Attendee{}) + styles.Subtle.Render(" Required  ") +
 		"" + styles.Subtle.Render(" Optional  ") +
 		removed + styles.Subtle.Render(" Removed")
 }
 
-func attendeeEditorDisplayLines(raw string, width int, valueStyle lipgloss.Style) []string {
+func attendeeEditorDisplayLines(styles Styles, raw string, width int, valueStyle lipgloss.Style) []string {
 	attendees := parseAttendeesInput(raw)
 	if len(attendees) == 0 {
 		return []string{valueStyle.Render("-")}
@@ -2222,7 +2225,7 @@ func attendeeEditorDisplayLines(raw string, width int, valueStyle lipgloss.Style
 	width = max(1, width)
 	lines := make([]string, 0, len(attendees))
 	for _, attendee := range attendees {
-		icon := attendeeStateIcon(attendee)
+		icon := attendeeStateIcon(styles, attendee)
 		label := attendeeBaseLabel(attendee)
 		if label == "" {
 			continue
@@ -2335,12 +2338,11 @@ func editorButtonLabel(key string) string {
 	}
 }
 
-func editorRowStyle(selected bool, width int) lipgloss.Style {
-	style := lipgloss.NewStyle().Width(width)
+func editorRowStyle(styles Styles, selected bool, width int) lipgloss.Style {
 	if selected {
-		style = style.Background(lipgloss.Color("238")).Foreground(lipgloss.Color("230")).Bold(true)
+		return styles.SelectedRow.Width(width)
 	}
-	return style
+	return lipgloss.NewStyle().Width(width)
 }
 
 // NewPreferredFormKeyMap uses j/k-first navigation labels and ctrl-enter text shortcuts.
@@ -2547,39 +2549,39 @@ func (m Model) renderEventDetailsPane(width, height int) string {
 
 func (m Model) renderEventDetailsFor(ev calendar.Event, width, height int) string {
 	meta := []string{
-		detailLine("󰉢", "Title", ev.Summary, width),
+		m.styles.detailLine("󰉢", "Title", ev.Summary, width),
 	}
-	meta = append(meta, detailLine("", "RSVP", eventRSVPDisplayValue(eventRSVPValue(ev)), width))
+	meta = append(meta, m.styles.detailLine("", "RSVP", eventRSVPDisplayValue(eventRSVPValue(ev)), width))
 	if ev.Organizer != "" {
-		meta = append(meta, detailLine("", "Organizer", ev.Organizer, width))
+		meta = append(meta, m.styles.detailLine("", "Organizer", ev.Organizer, width))
 	}
 	if m.store != nil {
 		if role := eventUserRoleDisplay(m.store.EventUserRole(ev)); role != "" {
-			meta = append(meta, detailLine("", "Role", role, width))
+			meta = append(meta, m.styles.detailLine("", "Role", role, width))
 		}
 	}
 	if ev.Location != "" || ev.URL != "" {
 		meta = append(meta, "")
 	}
 	if ev.Location != "" {
-		meta = append(meta, detailLine("", "Location", ev.Location, width))
+		meta = append(meta, m.styles.detailLine("", "Location", ev.Location, width))
 	}
 	if ev.URL != "" {
-		meta = append(meta, detailLine("", "URL", ev.URL, width))
+		meta = append(meta, m.styles.detailLine("", "URL", ev.URL, width))
 	}
 	if len(ev.Attendees) > 0 {
-		meta = append(meta, "", detailLine("", "Attendees", fmt.Sprintf("%d total", len(ev.Attendees)), width))
-		meta = append(meta, detailAttendeeLines(ev.Attendees, width, 5)...)
+		meta = append(meta, "", m.styles.detailLine("", "Attendees", fmt.Sprintf("%d total", len(ev.Attendees)), width))
+		meta = append(meta, detailAttendeeLines(m.styles, ev.Attendees, width, 5)...)
 	}
-	meta = append(meta, "", detailLine("󰥔", "All-day", yesNo(ev.AllDay), width))
-	meta = append(meta, detailLine("", "When", ev.Start.Format("2006-01-02 15:04")+" - "+ev.End.Format("2006-01-02 15:04"), width))
+	meta = append(meta, "", m.styles.detailLine("󰥔", "All-day", yesNo(ev.AllDay), width))
+	meta = append(meta, m.styles.detailLine("", "When", ev.Start.Format("2006-01-02 15:04")+" - "+ev.End.Format("2006-01-02 15:04"), width))
 	if ev.Recurrence != nil {
-		meta = append(meta, "", detailLine("󰑖", "Repeat", formatRecurrence(ev.Recurrence), width))
+		meta = append(meta, "", m.styles.detailLine("󰑖", "Repeat", formatRecurrence(ev.Recurrence), width))
 	} else if ev.Recurring {
-		meta = append(meta, "", detailLine("󰑖", "Repeat", "yes", width))
+		meta = append(meta, "", m.styles.detailLine("󰑖", "Repeat", "yes", width))
 	}
 	if len(ev.Alarms) > 0 {
-		meta = append(meta, "", detailLine("󰀠", "Notifications", formatAlarms(ev.Alarms), width))
+		meta = append(meta, "", m.styles.detailLine("󰀠", "Notifications", formatAlarms(ev.Alarms), width))
 	}
 	return m.renderGroupedDetails("Details", meta, "", width, height)
 }
@@ -2605,22 +2607,22 @@ func (m Model) renderTodoDetailsFor(todo calendar.Todo, mode string, width, heig
 		}
 	}
 	meta := []string{
-		detailLine("󰉢", "Title", todo.Summary, width),
+		m.styles.detailLine("󰉢", "Title", todo.Summary, width),
 	}
 	if strings.TrimSpace(todo.Location) != "" {
-		meta = append(meta, "", detailLine("", "Location", todo.Location, width))
+		meta = append(meta, "", m.styles.detailLine("", "Location", todo.Location, width))
 	}
-	meta = append(meta, "", detailLine("󰥔", "When", when, width))
-	meta = append(meta, "", detailLine("󰄬", "Status", strings.ToLower(status), width))
+	meta = append(meta, "", m.styles.detailLine("󰥔", "When", when, width))
+	meta = append(meta, "", m.styles.detailLine("󰄬", "Status", strings.ToLower(status), width))
 	if todo.Percent > 0 {
-		meta = append(meta, detailLine("", "Progress", fmt.Sprintf("%d%%", todo.Percent), width))
+		meta = append(meta, m.styles.detailLine("", "Progress", fmt.Sprintf("%d%%", todo.Percent), width))
 	}
 	if todo.Priority > 0 {
 		priorityLabel := todoPriorityLabel(todo.Priority)
 		if strings.EqualFold(priorityLabel, "high") {
-			priorityLabel = lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Render(priorityLabel)
+			priorityLabel = m.styles.HighPriority.Render(priorityLabel)
 		}
-		meta = append(meta, detailLine("", "Priority", priorityLabel, width))
+		meta = append(meta, m.styles.detailLine("", "Priority", priorityLabel, width))
 	}
 	return m.renderGroupedDetails("Details", meta, todo.Description, width, height)
 }
@@ -2635,7 +2637,7 @@ func (m Model) renderGroupedDetails(title string, meta []string, description str
 	}
 
 	meta = compactBlankLines(meta)
-	descLines := detailDescriptionLines(description, width)
+	descLines := detailDescriptionLines(m.styles, description, width)
 	if len(descLines) > 0 {
 		meta = compactBlankLines(append(meta, append([]string{""}, descLines...)...))
 	}
@@ -2644,41 +2646,41 @@ func (m Model) renderGroupedDetails(title string, meta []string, description str
 	return lipgloss.NewStyle().Width(width).Height(height).MaxHeight(height).Render(block)
 }
 
-func detailLine(glyph, label, value string, width int) string {
+func (styles Styles) detailLine(glyph, label, value string, width int) string {
 	iconWidth := 2
 	labelWidth := 13
 	icon := strings.Repeat(" ", iconWidth)
 	if glyph != "" {
-		icon = lipgloss.NewStyle().Foreground(lipgloss.Color("117")).Bold(true).Render(glyph)
+		icon = styles.Accent.Render(glyph)
 		icon += strings.Repeat(" ", max(0, iconWidth-lipgloss.Width(icon)))
 	}
 	labelText := padRight(label, labelWidth)
-	prefix := icon + " " + lipgloss.NewStyle().Foreground(lipgloss.Color("117")).Bold(true).Render(labelText) + lipgloss.NewStyle().Foreground(lipgloss.Color("244")).Render(": ")
+	prefix := icon + " " + styles.Accent.Render(labelText) + styles.Disabled.Render(": ")
 	valueBudget := max(1, width-lipgloss.Width(prefix))
-	return prefix + lipgloss.NewStyle().Foreground(lipgloss.Color("252")).Render(truncate(value, valueBudget))
+	return prefix + styles.Value.Render(truncate(value, valueBudget))
 }
 
-func detailAttendeeLines(attendees []calendar.Attendee, width, limit int) []string {
+func detailAttendeeLines(styles Styles, attendees []calendar.Attendee, width, limit int) []string {
 	if len(attendees) == 0 || limit <= 0 {
 		return nil
 	}
 	out := make([]string, 0, min(limit, len(attendees)))
 	prefix := strings.Repeat(" ", 16)
 	for _, attendee := range attendees[:min(limit, len(attendees))] {
-		icon := attendeeStateIcon(attendee)
+		icon := attendeeStateIcon(styles, attendee)
 		label := attendeeBaseLabel(attendee)
 		valueBudget := max(1, width-lipgloss.Width(prefix)-lipgloss.Width(icon)-1)
-		out = append(out, prefix+icon+" "+lipgloss.NewStyle().Foreground(lipgloss.Color("252")).Render(truncate(label, valueBudget)))
+		out = append(out, prefix+icon+" "+styles.Value.Render(truncate(label, valueBudget)))
 	}
 	return out
 }
 
-func detailDescriptionLines(description string, width int) []string {
+func detailDescriptionLines(styles Styles, description string, width int) []string {
 	description = strings.TrimSpace(description)
 	if description == "" {
 		return nil
 	}
-	lines := []string{detailLine("󰦨", "Description", "", width)}
+	lines := []string{styles.detailLine("󰦨", "Description", "", width)}
 	for _, raw := range strings.Split(description, "\n") {
 		wrapped := wrapLine(raw, max(10, width-4))
 		for _, line := range wrapped {
@@ -3257,10 +3259,7 @@ func (m Model) renderHelpOverlay(width, height int) string {
 	title := m.styles.Title.Render("Shortcuts")
 	body := lipgloss.NewStyle().Width(width - 4).Render(strings.Join(lines, "\n"))
 	content := lipgloss.JoinVertical(lipgloss.Left, title, "", body)
-	return lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("245")).
-		Padding(1, 2).
+	return m.styles.HelpOverlay.
 		Width(width).
 		Height(height).
 		Render(content)
@@ -3811,7 +3810,7 @@ func (m *Model) buildTodoForm(s *todoFormState) *huh.Form {
 		huh.NewConfirm().Key("completed").Title("Completed").Value(&s.completed),
 		huh.NewSelect[string]().Key("priority").Title("Priority").Options(priorityOptions...).Value(&s.priorityLabel),
 	).Title(title)
-	return huh.NewForm(group).WithShowErrors(true).WithShowHelp(false)
+	return huh.NewForm(group).WithShowErrors(true).WithShowHelp(false).WithTheme(m.formTheme)
 }
 
 func (m *Model) commitTodoForm() error {
@@ -4104,7 +4103,7 @@ func (m *Model) buildEventForm(s *eventFormState) *huh.Form {
 		}),
 	).Title(modeTitle)
 
-	return huh.NewForm(mainGroup).WithShowHelp(false).WithShowErrors(true)
+	return huh.NewForm(mainGroup).WithShowHelp(false).WithShowErrors(true).WithTheme(m.formTheme)
 }
 
 func (m *Model) commitEventForm() error {
@@ -4281,7 +4280,7 @@ func (m *Model) buildDeleteConfirmForm(s *deleteConfirmState) *huh.Form {
 				huh.NewOption("This and following occurrences", string(calendar.DeleteRecurringFuture)),
 				huh.NewOption("All occurrences", string(calendar.DeleteRecurringAll)),
 			).
-			Value(&s.scope)).Title("Delete")).WithShowHelp(false).WithShowErrors(true)
+			Value(&s.scope)).Title("Delete")).WithShowHelp(false).WithShowErrors(true).WithTheme(m.formTheme)
 	}
 	title := "Delete " + s.kind
 	if strings.TrimSpace(s.itemLabel) != "" {
@@ -4293,7 +4292,7 @@ func (m *Model) buildDeleteConfirmForm(s *deleteConfirmState) *huh.Form {
 	}
 	return huh.NewForm(huh.NewGroup(
 		huh.NewConfirm().Key("confirm").Title(title).Description(description).Value(&s.confirm),
-	).Title("Confirm deletion")).WithShowHelp(false).WithShowErrors(true)
+	).Title("Confirm deletion")).WithShowHelp(false).WithShowErrors(true).WithTheme(m.formTheme)
 }
 
 func (m *Model) commitDeleteConfirm() error {

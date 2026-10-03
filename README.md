@@ -24,6 +24,8 @@ without issues but cannot guarantee there won't be issues with other calendars.
 - Per-calendar metadata (display name, color) including discovery from `displayname`/`color` files
 - Per-calendar show/hide controls to include/exclude all events and todos
 - Optional Nerd Font glyphs for the richest terminal rendering
+- Automatic Omarchy palette support with live theme reloads on Linux Omarchy
+  Quattro; application surfaces keep the terminal's default background
 
 ## Installation
 

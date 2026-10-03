@@ -1,10 +1,6 @@
 package tui
 
-import (
-	"strings"
-
-	"github.com/charmbracelet/lipgloss"
-)
+import "strings"
 
 type notificationManagerState struct {
 	items  []notificationEditorItem
@@ -67,20 +63,20 @@ func (m *notificationManagerState) render(width, height int, styles Styles) (str
 			if i == m.cursor {
 				prefix = " "
 			}
-			glyph := lipgloss.NewStyle().Foreground(lipgloss.Color("65")).Bold(true).Render("󰀠")
+			glyph := styles.Success.Render("󰀠")
 			if item.remove {
-				glyph = lipgloss.NewStyle().Foreground(lipgloss.Color("210")).Bold(true).Render("")
+				glyph = styles.Error.Render("")
 			}
 			line := prefix + glyph + " " + truncate(item.value, max(8, width-5))
 			if i == m.cursor {
-				line = editorRowStyle(true, width).Render(line)
+				line = editorRowStyle(styles, true, width).Render(line)
 			}
 			hits = append(hits, mouseHit{rect: mouseRect{x: 0, y: len(lines), width: width, height: 1}, kind: mouseNotificationRow, index: i})
 			lines = append(lines, line)
 		}
 	}
-	active := lipgloss.NewStyle().Foreground(lipgloss.Color("65")).Bold(true).Render("󰀠")
-	removed := lipgloss.NewStyle().Foreground(lipgloss.Color("210")).Bold(true).Render("")
+	active := styles.Success.Render("󰀠")
+	removed := styles.Error.Render("")
 	lines = append(lines, "", styles.Subtle.Render(" Focused  ")+active+styles.Subtle.Render(" Active  ")+removed+styles.Subtle.Render(" Removed"))
 	return strings.Join(lines, "\n"), hits
 }

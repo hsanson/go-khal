@@ -63,7 +63,7 @@ func (m Model) addOffsetMouseHits(hits []mouseHit, x, y int) {
 }
 
 func (m Model) overlayCenteredWithHits(base, modal string, width, height int, hits []mouseHit) string {
-	box := centeredOverlayBox(modal, width)
+	box := centeredOverlayBox(modal, width, m.styles)
 	boxX := max(0, (width-lipgloss.Width(box))/2)
 	boxY := max(0, (height-lipgloss.Height(box))/2)
 	m.addOffsetMouseHits(hits, m.mouseMainX+boxX+3, m.mouseMainY+boxY+2)

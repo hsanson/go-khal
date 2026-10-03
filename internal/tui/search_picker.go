@@ -136,7 +136,7 @@ func (p *searchPicker) render(width int, styles Styles) (string, []mouseHit) {
 			style := lipgloss.NewStyle().Width(width)
 			if i == p.cursor {
 				prefix = " "
-				style = style.Background(lipgloss.Color("238")).Foreground(lipgloss.Color("230")).Bold(true)
+				style = styles.SelectedRow.Width(width)
 			}
 			label := p.options[p.filtered[i]].label
 			hits = append(hits, mouseHit{rect: mouseRect{x: 0, y: 3 + len(lines), width: width, height: 1}, kind: mouseSearchOption, index: i})

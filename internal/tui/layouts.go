@@ -54,9 +54,11 @@ func renderWeekRow(weekStartDate, selected time.Time, events []calendar.Event, w
 	_ = weekStart
 	parts := make([]string, 0, 7)
 	eventColorByDay := map[string]string{}
+	eventOnDay := map[string]bool{}
 	now := time.Now()
 	for _, ev := range events {
 		k := dayStart(ev.Start).Format("2006-01-02")
+		eventOnDay[k] = true
 		if strings.TrimSpace(ev.Color) == "" {
 			continue
 		}
@@ -77,11 +79,11 @@ func renderWeekRow(weekStartDate, selected time.Time, events []calendar.Event, w
 		day := weekStartDate.AddDate(0, 0, i)
 		key := day.Format("2006-01-02")
 		txt := fmt.Sprintf("%2d", day.Day())
-		if color := eventColorByDay[key]; color != "" {
-			txt = styleForColor(styles.Accent, color).Render(txt)
+		if eventOnDay[key] {
+			txt = styleForColor(styles.Accent, eventColorByDay[key]).Render(txt)
 		}
 		if day.Year() == selected.Year() && day.Month() == selected.Month() && day.Day() == selected.Day() {
-			txt = lipgloss.NewStyle().Background(lipgloss.Color("62")).Foreground(lipgloss.Color("230")).Bold(true).Render(txt)
+			txt = styles.RangeEndpoint.Render(txt)
 		}
 		parts = append(parts, txt)
 	}
@@ -196,7 +198,7 @@ func renderAgendaFromItems(items []AgendaListItem, width, maxLines int, timeFmt 
 		}
 
 		if highlight && i == cursor {
-			line = lipgloss.NewStyle().Background(lipgloss.Color("238")).Render(line)
+			line = styles.SelectedRow.Render(line)
 		}
 		if item.Event != nil || item.Todo != nil {
 			rendered.ItemLines = append(rendered.ItemLines, agendaItemLine{Index: i, Y: len(lines)})

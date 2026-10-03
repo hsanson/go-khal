@@ -177,10 +177,10 @@ func (e *timeRangeEditor) render(styles Styles) (string, []mouseHit) {
 		}
 		style := lipgloss.NewStyle()
 		if e.slots[i] == 0 {
-			style = style.Foreground(lipgloss.Color("245"))
+			style = styles.Subtle
 		}
 		if i == e.cursor {
-			style = style.Reverse(true).Bold(true)
+			style = styles.TimeCursor
 		}
 		hits = append(hits, mouseHit{rect: mouseRect{x: x, y: 2, width: 1, height: 1}, kind: mouseTimeDigit, index: i})
 		parts = append(parts, style.Render(string(value)))
@@ -192,7 +192,7 @@ func (e *timeRangeEditor) render(styles Styles) (string, []mouseHit) {
 		strings.Join(parts, ""),
 	}
 	if e.err != "" {
-		lines = append(lines, "", errorText(e.err))
+		lines = append(lines, "", styles.Error.Render(e.err))
 	}
 	return strings.Join(lines, "\n"), hits
 }

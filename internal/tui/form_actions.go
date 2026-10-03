@@ -15,16 +15,16 @@ const (
 	dialogFocusCancel
 )
 
-func dialogWithActions(content string, focus dialogFocus) (string, []mouseHit) {
+func dialogWithActions(content string, focus dialogFocus, styles Styles) (string, []mouseHit) {
 	button := func(label string, selected bool) string {
-		background := lipgloss.Color("238")
+		style := styles.SecondaryButton
 		if label == "Apply" {
-			background = lipgloss.Color("62")
+			style = styles.PrimaryButton
 		}
 		if selected {
-			background = lipgloss.Color("117")
+			style = styles.FocusedButton
 		}
-		return lipgloss.NewStyle().Foreground(lipgloss.Color("230")).Background(background).Bold(true).Padding(0, 1).Render(label)
+		return style.Render(label)
 	}
 	apply := button("Apply", focus == dialogFocusApply)
 	cancel := button("Cancel", focus == dialogFocusCancel)
@@ -36,8 +36,8 @@ func dialogWithActions(content string, focus dialogFocus) (string, []mouseHit) {
 	}
 }
 
-func addDialogActions(content string, hits []mouseHit, focus dialogFocus) (string, []mouseHit) {
-	view, actionHits := dialogWithActions(content, focus)
+func addDialogActions(content string, hits []mouseHit, focus dialogFocus, styles Styles) (string, []mouseHit) {
+	view, actionHits := dialogWithActions(content, focus, styles)
 	return view, append(hits, actionHits...)
 }
 

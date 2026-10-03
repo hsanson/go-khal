@@ -6,7 +6,6 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 )
 
 type dateRangePicker struct {
@@ -206,11 +205,11 @@ func (p *dateRangePicker) render(styles Styles) (string, []mouseHit) {
 			cell := fmt.Sprintf("%2d", day)
 			switch {
 			case sameDate(date, p.cursor):
-				cell = lipgloss.NewStyle().Background(lipgloss.Color("117")).Foreground(lipgloss.Color("232")).Bold(true).Render(cell)
+				cell = styles.Focus.Render(cell)
 			case sameDate(date, p.start) || p.end != nil && sameDate(date, *p.end):
-				cell = lipgloss.NewStyle().Background(lipgloss.Color("62")).Foreground(lipgloss.Color("230")).Bold(true).Render(cell)
+				cell = styles.RangeEndpoint.Render(cell)
 			case p.rangeContains(date):
-				cell = lipgloss.NewStyle().Background(lipgloss.Color("238")).Foreground(lipgloss.Color("230")).Render(cell)
+				cell = styles.Range.Render(cell)
 			}
 			hits = append(hits, mouseHit{
 				rect: mouseRect{x: weekday * 3, y: len(lines), width: 2, height: 1},

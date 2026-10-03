@@ -10,6 +10,7 @@ require (
 	github.com/emersion/go-ical v0.0.0-20250609112844-439c63cef608
 	github.com/emersion/go-vcard v0.0.0-20260618161152-d854b7e0e2d3
 	github.com/spf13/cobra v1.10.2
+	golang.org/x/sys v0.38.0
 )
 
 require (
@@ -39,6 +40,5 @@ require (
 	github.com/spf13/pflag v1.0.9 // indirect
 	github.com/teambition/rrule-go v1.8.2 // indirect
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
-	golang.org/x/sys v0.38.0 // indirect
 	golang.org/x/text v0.23.0 // indirect
 )

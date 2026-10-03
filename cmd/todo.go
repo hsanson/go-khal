@@ -117,6 +117,7 @@ func newTodoNewCommand() *cobra.Command {
 					Due:         due,
 					Priority:    5,
 				})
+				defer model.Close()
 				if _, err := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion()).Run(); err != nil {
 					return err
 				}

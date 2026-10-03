@@ -36,6 +36,7 @@ func runTUIWithTaskMode(taskMode bool) error {
 	} else {
 		model = tui.NewModel(cfg, ds, store)
 	}
+	defer model.Close()
 	if _, err := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion()).Run(); err != nil {
 		return fmt.Errorf("run tui: %w", err)
 	}
