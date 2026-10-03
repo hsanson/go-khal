@@ -34,6 +34,32 @@ func TestMouseClickSelectsRenderedCalendarDay(t *testing.T) {
 	}
 }
 
+func TestMouseCalendarHeaderNavigatesMonthsAndYears(t *testing.T) {
+	m := NewModel(&config.Config{SidebarWidth: 30}, calendar.Dataset{}, nil)
+	m.width = 100
+	m.height = 40
+	m.selected = time.Date(2024, time.February, 29, 0, 0, 0, 0, time.Local)
+	m.agendaStart = m.selected
+	if view := m.View(); !strings.Contains(view, "Calendar  « ‹ › »") {
+		t.Fatalf("calendar header navigation controls missing:\n%s", view)
+	}
+
+	for _, step := range []struct {
+		kind mouseTarget
+		want string
+	}{
+		{mouseCalendarNextYear, "2025-02-28"},
+		{mouseCalendarPreviousMonth, "2025-01-28"},
+		{mouseCalendarNextMonth, "2025-02-28"},
+		{mouseCalendarPreviousYear, "2024-02-28"},
+	} {
+		m = clickRenderedHit(t, m, step.kind, -1, "")
+		if got := m.selected.Format("2006-01-02"); got != step.want {
+			t.Fatalf("mouse target %d date = %s, want %s", step.kind, got, step.want)
+		}
+	}
+}
+
 func TestMouseWheelAndUnsupportedActions(t *testing.T) {
 	data := calendar.Dataset{Calendars: []calendar.Calendar{{Source: "src", Name: "a"}, {Source: "src", Name: "b"}}}
 	m := NewModel(&config.Config{SidebarWidth: 30}, data, nil)
@@ -190,6 +216,16 @@ func TestMouseDateRangeAndTimeDigitSelection(t *testing.T) {
 
 	m.eventForm.cursor = editorRowIndex(t, m.eventEditorRows(), "date")
 	m.openEventEditorForm()
+	m = clickRenderedHit(t, m, mouseDateNextYear, -1, "")
+	if got := m.eventForm.datePicker.cursor.Format("2006-01-02"); got != "2027-10-01" {
+		t.Fatalf("next-year picker click date = %s", got)
+	}
+	m = clickRenderedHit(t, m, mouseDatePreviousYear, -1, "")
+	m = clickRenderedHit(t, m, mouseDateNextMonth, -1, "")
+	m = clickRenderedHit(t, m, mouseDatePreviousMonth, -1, "")
+	if got := m.eventForm.datePicker.cursor.Format("2006-01-02"); got != "2026-10-01" {
+		t.Fatalf("round-trip picker click date = %s", got)
+	}
 	m = clickRenderedHit(t, m, mouseDateMultiDay, -1, "")
 	m = clickRenderedDate(t, m, 5)
 	if gotStart, gotEnd := m.eventForm.datePicker.dates(); gotStart.Day() != 1 || gotEnd.Day() != 5 {

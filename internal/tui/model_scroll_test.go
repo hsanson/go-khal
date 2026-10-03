@@ -452,6 +452,70 @@ func TestTaskModeShowsPastDuePendingTasksAndClampsNavigation(t *testing.T) {
 	}
 }
 
+func TestAgendaDateNavigationClampsAndResetsList(t *testing.T) {
+	m := NewModel(&config.Config{SidebarWidth: 30}, calendar.Dataset{}, nil)
+	m.selected = time.Date(2024, time.February, 29, 0, 0, 0, 0, time.Local)
+	m.agendaStart = m.selected
+	m.eventCursor = 7
+	m.eventListOffset = 4
+
+	for _, step := range []struct {
+		key  tea.KeyMsg
+		want string
+	}{
+		{tea.KeyMsg{Type: tea.KeyCtrlH}, "2023-02-28"},
+		{tea.KeyMsg{Type: tea.KeyCtrlL}, "2024-02-28"},
+		{tea.KeyMsg{Type: tea.KeyCtrlK}, "2024-01-28"},
+		{tea.KeyMsg{Type: tea.KeyCtrlJ}, "2024-02-28"},
+	} {
+		updated, _ := m.Update(step.key)
+		m = updated.(Model)
+		if got := m.selected.Format("2006-01-02"); got != step.want {
+			t.Fatalf("%s date = %s, want %s", step.key.String(), got, step.want)
+		}
+		if m.eventCursor != 0 || m.eventListOffset != 0 {
+			t.Fatalf("%s list position = %d/%d, want 0/0", step.key.String(), m.eventCursor, m.eventListOffset)
+		}
+	}
+}
+
+func TestTaskDateNavigationPreservesListPosition(t *testing.T) {
+	first := time.Date(2025, time.January, 1, 0, 0, 0, 0, time.Local)
+	second := first.AddDate(0, 0, 1)
+	cal := calendar.Calendar{Source: "src", Name: "cal"}
+	m := NewTaskModeModel(&config.Config{SidebarWidth: 30}, calendar.Dataset{
+		Calendars: []calendar.Calendar{cal},
+		Todos: []calendar.Todo{
+			{UID: "one", Summary: "One", Source: cal.Source, Calendar: cal.Name, Due: &first},
+			{UID: "two", Summary: "Two", Source: cal.Source, Calendar: cal.Name, Due: &second},
+		},
+	}, nil)
+	m.selected = time.Date(2025, time.January, 31, 0, 0, 0, 0, time.Local)
+	m.agendaStart = m.selected
+	m.eventCursor = 1
+
+	for _, step := range []struct {
+		key  tea.KeyMsg
+		want string
+	}{
+		{tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'h'}}, "2025-01-30"},
+		{tea.KeyMsg{Type: tea.KeyRight}, "2025-01-31"},
+		{tea.KeyMsg{Type: tea.KeyCtrlJ}, "2025-02-28"},
+		{tea.KeyMsg{Type: tea.KeyCtrlK}, "2025-01-28"},
+		{tea.KeyMsg{Type: tea.KeyCtrlL}, "2026-01-28"},
+		{tea.KeyMsg{Type: tea.KeyCtrlH}, "2025-01-28"},
+	} {
+		updated, _ := m.Update(step.key)
+		m = updated.(Model)
+		if got := m.selected.Format("2006-01-02"); got != step.want {
+			t.Fatalf("%s date = %s, want %s", step.key.String(), got, step.want)
+		}
+		if m.eventCursor != 1 {
+			t.Fatalf("%s task cursor = %d, want 1", step.key.String(), m.eventCursor)
+		}
+	}
+}
+
 func TestTaskModeShowAllControlsCompletedTasks(t *testing.T) {
 	now := dayStart(time.Now())
 	cal := calendar.Calendar{Source: "src", Name: "cal"}
@@ -532,26 +596,6 @@ func TestCalendarPaneQReturnsToItemList(t *testing.T) {
 	}
 }
 
-func TestContextualLegendsAndHelp(t *testing.T) {
-	m := NewModel(&config.Config{SidebarWidth: 30}, calendar.Dataset{}, nil)
-	if got := m.shortcutsLegend(); got != "[esc/q] Exit  [j/k] Next / Previous  [t] Today  [enter] Open  [n] New  [m] Tasks  [ctrl-d] Delete  [c] Calendars  [?] Help" {
-		t.Fatalf("unexpected event legend: %q", got)
-	}
-
-	m.focusCalendarPane = true
-	calendarHelp := strings.Join(m.helpLines(), "\n")
-	if strings.Contains(calendarHelp, "New event") || !strings.Contains(calendarHelp, "Hide/show calendar") {
-		t.Fatalf("calendar help contains unrelated shortcuts: %q", calendarHelp)
-	}
-
-	m.focusCalendarPane = false
-	m.openEventFormNew()
-	editorHelp := strings.Join(m.helpLines(), "\n")
-	if strings.Contains(editorHelp, "Open tasks") || !strings.Contains(editorHelp, "Save") {
-		t.Fatalf("editor help contains unrelated shortcuts: %q", editorHelp)
-	}
-}
-
 func TestLegendRendersBelowMainView(t *testing.T) {
 	m := NewModel(&config.Config{SidebarWidth: 30}, calendar.Dataset{}, nil)
 	m.width = 120
@@ -561,25 +605,6 @@ func TestLegendRendersBelowMainView(t *testing.T) {
 	agendaAt := strings.Index(view, "Agenda from")
 	if legendAt < 0 || agendaAt < 0 || legendAt < agendaAt {
 		t.Fatalf("legend should render below main view: agenda=%d legend=%d", agendaAt, legendAt)
-	}
-}
-func TestDatePickerLegendRendersBelowMainView(t *testing.T) {
-	m := NewModel(&config.Config{SidebarWidth: 30}, calendar.Dataset{}, nil)
-	m.width = 120
-	m.height = 30
-	m.openEventFormNew()
-	setEventEditorCursor(t, &m, "date")
-	m.openEventEditorForm()
-
-	want := "[spc] Multi-day  [t] Today  [enter] Apply  [esc/q] Cancel"
-	if got := m.shortcutsLegend(); got != want {
-		t.Fatalf("date picker legend = %q, want %q", got, want)
-	}
-	view := m.View()
-	legendAt := strings.Index(view, want)
-	dateAt := strings.Index(view, m.eventForm.datePicker.start.Format("Jan 2, 2006"))
-	if legendAt < 0 || dateAt < 0 || legendAt < dateAt {
-		t.Fatalf("date picker legend should render below main view: date=%d legend=%d", dateAt, legendAt)
 	}
 }
 

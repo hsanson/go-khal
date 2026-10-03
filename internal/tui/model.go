@@ -401,48 +401,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.moveEventCursor(m.eventPageStep())
 		case "ctrl+b":
 			m.moveEventCursor(-m.eventPageStep())
-		case "ctrl+j":
-			m.detailScroll++
 		case "ctrl+k":
-			if m.detailScroll > 0 {
-				m.detailScroll--
-			}
-		case "h", "left":
-			if m.showTasksMode {
-				break
-			}
-			m.selected = m.selected.AddDate(0, 0, -1)
-			m.agendaStart = dayStart(m.selected)
-			m.eventCursor = 0
-			m.eventListOffset = 0
-			m.scrollForSelection()
-		case "l", "right":
-			if m.showTasksMode {
-				break
-			}
-			m.selected = m.selected.AddDate(0, 0, 1)
-			m.agendaStart = dayStart(m.selected)
-			m.eventCursor = 0
-			m.eventListOffset = 0
-			m.scrollForSelection()
+			m.navigateToDate(addMonthsClamped(m.selected, -1))
+		case "ctrl+j":
+			m.navigateToDate(addMonthsClamped(m.selected, 1))
 		case "ctrl+h":
-			if m.showTasksMode {
-				break
-			}
-			m.selected = m.selected.AddDate(0, 0, -7)
-			m.agendaStart = dayStart(m.selected)
-			m.eventCursor = 0
-			m.eventListOffset = 0
-			m.scrollForSelection()
+			m.navigateToDate(addMonthsClamped(m.selected, -12))
 		case "ctrl+l":
-			if m.showTasksMode {
-				break
-			}
-			m.selected = m.selected.AddDate(0, 0, 7)
-			m.agendaStart = dayStart(m.selected)
-			m.eventCursor = 0
-			m.eventListOffset = 0
-			m.scrollForSelection()
+			m.navigateToDate(addMonthsClamped(m.selected, 12))
+		case "h", "left":
+			m.navigateToDate(m.selected.AddDate(0, 0, -1))
+		case "l", "right":
+			m.navigateToDate(m.selected.AddDate(0, 0, 1))
 		case "n":
 			if m.showTasksMode {
 				m.openTodoFormNew()
@@ -625,12 +595,17 @@ func (m Model) renderLeftPanel(width int) string {
 		bottomHeight = 4
 		topHeight = panelHeight - bottomHeight - 1
 	}
+	header := m.styles.PanelTitle.Render("Calendar  « ‹ › »")
+	m.addMouseHit(mouseHit{rect: mouseRect{x: 13, y: 2, width: 1, height: 1}, kind: mouseCalendarPreviousYear})
+	m.addMouseHit(mouseHit{rect: mouseRect{x: 15, y: 2, width: 1, height: 1}, kind: mouseCalendarPreviousMonth})
+	m.addMouseHit(mouseHit{rect: mouseRect{x: 17, y: 2, width: 1, height: 1}, kind: mouseCalendarNextMonth})
+	m.addMouseHit(mouseHit{rect: mouseRect{x: 19, y: 2, width: 1, height: 1}, kind: mouseCalendarNextYear})
 	weeks := renderWeekViewport(m.weekViewportStart, m.selected, filteredEvents(m.data.Events, m.calendarVisibility, true), width-2, max(3, topHeight-2), m.weekStart(), m.styles, func(x, y int, day time.Time) {
 		m.addMouseHit(mouseHit{rect: mouseRect{x: 3 + x, y: 3 + y, width: min(3, width-2-x), height: 1}, kind: mouseCalendarDay, day: day})
 	})
 	calPane := m.renderCalendarListPane(width-2, bottomHeight, 3, 4+lipgloss.Height(weeks))
 	divider := m.styles.Subtle.Render(strings.Repeat("-", max(8, width-2)))
-	panel := lipgloss.JoinVertical(lipgloss.Left, m.styles.PanelTitle.Render("Calendar"), weeks, divider, calPane)
+	panel := lipgloss.JoinVertical(lipgloss.Left, header, weeks, divider, calPane)
 	return m.styles.Sidebar.Width(width).Height(panelHeight).Render(panel)
 }
 
@@ -2951,6 +2926,16 @@ func eventRSVPIsNo(ev calendar.Event) bool {
 	return eventRSVPValue(ev) == "no"
 }
 
+func (m *Model) navigateToDate(date time.Time) {
+	m.selected = dayStart(date)
+	m.agendaStart = m.selected
+	if !m.showTasksMode {
+		m.eventCursor = 0
+		m.eventListOffset = 0
+	}
+	m.scrollForSelection()
+}
+
 func dayStart(t time.Time) time.Time {
 	return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, t.Location())
 }
@@ -3111,7 +3096,7 @@ func (m Model) shortcutsLegend() string {
 		} else if !datePicker.singleDate {
 			prefix = "[spc] Multi-day  "
 		}
-		return prefix + "[t] Today  [enter] Apply  [esc/q] Cancel"
+		return prefix + "[h/l ←/→] Day  [j/k ↑/↓] Week  [ctrl+k/j] Month  [ctrl+h/l] Year  [[/]] Month  [t] Today  [enter] Apply  [esc/q] Cancel"
 	}
 	activeKey := ""
 	if m.eventForm != nil && m.eventForm.activeForm != nil {
@@ -3144,9 +3129,9 @@ func (m Model) shortcutsLegend() string {
 		return "[esc/q] Back  [j/k] Scroll  [enter/spc] Back  [e] Edit  [ctrl-d] Delete  [?] Help"
 	}
 	if m.showTasksMode {
-		return "[esc/q] Exit  [j/k] Next / Previous  [enter] Open  [n] New  [x] Done/Undone  [p] Priority  [f] Show/hide completed  [?] Help"
+		return "[esc/q] Exit  [j/k] Task  [h/l] Day  [ctrl+k/j] Month  [ctrl+h/l] Year  [enter] Open  [n] New  [x] Done/Undone  [?] Help"
 	}
-	return "[esc/q] Exit  [j/k] Next / Previous  [t] Today  [enter] Open  [n] New  [m] Tasks  [ctrl-d] Delete  [c] Calendars  [?] Help"
+	return "[esc/q] Exit  [j/k] Event  [h/l] Day  [ctrl+k/j] Month  [ctrl+h/l] Year  [t] Today  [enter] Open  [n] New  [m] Tasks  [?] Help"
 }
 
 func (m Model) helpLines() []string {
@@ -3209,6 +3194,9 @@ func (m Model) helpLines() []string {
 			"j/k         Next / previous task",
 			"↑/↓         Next / previous task",
 			"ctrl+f/b    Page down / page up",
+			"h/l, ←/→    Previous / next day",
+			"ctrl+k/j    Previous / next month",
+			"ctrl+h/l    Previous / next year",
 			"t           Jump to today",
 			"enter, e    Open task editor",
 			"v           Open read-only details",
@@ -3220,7 +3208,6 @@ func (m Model) helpLines() []string {
 			"ctrl+d      Delete selected task",
 			"c           Open calendars pane",
 			"spc         Focus details",
-			"ctrl+j/k    Scroll details down/up",
 			"?           Toggle help",
 		}
 	}
@@ -3230,9 +3217,9 @@ func (m Model) helpLines() []string {
 		"j/k         Next / previous event",
 		"↑/↓         Next / previous event",
 		"ctrl+f/b    Page down / page up",
-		"h/l         Previous / next day",
-		"←/→         Previous / next day",
-		"ctrl+h/l    Previous / next week",
+		"h/l, ←/→    Previous / next day",
+		"ctrl+k/j    Previous / next month",
+		"ctrl+h/l    Previous / next year",
 		"t           Today",
 		"enter, e    Open event editor",
 		"v           Open read-only details",
@@ -3242,7 +3229,6 @@ func (m Model) helpLines() []string {
 		"c           Open calendars pane",
 		"f           Show/hide free and declined",
 		"spc         Focus details",
-		"ctrl+j/k    Scroll details down/up",
 		"?           Toggle help",
 	}
 }

@@ -10,6 +10,10 @@ type mouseTarget uint8
 
 const (
 	mouseCalendarDay mouseTarget = iota + 1
+	mouseCalendarPreviousYear
+	mouseCalendarPreviousMonth
+	mouseCalendarNextMonth
+	mouseCalendarNextYear
 	mouseCalendarRow
 	mouseAgendaItem
 	mouseEventEditorRow
@@ -22,8 +26,10 @@ const (
 	mouseSearchOption
 	mouseTimeDigit
 	mouseDateDay
+	mouseDatePreviousYear
 	mouseDatePreviousMonth
 	mouseDateNextMonth
+	mouseDateNextYear
 	mouseDateToday
 	mouseDateMultiDay
 	mouseDateClear
@@ -107,6 +113,14 @@ func (m Model) updateMouse(event tea.MouseEvent) (tea.Model, tea.Cmd) {
 		m.eventListOffset = 0
 		m.scrollForSelection()
 		m.ensureEventSelectionValid()
+	case mouseCalendarPreviousYear:
+		m.navigateToDate(addMonthsClamped(m.selected, -12))
+	case mouseCalendarPreviousMonth:
+		m.navigateToDate(addMonthsClamped(m.selected, -1))
+	case mouseCalendarNextMonth:
+		m.navigateToDate(addMonthsClamped(m.selected, 1))
+	case mouseCalendarNextYear:
+		m.navigateToDate(addMonthsClamped(m.selected, 12))
 	case mouseCalendarRow:
 		if hit.index >= 0 && hit.index < len(m.calendarOrder) {
 			m.calendarCursor = hit.index
@@ -186,6 +200,10 @@ func (m Model) updateMouse(event tea.MouseEvent) (tea.Model, tea.Cmd) {
 		if picker := m.activeDatePicker(); picker != nil {
 			picker.selectByMouse(hit.day)
 		}
+	case mouseDatePreviousYear:
+		if picker := m.activeDatePicker(); picker != nil {
+			picker.moveMonth(-12)
+		}
 	case mouseDatePreviousMonth:
 		if picker := m.activeDatePicker(); picker != nil {
 			picker.moveMonth(-1)
@@ -193,6 +211,10 @@ func (m Model) updateMouse(event tea.MouseEvent) (tea.Model, tea.Cmd) {
 	case mouseDateNextMonth:
 		if picker := m.activeDatePicker(); picker != nil {
 			picker.moveMonth(1)
+		}
+	case mouseDateNextYear:
+		if picker := m.activeDatePicker(); picker != nil {
+			picker.moveMonth(12)
 		}
 	case mouseDateToday:
 		if picker := m.activeDatePicker(); picker != nil {
@@ -244,7 +266,7 @@ func mouseDialogTarget(kind mouseTarget) bool {
 	switch kind {
 	case mouseEditScope, mouseDeleteScope, mouseDeleteConfirm,
 		mouseChoiceOption, mouseAttendeeRow, mouseNotificationRow, mouseSearchOption,
-		mouseTimeDigit, mouseDateDay, mouseDatePreviousMonth, mouseDateNextMonth,
+		mouseTimeDigit, mouseDateDay, mouseDatePreviousYear, mouseDatePreviousMonth, mouseDateNextMonth, mouseDateNextYear,
 		mouseDateToday, mouseDateMultiDay, mouseDateClear, mouseDialogApply, mouseDialogCancel:
 		return true
 	default:

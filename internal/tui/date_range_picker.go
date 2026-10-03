@@ -71,10 +71,14 @@ func (p *dateRangePicker) Update(msg tea.KeyMsg) {
 		} else if !p.singleDate {
 			p.toggleRange()
 		}
-	case "[", "pgup":
+	case "[", "pgup", "ctrl+k":
 		p.moveMonth(-1)
-	case "]", "pgdown":
+	case "]", "pgdown", "ctrl+j":
 		p.moveMonth(1)
+	case "ctrl+h":
+		p.moveMonth(-12)
+	case "ctrl+l":
+		p.moveMonth(12)
 	case "left", "h":
 		p.moveDays(-1)
 	case "right", "l":
@@ -110,14 +114,8 @@ func (p *dateRangePicker) moveDays(days int) {
 }
 
 func (p *dateRangePicker) moveMonth(months int) {
-	day := p.cursor.Day()
-	nextMonth := firstOfMonth(p.cursor).AddDate(0, months, 0)
-	lastDay := nextMonth.AddDate(0, 1, -1).Day()
-	if day > lastDay {
-		day = lastDay
-	}
-	p.cursor = time.Date(nextMonth.Year(), nextMonth.Month(), day, 0, 0, 0, 0, time.UTC)
-	p.month = nextMonth
+	p.cursor = addMonthsClamped(p.cursor, months)
+	p.month = firstOfMonth(p.cursor)
 	p.updateSelection()
 }
 
@@ -182,14 +180,16 @@ func (p *dateRangePicker) render(styles Styles) (string, []mouseHit) {
 	if p == nil {
 		return "", nil
 	}
-	header := fmt.Sprintf("%-18s ‹ ›", p.month.Format("January 2006"))
+	header := fmt.Sprintf("%-18s « ‹ › »", p.month.Format("January 2006"))
 	lines := []string{
 		styles.PanelTitle.Render(header),
 		styles.Subtle.Render("Mo Tu We Th Fr Sa Su"),
 	}
 	hits := []mouseHit{
-		{rect: mouseRect{x: 19, y: 0, width: 1, height: 1}, kind: mouseDatePreviousMonth},
-		{rect: mouseRect{x: 21, y: 0, width: 1, height: 1}, kind: mouseDateNextMonth},
+		{rect: mouseRect{x: 19, y: 0, width: 1, height: 1}, kind: mouseDatePreviousYear},
+		{rect: mouseRect{x: 21, y: 0, width: 1, height: 1}, kind: mouseDatePreviousMonth},
+		{rect: mouseRect{x: 23, y: 0, width: 1, height: 1}, kind: mouseDateNextMonth},
+		{rect: mouseRect{x: 25, y: 0, width: 1, height: 1}, kind: mouseDateNextYear},
 	}
 	firstWeekday := (int(p.month.Weekday()) + 6) % 7
 	monthEnd := p.month.AddDate(0, 1, -1).Day()
@@ -273,4 +273,10 @@ func firstOfMonth(value time.Time) time.Time {
 
 func sameDate(left, right time.Time) bool {
 	return left.Year() == right.Year() && left.Month() == right.Month() && left.Day() == right.Day()
+}
+
+func addMonthsClamped(value time.Time, months int) time.Time {
+	target := time.Date(value.Year(), value.Month(), 1, value.Hour(), value.Minute(), value.Second(), value.Nanosecond(), value.Location()).AddDate(0, months, 0)
+	lastDay := time.Date(target.Year(), target.Month()+1, 0, 0, 0, 0, 0, target.Location()).Day()
+	return time.Date(target.Year(), target.Month(), min(value.Day(), lastDay), value.Hour(), value.Minute(), value.Second(), value.Nanosecond(), value.Location())
 }

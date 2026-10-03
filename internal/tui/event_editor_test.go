@@ -371,6 +371,28 @@ func TestDateRangePickerCrossesMonthsAndNormalizesReverseRange(t *testing.T) {
 	}
 }
 
+func TestDateRangePickerNavigatesMonthsAndYears(t *testing.T) {
+	month := newSingleDatePicker("2025-01-31")
+	month.Update(tea.KeyMsg{Type: tea.KeyCtrlJ})
+	if got := month.start.Format("2006-01-02"); got != "2025-02-28" {
+		t.Fatalf("Ctrl-J date = %s", got)
+	}
+	month.Update(tea.KeyMsg{Type: tea.KeyCtrlK})
+	if got := month.start.Format("2006-01-02"); got != "2025-01-28" {
+		t.Fatalf("Ctrl-K date = %s", got)
+	}
+
+	year := newSingleDatePicker("2024-02-29")
+	year.Update(tea.KeyMsg{Type: tea.KeyCtrlH})
+	if got := year.start.Format("2006-01-02"); got != "2023-02-28" {
+		t.Fatalf("Ctrl-H date = %s", got)
+	}
+	year.Update(tea.KeyMsg{Type: tea.KeyCtrlL})
+	if got := year.start.Format("2006-01-02"); got != "2024-02-28" {
+		t.Fatalf("Ctrl-L date = %s", got)
+	}
+}
+
 func TestDatePickerKeepsKeyboardShortcutsAndRendersMouseControls(t *testing.T) {
 	picker := newDateRangePicker("2026-10-01", "2026-10-01")
 	for _, key := range []tea.KeyMsg{
@@ -391,7 +413,7 @@ func TestDatePickerKeepsKeyboardShortcutsAndRendersMouseControls(t *testing.T) {
 			t.Fatalf("date picker still renders %q:\n%s", removed, view)
 		}
 	}
-	if !strings.Contains(view, "[ Today ]") || !strings.Contains(view, "[ ] Multi-day") {
+	if !strings.Contains(view, "« ‹ › »") || !strings.Contains(view, "[ Today ]") || !strings.Contains(view, "[ ] Multi-day") {
 		t.Fatalf("date picker is missing mouse controls:\n%s", view)
 	}
 

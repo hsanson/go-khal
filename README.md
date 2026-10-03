@@ -143,21 +143,29 @@ Launch the interactive calendar:
 go-khal
 ```
 
-Common agenda shortcuts appear in the bottom legend:
+Common agenda and task shortcuts appear in the bottom legend:
 
 - `esc`, `q`: exit
-- `j/k`: select next/previous event
+- `j/k` or up/down: select the next/previous event or task
+- `h/l` or left/right: move to the previous/next day
+- `ctrl+k`/`ctrl+j`: move to the previous/next month
+- `ctrl+h`/`ctrl+l`: move to the previous/next year
 - `t`: jump to today
-- `enter`: open the selected event editor
-- `n`: create an event
-- `m`: open task mode
-- `ctrl+d`: delete the selected event
+- `enter`: open the selected event or task editor
+- `n`: create an event or task
+- `m`: switch between agenda and task modes
+- `ctrl+d`: delete the selected event or task
 - `c`: open the calendar visibility pane
 - `?`: show all shortcuts for the focused view
 
-Task mode adds `x` or `d` to toggle done status, `p` to cycle priority, and `f` to show/hide completed tasks. Press `v` on an event or task to open its read-only details. Calendar pane uses `j/k` to navigate, `enter` or `space` to hide/show a calendar, and `esc`, `q`, `c`, or `h` to return to the item list.
+The `« ‹ › »` controls beside `Calendar` and in date pickers move by year or
+month. Task mode adds `x` or `d` to toggle done status, `p` to cycle priority,
+and `f` to show/hide completed tasks. Press `v` on an event or task to open its
+read-only details. Calendar pane uses `j/k` to navigate, `enter` or `space` to
+hide/show a calendar, and `esc`, `q`, `c`, or `h` to return to the item list.
 
-Arrow keys remain supported. Less common navigation, paging, detail-pane, and alternate-key shortcuts appear in contextual shortcut help only.
+Less common navigation, paging, and detail-pane shortcuts appear in contextual
+shortcut help.
 
 Open directly in task mode:
 
