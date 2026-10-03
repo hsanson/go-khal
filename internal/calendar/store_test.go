@@ -544,7 +544,7 @@ func TestLocalRSVPOccurrencePersistsWithoutAttendees(t *testing.T) {
 	start := time.Date(2026, time.July, 20, 13, 0, 0, 0, time.Local)
 	if err := store.CreateEvent("src", "cal", Event{
 		UID: "local-rsvp@example.test", Summary: "Test2", Start: start, End: start.Add(time.Hour),
-		Recurrence: &Recurrence{Frequency: "DAILY", Interval: 1, Count: 3},
+		Recurrence: &Recurrence{Frequency: "DAILY", Interval: 1, Count: 2},
 	}); err != nil {
 		t.Fatalf("CreateEvent: %v", err)
 	}
@@ -557,9 +557,29 @@ func TestLocalRSVPOccurrencePersistsWithoutAttendees(t *testing.T) {
 	if err := store.UpdateEventScoped(target, EventUpdate{UserRSVP: &rsvp}, EditRecurringOccurrence); err != nil {
 		t.Fatalf("UpdateEventScoped occurrence: %v", err)
 	}
-	raw := readEventFile(t, target.FilePath)
-	if !strings.Contains(raw, "RECURRENCE-ID") || !strings.Contains(raw, "X-GO-KHAL-RSVP") || !strings.Contains(raw, ":yes") {
-		t.Fatalf("local occurrence RSVP was not persisted\n%s", raw)
+	cal, err := readCalendarFile(target.FilePath)
+	if err != nil {
+		t.Fatalf("read updated calendar: %v", err)
+	}
+	found := false
+	for _, comp := range cal.Children {
+		rid, hasRID := eventRecurrenceID(comp, target.Start.Location())
+		if !hasRID || !rid.Equal(*target.RecurrenceID) {
+			continue
+		}
+		found = true
+		rsvp, _ := comp.Props.Text(propGoKhalRSVP)
+		if rsvp != "yes" {
+			t.Fatalf("RSVP override response = %q, want yes", rsvp)
+		}
+		gotStart, startErr := comp.Props.DateTime(ical.PropDateTimeStart, target.Start.Location())
+		gotEnd, endErr := comp.Props.DateTime(ical.PropDateTimeEnd, target.End.Location())
+		if startErr != nil || endErr != nil || !gotStart.Equal(target.Start) || !gotEnd.Equal(target.End) {
+			t.Fatalf("RSVP override has invalid time range: start=%v (%v), end=%v (%v)", gotStart, startErr, gotEnd, endErr)
+		}
+	}
+	if !found {
+		t.Fatal("RSVP override not found")
 	}
 	reloaded, err := store.Load()
 	if err != nil {

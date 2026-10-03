@@ -1783,11 +1783,12 @@ func (s *Store) updateEventOccurrence(ev Event, update EventUpdate) error {
 		return fmt.Errorf("event with uid %q not found", ev.UID)
 	}
 	if override == nil {
-		override = ical.NewComponent(ical.CompEvent)
+		override = cloneComponent(master)
 		override.Props.SetText(ical.PropUID, ev.UID)
 		setRecurrenceID(override, boundary, ev.AllDay, ev.Timezone)
 		cal.Children = append(cal.Children, override)
 	}
+	setEventTimeProps(override, ev.Start, ev.End, ev.AllDay, ev.Timezone)
 	occ := ev
 	occ.Recurrence = nil
 	occ.Recurring = false
