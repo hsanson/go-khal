@@ -160,6 +160,24 @@ Create a task directly in the same editor used by the interactive calendar:
 go-khal todo new
 ```
 
+## Screenshots
+
+### Agenda with weekly minimap
+
+![Agenda with Personal, Work, and Birthdays calendars and a weekly minimap](img/agenda-minimap.png)
+
+### Todo view
+
+![Todo view with tasks from Personal and Work calendars](img/todo-view.png)
+
+### Event editor
+
+![Event edit form](img/event-edit.png)
+
+### Task editor
+
+![Task edit form](img/task-edit.png)
+
 ## Configuration
 
 Default config path: `~/.config/go-khal/config.json`
