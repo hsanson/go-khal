@@ -35,3 +35,25 @@ func TestLoadNormalizesSources(t *testing.T) {
 		t.Fatalf("source type = %q, want %q", got, want)
 	}
 }
+
+func TestMinimapHourDefaultsAndValidation(t *testing.T) {
+	start, end := Default().MinimapHours()
+	if start != 8 || end != 18 {
+		t.Fatalf("default minimap hours = %02d:00-%02d:00, want 08:00-18:00", start, end)
+	}
+
+	for name, body := range map[string]string{
+		"partial hour": `{"minimap_start_time":"08:30"}`,
+		"reversed":     `{"minimap_start_time":"18:00","minimap_end_time":"08:00"}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.json")
+			if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := Load(path); err == nil {
+				t.Fatal("Load() accepted an invalid minimap hour range")
+			}
+		})
+	}
+}

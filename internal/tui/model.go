@@ -35,6 +35,7 @@ type Model struct {
 	focusDetails       bool
 	showAllMode        bool
 	showTasksMode      bool
+	showMinimap        bool
 	agendaStart        time.Time
 	eventCursor        int
 	eventListOffset    int
@@ -232,6 +233,7 @@ func NewModel(cfg *config.Config, data calendar.Dataset, store *calendar.Store) 
 		calendarVisibility: vis,
 		calendarOrder:      order,
 		focusMain:          true,
+		showMinimap:        true,
 		mouse:              &mouseState{},
 	}
 	m.ensureEventSelectionValid()
@@ -438,6 +440,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.eventCursor = 0
 			m.eventListOffset = 0
 			m.ensureEventSelectionValid()
+		case "g":
+			if !m.showTasksMode {
+				m.showMinimap = !m.showMinimap
+			}
 		case "x", "d":
 			if m.showTasksMode {
 				m.actionErr = m.toggleSelectedTodoDone()
@@ -642,16 +648,26 @@ func (m Model) renderMainPanel(width int) string {
 		}
 	}
 
-	rendered := renderAgendaFromItems(items, width-2, topHeight, m.cfg.TimeFormat, m.styles, m.eventCursor, m.eventListOffset, true)
+	innerWidth := width - 2
+	agendaWidth := innerWidth
+	minimap, showMinimap := m.minimapLayout(innerWidth, topHeight)
+	if showMinimap {
+		agendaWidth -= minimap.width + minimapGap
+	}
+	rendered := renderAgendaFromItems(items, agendaWidth, topHeight, m.cfg.TimeFormat, m.styles, m.eventCursor, m.eventListOffset, true)
 	for _, line := range rendered.ItemLines {
 		m.addMouseHit(mouseHit{
-			rect:  mouseRect{x: m.mouseMainX + 2, y: m.mouseMainY + 3 + line.Y, width: width - 2, height: 1},
+			rect:  mouseRect{x: m.mouseMainX + 2, y: m.mouseMainY + 3 + line.Y, width: agendaWidth, height: 1},
 			kind:  mouseAgendaItem,
 			index: line.Index,
 		})
 	}
-	top := lipgloss.NewStyle().Height(topHeight).MaxHeight(topHeight).Render(rendered.Text)
-	detail := m.renderEventDetailsPane(width-2, bottomHeight)
+	top := lipgloss.NewStyle().Width(agendaWidth).Height(topHeight).MaxHeight(topHeight).Render(rendered.Text)
+	if showMinimap {
+		minimapView := m.renderMinimap(minimap, m.mouseMainX+2+agendaWidth+minimapGap, m.mouseMainY+3)
+		top = lipgloss.JoinHorizontal(lipgloss.Top, top, strings.Repeat(" ", minimapGap), minimapView)
+	}
+	detail := m.renderEventDetailsPane(innerWidth, bottomHeight)
 	header := m.styles.PanelTitle.Render(fmt.Sprintf("Agenda from %s", m.agendaStart.Format("Mon Jan 2, 2006")))
 	if m.showTasksMode {
 		header = m.styles.PanelTitle.Render("Tasks")
@@ -3228,6 +3244,7 @@ func (m Model) helpLines() []string {
 		"ctrl+d      Delete selected event",
 		"c           Open calendars pane",
 		"f           Show/hide free and declined",
+		"g           Show/hide minimap",
 		"spc         Focus details",
 		"?           Toggle help",
 	}
@@ -3487,6 +3504,11 @@ func (m *Model) updateSelectedTodo(uid string, update calendar.TodoUpdate) strin
 }
 
 func (m *Model) openEventFormNew() {
+	start, end := m.defaultCreationRange()
+	m.openEventFormNewAt(start, end, false)
+}
+
+func (m *Model) openEventFormNewAt(start, end time.Time, allDay bool) {
 	defaultKey := ""
 	for _, k := range m.calendarOrder {
 		if !m.calendarVisibility[k] {
@@ -3509,12 +3531,10 @@ func (m *Model) openEventFormNew() {
 			break
 		}
 	}
-	start, end := m.defaultCreationRange()
 	m.eventForm = m.newEventFormState("create", "", calendar.Event{
-		Summary:  "",
 		Start:    start,
 		End:      end,
-		AllDay:   false,
+		AllDay:   allDay,
 		Source:   splitCalendarKey(defaultKey).source,
 		Calendar: splitCalendarKey(defaultKey).name,
 	})
@@ -3645,20 +3665,23 @@ func (m *Model) openEventFormEditSelected() bool {
 	if len(items) == 0 || m.eventCursor < 0 || m.eventCursor >= len(items) {
 		return false
 	}
-	it := items[m.eventCursor]
-	if it.Event == nil || it.IsFree {
+	item := items[m.eventCursor]
+	if item.Event == nil || item.IsFree {
 		return false
 	}
-	ev := *it.Event
-	if ev.Source == calendar.SpecialSourceBirthdays {
+	return m.openEventFormEdit(item.Event)
+}
+
+func (m *Model) openEventFormEdit(event *calendar.Event) bool {
+	if event == nil || event.Source == calendar.SpecialSourceBirthdays {
 		return false
 	}
-	m.eventForm = m.newEventFormState("edit", ev.UID, ev)
+	m.eventForm = m.newEventFormState("edit", event.UID, *event)
 	m.focusDetails = true
 	m.focusMain = false
 	m.detailScroll = 0
 	m.eventForm.form.UpdateFieldPositions()
-	if ev.Recurring {
+	if event.Recurring {
 		m.openEventEditScopeForm()
 	}
 	return true

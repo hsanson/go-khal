@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/hsanson/go-khal/internal/calendar"
 )
 
@@ -156,7 +157,7 @@ func renderAgendaFromItems(items []AgendaListItem, width, maxLines int, timeFmt 
 		line := ""
 		if item.IsFree {
 			line = fmt.Sprintf("  %s-%s  (no events)", formatTimeBoundary(item.Start, item.Day, timeFmt), formatTimeBoundary(item.End, item.Day, timeFmt))
-			line = styles.Subtle.Render(truncate(line, max(10, width-1)))
+			line = styles.Subtle.Render(ansi.Truncate(line, max(10, width), "…"))
 		} else if item.Event != nil {
 			ev := *item.Event
 			glyph := iconForEvent(ev)
@@ -164,7 +165,7 @@ func renderAgendaFromItems(items []AgendaListItem, width, maxLines int, timeFmt 
 			if eventRSVPIsNo(ev) {
 				eventStyle = styles.Subtle
 			}
-			icon := eventStyle.Render(glyph)
+			icon := glyph
 			if ev.AllDay && (ev.Kind == calendar.EventKindBirthday || ev.Kind == calendar.EventKindAnniversary) {
 				line = fmt.Sprintf("  %s %s", icon, ev.Summary)
 			} else if ev.AllDay {
@@ -172,14 +173,14 @@ func renderAgendaFromItems(items []AgendaListItem, width, maxLines int, timeFmt 
 			} else {
 				line = fmt.Sprintf("  %s %s-%s  %s", icon, ev.Start.Format(timeFmt), ev.End.Format(timeFmt), ev.Summary)
 			}
-			line = eventStyle.Render(truncate(line, max(10, width-1)))
+			line = eventStyle.Render(ansi.Truncate(line, max(10, width), "…"))
 		} else if item.Todo != nil {
 			todo := *item.Todo
 			todoStyle := styleForColor(styles.Event, todo.Color)
 			if isTodoDone(todo) {
 				todoStyle = styles.Subtle
 			}
-			icon := todoStyle.Render("󰄱")
+			icon := "󰄱"
 			summary := todo.Summary
 			if strings.TrimSpace(summary) == "" {
 				summary = "(untitled todo)"
@@ -194,7 +195,7 @@ func renderAgendaFromItems(items []AgendaListItem, width, maxLines int, timeFmt 
 			default:
 				line = fmt.Sprintf("  %s %s", icon, summary)
 			}
-			line = todoStyle.Render(truncate(line, max(10, width-1)))
+			line = todoStyle.Render(ansi.Truncate(line, max(10, width), "…"))
 		}
 
 		if highlight && i == cursor {

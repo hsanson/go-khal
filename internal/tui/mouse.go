@@ -16,6 +16,9 @@ const (
 	mouseCalendarNextYear
 	mouseCalendarRow
 	mouseAgendaItem
+	mouseMinimapEvent
+	mouseMinimapTime
+	mouseMinimapAllDay
 	mouseEventEditorRow
 	mouseTodoEditorRow
 	mouseEditScope
@@ -143,6 +146,17 @@ func (m Model) updateMouse(event tea.MouseEvent) (tea.Model, tea.Cmd) {
 				return m, m.todoForm.form.Init()
 			}
 		}
+	case mouseMinimapEvent:
+		if hit.index >= 0 && hit.index < len(m.data.Events) && m.openEventFormEdit(&m.data.Events[hit.index]) {
+			return m, m.initCurrentEventForm()
+		}
+	case mouseMinimapTime:
+		m.openEventFormNewAt(hit.day, hit.day.Add(30*time.Minute), false)
+		return m, m.eventForm.form.Init()
+	case mouseMinimapAllDay:
+		start := dayStart(hit.day)
+		m.openEventFormNewAt(start, start.AddDate(0, 0, 1), true)
+		return m, m.eventForm.form.Init()
 	case mouseEventEditorRow:
 		if m.eventForm == nil || m.eventForm.mode == "view" {
 			break

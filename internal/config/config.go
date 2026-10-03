@@ -25,6 +25,8 @@ type Config struct {
 	WeekStartsOn              string   `json:"week_starts_on,omitempty"`
 	TimeFormat                string   `json:"time_format,omitempty"`
 	SidebarWidth              int      `json:"sidebar_width,omitempty"`
+	MinimapStartTime          string   `json:"minimap_start_time,omitempty"`
+	MinimapEndTime            string   `json:"minimap_end_time,omitempty"`
 	RecurrenceLookbackMonths  int      `json:"recurrence_lookback_months,omitempty"`
 	RecurrenceLookaheadMonths int      `json:"recurrence_lookahead_months,omitempty"`
 }
@@ -43,6 +45,8 @@ func defaultConfig() *Config {
 		WeekStartsOn:              "monday",
 		TimeFormat:                "15:04",
 		SidebarWidth:              30,
+		MinimapStartTime:          "08:00",
+		MinimapEndTime:            "18:00",
 		RecurrenceLookbackMonths:  12,
 		RecurrenceLookaheadMonths: 24,
 	}
@@ -76,6 +80,23 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.SidebarWidth <= 0 {
 		cfg.SidebarWidth = 30
+	}
+	if cfg.MinimapStartTime == "" {
+		cfg.MinimapStartTime = "08:00"
+	}
+	if cfg.MinimapEndTime == "" {
+		cfg.MinimapEndTime = "18:00"
+	}
+	startHour, err := minimapHour(cfg.MinimapStartTime)
+	if err != nil {
+		return nil, fmt.Errorf("minimap_start_time: %w", err)
+	}
+	endHour, err := minimapHour(cfg.MinimapEndTime)
+	if err != nil {
+		return nil, fmt.Errorf("minimap_end_time: %w", err)
+	}
+	if endHour < startHour {
+		return nil, errors.New("minimap_end_time must not be before minimap_start_time")
 	}
 	if cfg.RecurrenceLookbackMonths <= 0 {
 		cfg.RecurrenceLookbackMonths = 12
@@ -130,6 +151,26 @@ func (c *Config) WeekStart() time.Weekday {
 		return time.Sunday
 	}
 	return time.Monday
+}
+
+func (c *Config) MinimapHours() (int, int) {
+	if c == nil {
+		return 8, 18
+	}
+	start, startErr := minimapHour(c.MinimapStartTime)
+	end, endErr := minimapHour(c.MinimapEndTime)
+	if startErr != nil || endErr != nil || end < start {
+		return 8, 18
+	}
+	return start, end
+}
+
+func minimapHour(value string) (int, error) {
+	parsed, err := time.Parse("15:04", strings.TrimSpace(value))
+	if err != nil || parsed.Minute() != 0 {
+		return 0, errors.New("must be a whole hour in HH:00 format")
+	}
+	return parsed.Hour(), nil
 }
 
 func (c *Config) SourceByName(name string) *Source {
