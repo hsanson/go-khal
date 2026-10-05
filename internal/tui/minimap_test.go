@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/hsanson/go-khal/internal/calendar"
 	"github.com/hsanson/go-khal/internal/config"
@@ -70,24 +71,30 @@ func TestMinimapLayoutFallsBackFromWeekToWorkweekToDay(t *testing.T) {
 	}
 }
 
-func TestMinimapExcludesFreeHiddenAndDeclinedEvents(t *testing.T) {
+func TestMinimapIncludesDimmedFreeEventsAndFiltersHiddenAndDeclined(t *testing.T) {
 	start := time.Date(2026, time.October, 5, 9, 0, 0, 0, time.Local)
 	cal := calendar.Calendar{Source: "src", Name: "cal"}
 	m := NewModel(config.Default(), calendar.Dataset{
 		Calendars: []calendar.Calendar{cal},
 		Events: []calendar.Event{
 			{UID: "busy", Source: cal.Source, Calendar: cal.Name, Start: start, End: start.Add(time.Hour)},
-			{UID: "free", Source: cal.Source, Calendar: cal.Name, Availability: "free", Start: start, End: start.Add(time.Hour)},
+			{UID: "free", Source: cal.Source, Calendar: cal.Name, Availability: "free", Color: "#123456", Start: start, End: start.Add(time.Hour)},
 			{UID: "declined", Source: cal.Source, Calendar: cal.Name, UserRSVP: "no", Start: start, End: start.Add(time.Hour)},
 		},
 	}, nil)
 
-	if got := m.minimapEventIndexes(); len(got) != 1 || m.data.Events[got[0]].UID != "busy" {
-		t.Fatalf("default minimap events = %v, want only busy event", got)
+	if got := m.minimapEventIndexes(); len(got) != 2 {
+		t.Fatalf("default minimap event count = %d, want busy and free events", len(got))
+	}
+	if minimapEventStyle(m.styles.Event, &m.data.Events[0]).GetFaint() {
+		t.Fatal("busy minimap event is faint")
+	}
+	if !minimapEventStyle(m.styles.Event, &m.data.Events[1]).GetFaint() {
+		t.Fatal("free minimap event is not faint")
 	}
 	m.showAllMode = true
-	if got := m.minimapEventIndexes(); len(got) != 2 {
-		t.Fatalf("show-all minimap event count = %d, want 2", len(got))
+	if got := m.minimapEventIndexes(); len(got) != 3 {
+		t.Fatalf("show-all minimap event count = %d, want 3", len(got))
 	}
 	m.calendarVisibility[calendarKey(cal.Source, cal.Name)] = false
 	if got := m.minimapEventIndexes(); len(got) != 0 {
@@ -95,13 +102,9 @@ func TestMinimapExcludesFreeHiddenAndDeclinedEvents(t *testing.T) {
 	}
 }
 
-func TestMinimapMouseOpensAndCreatesEvents(t *testing.T) {
+func TestMinimapMouseNavigatesAndStagesEventCreation(t *testing.T) {
 	day := time.Date(2026, time.October, 5, 0, 0, 0, 0, time.Local)
 	cal := calendar.Calendar{Source: "src", Name: "cal"}
-	event := calendar.Event{
-		UID: "event", Source: cal.Source, Calendar: cal.Name,
-		Start: day.Add(9 * time.Hour), End: day.Add(10 * time.Hour),
-	}
 	newModel := func(events []calendar.Event) Model {
 		m := NewModel(config.Default(), calendar.Dataset{Calendars: []calendar.Calendar{cal}, Events: events}, nil)
 		m.width = 120
@@ -111,20 +114,100 @@ func TestMinimapMouseOpensAndCreatesEvents(t *testing.T) {
 		return m
 	}
 
-	m := clickRenderedHit(t, newModel([]calendar.Event{event}), mouseMinimapEvent, 0, "")
-	if m.eventForm == nil || m.eventForm.mode != "edit" || m.eventForm.targetUID != event.UID {
-		t.Fatalf("occupied minimap cell did not open event editor: %#v", m.eventForm)
-	}
+	t.Run("event cell selects the clicked day occurrence", func(t *testing.T) {
+		event := calendar.Event{
+			UID: "event", Source: cal.Source, Calendar: cal.Name,
+			Start: day.Add(9 * time.Hour), End: day.AddDate(0, 0, 1).Add(10 * time.Hour),
+		}
+		clickedDay := day.AddDate(0, 0, 1)
+		m := newModel([]calendar.Event{event})
+		m.focusCalendarPane = true
+		m.focusMain = false
+		m = clickRenderedMinimapHit(t, m, mouseMinimapEvent, 0, clickedDay)
 
-	m = clickRenderedHit(t, newModel(nil), mouseMinimapTime, -1, "")
-	if m.eventForm == nil || m.eventForm.allDay || m.eventForm.fromTime != "08:00" || m.eventForm.toTime != "08:30" {
-		t.Fatalf("empty timed cell created wrong event: %#v", m.eventForm)
-	}
+		if m.eventForm != nil {
+			t.Fatal("event minimap click opened the event editor")
+		}
+		if !dayStart(m.selected).Equal(clickedDay) || !m.focusMain || m.focusCalendarPane || m.focusDetails {
+			t.Fatalf("event minimap click selected date/focus = %v/%v/%v/%v", m.selected, m.focusMain, m.focusCalendarPane, m.focusDetails)
+		}
+		item := m.agendaItems()[m.eventCursor]
+		if item.Event == nil || item.Event.UID != event.UID || !item.Day.Equal(clickedDay) {
+			t.Fatalf("selected agenda item = %#v, want clicked event on %v", item, clickedDay)
+		}
+	})
 
-	m = clickRenderedHit(t, newModel(nil), mouseMinimapAllDay, -1, "")
-	if m.eventForm == nil || !m.eventForm.allDay || m.eventForm.fromDate != m.eventForm.toDate {
-		t.Fatalf("empty all-day cell created wrong event: %#v", m.eventForm)
-	}
+	t.Run("empty hour selects a temporary row used by new event", func(t *testing.T) {
+		event := calendar.Event{
+			UID: "later", Source: cal.Source, Calendar: cal.Name,
+			Start: day.Add(10 * time.Hour), End: day.Add(11 * time.Hour),
+		}
+		hour := day.Add(8 * time.Hour)
+		m := clickRenderedMinimapHit(t, newModel([]calendar.Event{event}), mouseMinimapTime, -1, hour)
+
+		if m.eventForm != nil {
+			t.Fatal("empty minimap click opened the event editor")
+		}
+		item := m.agendaItems()[m.eventCursor]
+		if item.Mode != temporaryFreeAgendaMode || !item.Start.Equal(hour) || !item.End.Equal(hour.Add(time.Hour)) {
+			t.Fatalf("selected temporary row = %#v, want %v-%v", item, hour, hour.Add(time.Hour))
+		}
+
+		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+		m = *modelValue(t, updated)
+		if m.eventForm == nil || m.eventForm.allDay || m.eventForm.fromTime != "08:00" || m.eventForm.toTime != "09:00" {
+			t.Fatalf("new event defaults = %#v, want clicked hour", m.eventForm)
+		}
+		updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+		m = *modelValue(t, updated)
+		if m.temporaryFreeStart.IsZero() {
+			t.Fatal("cancel removed the temporary row")
+		}
+		updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+		m = *modelValue(t, updated)
+		if !m.temporaryFreeStart.IsZero() {
+			t.Fatal("moving the agenda cursor retained the temporary row")
+		}
+		item = m.agendaItems()[m.eventCursor]
+		if item.Event == nil || item.Event.UID != event.UID {
+			t.Fatalf("cursor moved to %#v, want next event", item)
+		}
+	})
+
+	t.Run("temporary row replaces a covering free interval", func(t *testing.T) {
+		event := calendar.Event{
+			UID: "later", Source: cal.Source, Calendar: cal.Name,
+			Start: day.Add(10 * time.Hour), End: day.Add(11 * time.Hour),
+		}
+		hour := day.Add(8 * time.Hour)
+		m := newModel([]calendar.Event{event})
+		m.showAllMode = true
+		m = clickRenderedMinimapHit(t, m, mouseMinimapTime, -1, hour)
+
+		covering := 0
+		for _, item := range m.agendaItems() {
+			if item.IsFree && !hour.Before(item.Start) && hour.Before(item.End) {
+				covering++
+				if item.Mode != temporaryFreeAgendaMode || !item.Start.Equal(hour) || !item.End.Equal(hour.Add(time.Hour)) {
+					t.Fatalf("covering free row = %#v, want only the temporary hour", item)
+				}
+			}
+		}
+		if covering != 1 {
+			t.Fatalf("free rows covering clicked hour = %d, want 1", covering)
+		}
+	})
+
+	t.Run("empty all-day cell uses configured first hour", func(t *testing.T) {
+		m := newModel(nil)
+		m.cfg.MinimapStartTime = "06:00"
+		m = clickRenderedMinimapHit(t, m, mouseMinimapAllDay, -1, day)
+		want := day.Add(6 * time.Hour)
+		item := m.agendaItems()[m.eventCursor]
+		if item.Mode != temporaryFreeAgendaMode || !item.Start.Equal(want) {
+			t.Fatalf("all-day temporary row = %#v, want start %v", item, want)
+		}
+	})
 }
 
 func TestMinimapFillsSlotsProportionallyAndUsesUnderscoresWhenEmpty(t *testing.T) {
@@ -179,4 +262,22 @@ func TestMinimapFillsSlotsProportionallyAndUsesUnderscoresWhenEmpty(t *testing.T
 	if got := strings.TrimPrefix(lines[2], "08:00 "); got != "____" {
 		t.Fatalf("empty timed row = %q, want underscores", got)
 	}
+}
+
+func clickRenderedMinimapHit(t *testing.T, m Model, kind mouseTarget, index int, when time.Time) Model {
+	t.Helper()
+	_ = m.View()
+	for _, hit := range m.mouse.hits {
+		if hit.kind == kind && (index < 0 || hit.index == index) && hit.day.Equal(when) {
+			updated, _ := m.Update(tea.MouseMsg{
+				X:      hit.rect.x,
+				Y:      hit.rect.y,
+				Action: tea.MouseActionPress,
+				Button: tea.MouseButtonLeft,
+			})
+			return *modelValue(t, updated)
+		}
+	}
+	t.Fatalf("rendered minimap target kind=%d index=%d time=%v not found", kind, index, when)
+	return m
 }

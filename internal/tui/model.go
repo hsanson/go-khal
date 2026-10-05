@@ -39,6 +39,7 @@ type Model struct {
 	agendaStart        time.Time
 	eventCursor        int
 	eventListOffset    int
+	temporaryFreeStart time.Time
 	detailScroll       int
 	eventForm          *eventFormState
 	todoForm           *todoFormState
@@ -50,7 +51,10 @@ type Model struct {
 	mouseMainY         int
 }
 
-const calendarKeySeparator = "\x1f"
+const (
+	calendarKeySeparator    = "\x1f"
+	temporaryFreeAgendaMode = "temporary-free"
+)
 
 type eventFormState struct {
 	mode                string
@@ -373,6 +377,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case " ", "enter":
 				if len(m.calendarOrder) > 0 {
 					calendarKey := m.calendarOrder[m.calendarCursor]
+					m.temporaryFreeStart = time.Time{}
 					m.calendarVisibility[calendarKey] = !m.calendarVisibility[calendarKey]
 					m.ensureEventSelectionValid()
 				}
@@ -436,6 +441,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, m.deleteConfirm.form.Init()
 			}
 		case "f":
+			m.temporaryFreeStart = time.Time{}
 			m.showAllMode = !m.showAllMode
 			m.eventCursor = 0
 			m.eventListOffset = 0
@@ -459,6 +465,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.enterTaskMode()
 			}
 		case "t":
+			m.temporaryFreeStart = time.Time{}
 			now := time.Now().In(m.selected.Location())
 			m.selected = now
 			m.agendaStart = dayStart(now)
@@ -2724,7 +2731,15 @@ func padRight(value string, width int) string {
 
 func (m *Model) moveEventCursor(delta int) {
 	before := m.selectedAgendaItemKey()
+	temporaryItemCount := 0
+	if !m.temporaryFreeStart.IsZero() {
+		temporaryItemCount = len(m.agendaItems())
+		m.temporaryFreeStart = time.Time{}
+	}
 	items := m.agendaItems()
+	if delta > 0 && temporaryItemCount > len(items) {
+		m.eventCursor--
+	}
 	if len(items) == 0 {
 		m.eventCursor = 0
 		m.eventListOffset = 0
@@ -2943,6 +2958,7 @@ func eventRSVPIsNo(ev calendar.Event) bool {
 }
 
 func (m *Model) navigateToDate(date time.Time) {
+	m.temporaryFreeStart = time.Time{}
 	m.selected = dayStart(date)
 	m.agendaStart = m.selected
 	if !m.showTasksMode {
@@ -2950,6 +2966,52 @@ func (m *Model) navigateToDate(date time.Time) {
 		m.eventListOffset = 0
 	}
 	m.scrollForSelection()
+}
+
+func (m *Model) selectMinimapEvent(eventIndex int, day time.Time) {
+	if eventIndex < 0 || eventIndex >= len(m.data.Events) {
+		return
+	}
+	target := &m.data.Events[eventIndex]
+	clickedDay := dayStart(day)
+	m.navigateToDate(clickedDay)
+	m.focusCalendarPane = false
+	m.focusDetails = false
+	m.focusMain = true
+	m.detailScroll = 0
+	for i, item := range m.agendaItems() {
+		if item.Event != nil && item.Day.Equal(clickedDay) && sameEventOccurrence(item.Event, target) {
+			m.eventCursor = i
+			break
+		}
+	}
+	m.ensureEventSelectionValid()
+}
+
+func (m *Model) selectMinimapHour(start time.Time) {
+	m.navigateToDate(start)
+	m.temporaryFreeStart = start
+	m.focusCalendarPane = false
+	m.focusDetails = false
+	m.focusMain = true
+	m.detailScroll = 0
+	for i, item := range m.agendaItems() {
+		if item.Mode == temporaryFreeAgendaMode {
+			m.eventCursor = i
+			break
+		}
+	}
+	m.ensureEventSelectionValid()
+}
+
+func sameEventOccurrence(left, right *calendar.Event) bool {
+	return left != nil && right != nil &&
+		left.UID == right.UID &&
+		left.Source == right.Source &&
+		left.Calendar == right.Calendar &&
+		left.FilePath == right.FilePath &&
+		left.Start.Equal(right.Start) &&
+		left.End.Equal(right.End)
 }
 
 func dayStart(t time.Time) time.Time {
@@ -3370,15 +3432,52 @@ func (m Model) agendaItems() []AgendaListItem {
 	if start.IsZero() {
 		start = dayStart(m.selected)
 	}
-	return buildAgendaItems(
+	items := buildAgendaItems(
 		start,
 		filteredEvents(m.data.Events, m.calendarVisibility, m.showAllMode),
 		90,
 		m.showAllMode,
 	)
+	if m.temporaryFreeStart.IsZero() {
+		return items
+	}
+	return insertTemporaryFreeItem(items, m.temporaryFreeStart)
+}
+
+func insertTemporaryFreeItem(items []AgendaListItem, start time.Time) []AgendaListItem {
+	day := dayStart(start)
+	end := start.Add(time.Hour)
+	write := 0
+	insertAt := -1
+	for _, item := range items {
+		if item.IsFree && item.Day.Equal(day) && !start.Before(item.Start) && start.Before(item.End) {
+			continue
+		}
+		if insertAt < 0 && (item.Day.After(day) ||
+			(item.Day.Equal(day) && (item.Event == nil || !item.Event.AllDay) && !item.Start.Before(start))) {
+			insertAt = write
+		}
+		items[write] = item
+		write++
+	}
+	items = items[:write]
+	if insertAt < 0 {
+		insertAt = len(items)
+	}
+	items = append(items, AgendaListItem{})
+	copy(items[insertAt+1:], items[insertAt:])
+	items[insertAt] = AgendaListItem{
+		Day:    day,
+		IsFree: true,
+		Start:  start,
+		End:    end,
+		Mode:   temporaryFreeAgendaMode,
+	}
+	return items
 }
 
 func (m *Model) enterTaskMode() {
+	m.temporaryFreeStart = time.Time{}
 	m.showTasksMode = true
 	m.eventCursor = 0
 	m.eventListOffset = 0
@@ -3387,6 +3486,7 @@ func (m *Model) enterTaskMode() {
 }
 
 func (m *Model) exitTaskMode() {
+	m.temporaryFreeStart = time.Time{}
 	m.showTasksMode = false
 	m.eventCursor = 0
 	m.eventListOffset = 0
@@ -4227,6 +4327,7 @@ func (m *Model) commitEventForm() error {
 	if err != nil {
 		return err
 	}
+	m.temporaryFreeStart = time.Time{}
 	m.data = ds
 	if s.mode == "create" {
 		m.selected = dayStart(start)
@@ -4331,6 +4432,7 @@ func (m *Model) commitDeleteConfirm() error {
 	if err != nil {
 		return err
 	}
+	m.temporaryFreeStart = time.Time{}
 	m.data = ds
 	m.eventCursor = 0
 	m.eventListOffset = 0

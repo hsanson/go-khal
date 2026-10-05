@@ -110,6 +110,7 @@ func (m Model) updateMouse(event tea.MouseEvent) (tea.Model, tea.Cmd) {
 
 	switch hit.kind {
 	case mouseCalendarDay:
+		m.temporaryFreeStart = time.Time{}
 		m.selected = dayStart(hit.day)
 		m.agendaStart = m.selected
 		m.eventCursor = 0
@@ -126,6 +127,7 @@ func (m Model) updateMouse(event tea.MouseEvent) (tea.Model, tea.Cmd) {
 		m.navigateToDate(addMonthsClamped(m.selected, 12))
 	case mouseCalendarRow:
 		if hit.index >= 0 && hit.index < len(m.calendarOrder) {
+			m.temporaryFreeStart = time.Time{}
 			m.calendarCursor = hit.index
 			key := m.calendarOrder[hit.index]
 			m.calendarVisibility[key] = !m.calendarVisibility[key]
@@ -136,7 +138,22 @@ func (m Model) updateMouse(event tea.MouseEvent) (tea.Model, tea.Cmd) {
 		if hit.index < 0 || hit.index >= len(items) || (items[hit.index].Event == nil && items[hit.index].Todo == nil) {
 			break
 		}
-		m.eventCursor = hit.index
+		selectedIndex := hit.index
+		if !m.temporaryFreeStart.IsZero() {
+			target := items[hit.index]
+			m.temporaryFreeStart = time.Time{}
+			selectedIndex = -1
+			for i, item := range m.agendaItems() {
+				if target.Event != nil && item.Day.Equal(target.Day) && sameEventOccurrence(item.Event, target.Event) {
+					selectedIndex = i
+					break
+				}
+			}
+			if selectedIndex < 0 {
+				break
+			}
+		}
+		m.eventCursor = selectedIndex
 		m.ensureEventSelectionValid()
 		if m.openEditFormForSelected() {
 			if m.eventForm != nil {
@@ -147,16 +164,12 @@ func (m Model) updateMouse(event tea.MouseEvent) (tea.Model, tea.Cmd) {
 			}
 		}
 	case mouseMinimapEvent:
-		if hit.index >= 0 && hit.index < len(m.data.Events) && m.openEventFormEdit(&m.data.Events[hit.index]) {
-			return m, m.initCurrentEventForm()
-		}
+		m.selectMinimapEvent(hit.index, hit.day)
 	case mouseMinimapTime:
-		m.openEventFormNewAt(hit.day, hit.day.Add(30*time.Minute), false)
-		return m, m.eventForm.form.Init()
+		m.selectMinimapHour(hit.day)
 	case mouseMinimapAllDay:
-		start := dayStart(hit.day)
-		m.openEventFormNewAt(start, start.AddDate(0, 0, 1), true)
-		return m, m.eventForm.form.Init()
+		startHour, _ := m.cfg.MinimapHours()
+		m.selectMinimapHour(time.Date(hit.day.Year(), hit.day.Month(), hit.day.Day(), startHour, 0, 0, 0, hit.day.Location()))
 	case mouseEventEditorRow:
 		if m.eventForm == nil || m.eventForm.mode == "view" {
 			break

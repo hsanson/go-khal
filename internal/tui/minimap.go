@@ -161,8 +161,8 @@ func (m Model) renderMinimap(layout minimapLayout, originX, originY int) string 
 					if !allDay {
 						glyph = minimapGlyph(event, hourStart)
 					}
-					line.WriteString(styleForColor(m.styles.Event, event.Color).Render(glyph))
-					m.addMouseHit(mouseHit{rect: mouseRect{x: x, y: y, width: 1, height: 1}, kind: mouseMinimapEvent, index: eventIndex})
+					line.WriteString(minimapEventStyle(m.styles.Event, event).Render(glyph))
+					m.addMouseHit(mouseHit{rect: mouseRect{x: x, y: y, width: 1, height: 1}, kind: mouseMinimapEvent, day: day, index: eventIndex})
 					continue
 				}
 
@@ -187,8 +187,7 @@ func (m Model) minimapEventIndexes() []int {
 	for i := range m.data.Events {
 		event := &m.data.Events[i]
 		if !m.calendarVisibility[calendarKey(event.Source, event.Calendar)] ||
-			(!m.showAllMode && eventRSVPIsNo(*event)) ||
-			strings.EqualFold(strings.TrimSpace(event.Availability), "free") {
+			(!m.showAllMode && eventRSVPIsNo(*event)) {
 			continue
 		}
 		indexes = append(indexes, i)
@@ -214,6 +213,14 @@ func (m Model) minimapEventIndexes() []int {
 		return left.FilePath < right.FilePath
 	})
 	return indexes
+}
+
+func minimapEventStyle(base lipgloss.Style, event *calendar.Event) lipgloss.Style {
+	style := styleForColor(base, event.Color)
+	if strings.EqualFold(strings.TrimSpace(event.Availability), "free") {
+		style = style.Faint(true)
+	}
+	return style
 }
 
 func minimapOverlaps(event *calendar.Event, start, end time.Time) bool {

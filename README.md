@@ -16,7 +16,7 @@ without issues but cannot guarantee there won't be issues with other calendars.
 ## Features
 
 - Keyboard- and mouse-driven terminal calendar with months list, agenda, details pane, and calendar toggles
-- Minimap showing overview weekly events. Allows quickly spot open/occupied time slots.
+- Minimap with a weekly overview: click events to jump to them, or click empty time to stage a one-hour slot for `n`
 - Separate agenda and task modes, agenda page movement, and show-all mode
 - Event and task create/edit/delete support from the interactive calendar
 - Event attendees auto-completion from VCARD contacts.
