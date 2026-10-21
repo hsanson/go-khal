@@ -64,8 +64,8 @@ func DefaultStyles() Styles {
 		RangeEndpoint:   lipgloss.NewStyle().Background(lipgloss.Color("62")).Foreground(lipgloss.Color("230")).Bold(true),
 		Range:           lipgloss.NewStyle().Background(lipgloss.Color("238")).Foreground(lipgloss.Color("230")),
 		TimeCursor:      lipgloss.NewStyle().Reverse(true).Bold(true),
-		PrimaryButton:   lipgloss.NewStyle().Foreground(lipgloss.Color("230")).Background(lipgloss.Color("62")).Bold(true).Padding(0, 1),
+		PrimaryButton:   lipgloss.NewStyle().Foreground(lipgloss.Color("230")).Background(lipgloss.Color("238")).Bold(true).Padding(0, 1),
 		SecondaryButton: lipgloss.NewStyle().Foreground(lipgloss.Color("230")).Background(lipgloss.Color("238")).Bold(true).Padding(0, 1),
-		FocusedButton:   lipgloss.NewStyle().Foreground(lipgloss.Color("230")).Background(lipgloss.Color("117")).Bold(true).Padding(0, 1),
+		FocusedButton:   lipgloss.NewStyle().Foreground(lipgloss.Color("67")).Background(lipgloss.Color("233")).Bold(true).Padding(0, 1),
 	}
 }

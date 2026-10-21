@@ -180,9 +180,9 @@ func stylesFromOmarchyPalette(p omarchyPalette) themeStyles {
 		RangeEndpoint:   lipgloss.NewStyle().Background(color("active_tab_background")).Foreground(color("bright_foreground")).Bold(true),
 		Range:           lipgloss.NewStyle().Background(color("lighter_background")).Foreground(color("foreground")),
 		TimeCursor:      lipgloss.NewStyle().Background(color("selection")).Foreground(color("bright_foreground")).Bold(true),
-		PrimaryButton:   lipgloss.NewStyle().Foreground(color("darker_background")).Background(color("orange")).Bold(true).Padding(0, 1),
+		PrimaryButton:   lipgloss.NewStyle().Foreground(color("foreground")).Background(color("lighter_background")).Bold(true).Padding(0, 1),
 		SecondaryButton: lipgloss.NewStyle().Foreground(color("foreground")).Background(color("lighter_background")).Bold(true).Padding(0, 1),
-		FocusedButton:   lipgloss.NewStyle().Foreground(color("darker_background")).Background(color("active_tab_background")).Bold(true).Padding(0, 1),
+		FocusedButton:   lipgloss.NewStyle().Foreground(color("dark_foreground")).Background(color("darker_background")).Bold(true).Padding(0, 1),
 	}
 	return themeStyles{styles: styles, formTheme: formThemeFromOmarchyPalette(p)}
 }
@@ -210,7 +210,7 @@ func formThemeFromOmarchyPalette(p omarchyPalette) *huh.Theme {
 	theme.Focused.SelectedPrefix = theme.Focused.SelectedPrefix.Foreground(color("bright_green"))
 	theme.Focused.UnselectedOption = theme.Focused.UnselectedOption.Foreground(color("foreground"))
 	theme.Focused.UnselectedPrefix = theme.Focused.UnselectedPrefix.Foreground(color("muted"))
-	theme.Focused.FocusedButton = theme.Focused.FocusedButton.Foreground(color("darker_background")).Background(color("active_tab_background")).Bold(true)
+	theme.Focused.FocusedButton = theme.Focused.FocusedButton.Foreground(color("dark_foreground")).Background(color("darker_background")).Bold(true)
 	theme.Focused.BlurredButton = theme.Focused.BlurredButton.Foreground(color("foreground")).Background(color("lighter_background"))
 	theme.Focused.Next = theme.Focused.FocusedButton
 	theme.Focused.TextInput.Cursor = theme.Focused.TextInput.Cursor.Foreground(color("bright_yellow"))

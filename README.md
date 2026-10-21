@@ -26,7 +26,8 @@ without issues but cannot guarantee there won't be issues with other calendars.
 - Per-calendar show/hide controls to include/exclude all events and todos
 - Optional Nerd Font glyphs for the richest terminal rendering
 - Automatic Omarchy palette support with live theme reloads on Linux Omarchy
-  Quattro; application surfaces keep the terminal's default background
+  Quattro; application surfaces keep the terminal's default background, and
+  form actions use palette-defined focus states
 
 ## Installation
 
