@@ -1,15 +1,16 @@
 package tui
 
 import (
-	"strings"
-	"testing"
-	"time"
-
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/hsanson/go-khal/internal/calendar"
 	"github.com/hsanson/go-khal/internal/config"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
 )
 
 func TestMouseClickSelectsRenderedCalendarDay(t *testing.T) {
@@ -294,32 +295,162 @@ func TestFieldDialogButtonsAndOutsideClicks(t *testing.T) {
 }
 
 func TestOuterActionsRenderHorizontallyAndNavigate(t *testing.T) {
-	m := NewModel(&config.Config{SidebarWidth: 30}, calendar.Dataset{
-		Calendars: []calendar.Calendar{{Source: "src", Name: "cal"}},
-	}, nil)
+	cal := calendar.Calendar{Source: "src", Name: "cal"}
+	m := NewModel(&config.Config{SidebarWidth: 30}, calendar.Dataset{Calendars: []calendar.Calendar{cal}}, nil)
 	m.width = 120
 	m.height = 50
 	m.openEventFormNew()
+	for _, row := range m.eventEditorRows() {
+		if editorRowKey(row) == "form-delete" {
+			t.Fatal("create form rendered Delete")
+		}
+	}
+
+	event := calendar.Event{UID: "event", Source: cal.Source, Calendar: cal.Name, Summary: "Event"}
+	m.eventForm = m.newEventFormState("edit", event.UID, event)
 	rows := m.eventEditorRows()
 	saveRow := editorRowIndex(t, rows, "form-save")
 	cancelRow := editorRowIndex(t, rows, "form-cancel")
+	deleteRow := editorRowIndex(t, rows, "form-delete")
 	_ = m.View()
 	save := renderedHit(t, m, mouseEventEditorRow, saveRow, "")
 	cancel := renderedHit(t, m, mouseEventEditorRow, cancelRow, "")
-	if save.rect.y != cancel.rect.y || save.rect.x >= cancel.rect.x {
-		t.Fatalf("outer actions not horizontal Save then Cancel: save=%+v cancel=%+v", save.rect, cancel.rect)
+	delete := renderedHit(t, m, mouseEventEditorRow, deleteRow, "")
+	if save.rect.y != cancel.rect.y || save.rect.y != delete.rect.y ||
+		save.rect.x >= cancel.rect.x || cancel.rect.x+cancel.rect.width >= delete.rect.x {
+		t.Fatalf("outer actions not horizontal Save, Cancel, then Delete: save=%+v cancel=%+v delete=%+v", save.rect, cancel.rect, delete.rect)
 	}
 
 	m.eventForm.cursor = saveRow
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRight})
+	for _, want := range []int{cancelRow, deleteRow} {
+		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRight})
+		m = *modelValue(t, updated)
+		if m.eventForm.cursor != want {
+			t.Fatalf("Right focused row %d, want %d", m.eventForm.cursor, want)
+		}
+	}
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyLeft})
 	m = *modelValue(t, updated)
 	if m.eventForm.cursor != cancelRow {
-		t.Fatal("Right did not move from Save to Cancel")
+		t.Fatal("Left did not move from Delete to Cancel")
 	}
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyLeft})
-	m = *modelValue(t, updated)
-	if m.eventForm.cursor != saveRow {
-		t.Fatal("Left did not move from Cancel to Save")
+
+	_, _, cancelX, cancelWidth, deleteX, deleteWidth := m.renderEditorActions(false, false, false, true, 80)
+	if deleteX+deleteWidth != 80 {
+		t.Fatalf("Delete right edge = %d, want 80", deleteX+deleteWidth)
+	}
+	_, _, cancelX, cancelWidth, deleteX, _ = m.renderEditorActions(false, false, false, true, 20)
+	if deleteX != cancelX+cancelWidth+2 {
+		t.Fatalf("narrow Delete x = %d, want collapsed gap at %d", deleteX, cancelX+cancelWidth+2)
+	}
+}
+
+func TestDeleteActionFromEditFormsPreservesUnsavedState(t *testing.T) {
+	cal := calendar.Calendar{Source: "src", Name: "cal"}
+	cfg := &config.Config{SidebarWidth: 30}
+	store := calendar.NewStore(cfg)
+
+	t.Run("event", func(t *testing.T) {
+		event := calendar.Event{UID: "event", Source: cal.Source, Calendar: cal.Name, Summary: "Persisted event"}
+		m := NewModel(cfg, calendar.Dataset{Calendars: []calendar.Calendar{cal}}, store)
+		m.width = 120
+		m.height = 50
+		m.eventForm = m.newEventFormState("edit", event.UID, event)
+		m.eventForm.summary = "Unsaved event"
+		deleteRow := editorRowIndex(t, m.eventEditorRows(), "form-delete")
+
+		m = clickRenderedHit(t, m, mouseEventEditorRow, deleteRow, "")
+		if m.deleteConfirm == nil || m.deleteConfirm.itemLabel != event.Summary {
+			t.Fatalf("event confirmation = %+v, want persisted title %q", m.deleteConfirm, event.Summary)
+		}
+		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+		m = *modelValue(t, updated)
+		if m.deleteConfirm != nil || m.eventForm == nil || m.eventForm.summary != "Unsaved event" || m.eventForm.cursor != deleteRow {
+			t.Fatal("cancelling event deletion did not restore the unsaved form with Delete focused")
+		}
+	})
+
+	t.Run("task", func(t *testing.T) {
+		todo := calendar.Todo{UID: "task", Source: cal.Source, Calendar: cal.Name, Summary: "Persisted task"}
+		m := NewTaskModeModel(cfg, calendar.Dataset{Calendars: []calendar.Calendar{cal}}, store)
+		m.width = 120
+		m.height = 50
+		m.todoForm = m.newTodoFormState("edit", todo.UID, todo)
+		m.todoForm.summary = "Unsaved task"
+		deleteRow := editorRowIndex(t, m.todoEditorRows(), "form-delete")
+
+		m = clickRenderedHit(t, m, mouseTodoEditorRow, deleteRow, "")
+		if m.deleteConfirm == nil || m.deleteConfirm.itemLabel != todo.Summary {
+			t.Fatalf("task confirmation = %+v, want persisted title %q", m.deleteConfirm, todo.Summary)
+		}
+		m = clickRenderedHit(t, m, mouseDeleteConfirm, -1, "false")
+		if m.deleteConfirm != nil || m.todoForm == nil || m.todoForm.summary != "Unsaved task" || m.todoForm.cursor != deleteRow {
+			t.Fatal("declining task deletion did not restore the unsaved form with Delete focused")
+		}
+	})
+
+	t.Run("recurring event", func(t *testing.T) {
+		event := calendar.Event{UID: "recurring", Source: cal.Source, Calendar: cal.Name, Summary: "Recurring", Recurring: true}
+		m := NewModel(cfg, calendar.Dataset{Calendars: []calendar.Calendar{cal}}, store)
+		m.width = 120
+		m.height = 50
+		m.eventForm = m.newEventFormState("edit", event.UID, event)
+		deleteRow := editorRowIndex(t, m.eventEditorRows(), "form-delete")
+
+		m = clickRenderedHit(t, m, mouseEventEditorRow, deleteRow, "")
+		if m.deleteConfirm == nil || m.deleteConfirm.stage != "scope" {
+			t.Fatal("recurring event deletion did not start with scope selection")
+		}
+	})
+
+	t.Run("import", func(t *testing.T) {
+		existing := calendar.Event{UID: "import", Source: cal.Source, Calendar: cal.Name, Summary: "Persisted import"}
+		imported := existing
+		imported.Summary = "Imported title"
+		m := NewEventImportModel(cfg, calendar.Dataset{Calendars: []calendar.Calendar{cal}}, store, imported, &existing)
+		m.width = 120
+		m.height = 50
+		deleteRow := editorRowIndex(t, m.eventEditorRows(), "form-delete")
+
+		m = clickRenderedHit(t, m, mouseEventEditorRow, deleteRow, "")
+		if m.deleteConfirm == nil || m.deleteConfirm.itemLabel != existing.Summary {
+			t.Fatalf("import confirmation = %+v, want persisted title %q", m.deleteConfirm, existing.Summary)
+		}
+	})
+}
+
+func TestDeleteActionConfirmsAndDeletesTask(t *testing.T) {
+	calDir := filepath.Join(t.TempDir(), "cal")
+	if err := os.MkdirAll(calDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.Config{Sources: []config.Source{{Path: calDir, Type: "calendar"}}}
+	store := calendar.NewStore(cfg)
+	todo := calendar.Todo{UID: "delete-from-form", Summary: "Delete me"}
+	if err := store.CreateTodo("src", "cal", todo); err != nil {
+		t.Fatal(err)
+	}
+	data, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(data.Todos) != 1 {
+		t.Fatalf("loaded %d tasks, want 1", len(data.Todos))
+	}
+
+	m := NewTaskModeModel(cfg, data, store)
+	m.width = 120
+	m.height = 50
+	m.todoForm = m.newTodoFormState("edit", data.Todos[0].UID, data.Todos[0])
+	deleteRow := editorRowIndex(t, m.todoEditorRows(), "form-delete")
+	m = clickRenderedHit(t, m, mouseTodoEditorRow, deleteRow, "")
+	m = clickRenderedHit(t, m, mouseDeleteConfirm, -1, "true")
+
+	if m.deleteConfirm != nil || m.todoForm != nil || !m.focusMain {
+		t.Fatal("confirmed deletion did not close the task form and return to the list")
+	}
+	if _, err := store.FindTodo(todo.UID); err == nil {
+		t.Fatal("confirmed task still exists")
 	}
 }
 

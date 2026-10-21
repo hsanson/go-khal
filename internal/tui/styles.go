@@ -33,6 +33,8 @@ type Styles struct {
 	PrimaryButton   lipgloss.Style
 	SecondaryButton lipgloss.Style
 	FocusedButton   lipgloss.Style
+	DangerButton    lipgloss.Style
+	FocusedDanger   lipgloss.Style
 }
 
 func DefaultStyles() Styles {
@@ -67,5 +69,7 @@ func DefaultStyles() Styles {
 		PrimaryButton:   lipgloss.NewStyle().Foreground(lipgloss.Color("230")).Background(lipgloss.Color("238")).Bold(true).Padding(0, 1),
 		SecondaryButton: lipgloss.NewStyle().Foreground(lipgloss.Color("230")).Background(lipgloss.Color("238")).Bold(true).Padding(0, 1),
 		FocusedButton:   lipgloss.NewStyle().Foreground(lipgloss.Color("67")).Background(lipgloss.Color("233")).Bold(true).Padding(0, 1),
+		DangerButton:    lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Background(lipgloss.Color("238")).Bold(true).Padding(0, 1),
+		FocusedDanger:   lipgloss.NewStyle().Foreground(lipgloss.Color("233")).Background(lipgloss.Color("196")).Bold(true).Padding(0, 1),
 	}
 }

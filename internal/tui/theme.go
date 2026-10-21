@@ -183,6 +183,8 @@ func stylesFromOmarchyPalette(p omarchyPalette) themeStyles {
 		PrimaryButton:   lipgloss.NewStyle().Foreground(color("foreground")).Background(color("lighter_background")).Bold(true).Padding(0, 1),
 		SecondaryButton: lipgloss.NewStyle().Foreground(color("foreground")).Background(color("lighter_background")).Bold(true).Padding(0, 1),
 		FocusedButton:   lipgloss.NewStyle().Foreground(color("dark_foreground")).Background(color("darker_background")).Bold(true).Padding(0, 1),
+		DangerButton:    lipgloss.NewStyle().Foreground(color("bright_red")).Background(color("lighter_background")).Bold(true).Padding(0, 1),
+		FocusedDanger:   lipgloss.NewStyle().Foreground(color("darker_background")).Background(color("bright_red")).Bold(true).Padding(0, 1),
 	}
 	return themeStyles{styles: styles, formTheme: formThemeFromOmarchyPalette(p)}
 }

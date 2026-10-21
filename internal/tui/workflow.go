@@ -45,12 +45,21 @@ func deleteWorkflowView(state *deleteConfirmState, styles Styles) (string, []mou
 	if state.recurring {
 		description = "Delete " + eventEditScopeLabel(state.scope) + ". " + description
 	}
-	no := "[ No ]"
-	yes := "[ Yes ]"
+	noStyle := styles.SecondaryButton
+	if !state.confirm {
+		noStyle = styles.FocusedButton
+	}
+	yesStyle := styles.DangerButton
+	if state.confirm {
+		yesStyle = styles.FocusedDanger
+	}
+	no := noStyle.Render("No")
+	yes := yesStyle.Render("Yes")
 	buttons := no + "  " + yes
+	noWidth := lipgloss.Width(no)
 	return strings.Join([]string{styles.Title.Render(title), description, "", buttons}, "\n"), []mouseHit{
-		{rect: mouseRect{x: 0, y: 3, width: len(no), height: 1}, kind: mouseDeleteConfirm, value: "false"},
-		{rect: mouseRect{x: len(no) + 2, y: 3, width: len(yes), height: 1}, kind: mouseDeleteConfirm, value: "true"},
+		{rect: mouseRect{x: 0, y: 3, width: noWidth, height: 1}, kind: mouseDeleteConfirm, value: "false"},
+		{rect: mouseRect{x: noWidth + 2, y: 3, width: lipgloss.Width(yes), height: 1}, kind: mouseDeleteConfirm, value: "true"},
 	}
 }
 

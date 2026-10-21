@@ -18,7 +18,8 @@ without issues but cannot guarantee there won't be issues with other calendars.
 - Keyboard- and mouse-driven terminal calendar with months list, agenda, details pane, and calendar toggles
 - Minimap with a weekly overview: click events to jump to them, or click empty time to stage a one-hour slot for `n`
 - Separate agenda and task modes, agenda page movement, and show-all mode
-- Event and task create/edit/delete support from the interactive calendar
+- Event and task create/edit/delete support from the interactive calendar, with
+  confirmed destructive actions in edit forms
 - Event attendees auto-completion from VCARD contacts.
 - Birthday events from VCARD contacts.
 - Configurable calendar and addressbook sources that point directly at vdirsyncer folders

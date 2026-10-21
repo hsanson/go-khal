@@ -114,21 +114,23 @@ type attendeeEditorItem struct {
 }
 
 type deleteConfirmState struct {
-	form      *huh.Form
-	itemLabel string
-	kind      string
-	event     *calendar.Event
-	todo      *calendar.Todo
-	recurring bool
-	stage     string
-	confirm   bool
-	scope     string
-	errMsg    string
+	form           *huh.Form
+	itemLabel      string
+	kind           string
+	event          *calendar.Event
+	todo           *calendar.Todo
+	recurring      bool
+	stage          string
+	confirm        bool
+	scope          string
+	errMsg         string
+	returnToEditor bool
 }
 
 type todoFormState struct {
 	mode          string
 	targetUID     string
+	targetTodo    *calendar.Todo
 	form          *huh.Form
 	activeKey     string
 	activeForm    *huh.Form
@@ -552,13 +554,22 @@ func (m *Model) finishDeleteConfirm() (tea.Model, tea.Cmd) {
 		s.form = m.buildDeleteConfirmForm(s).WithKeyMap(deleteConfirmFormKeyMap(s))
 		return m, s.form.Init()
 	}
+	if s.confirm && s.returnToEditor {
+		m.eventForm = nil
+		m.todoForm = nil
+		s.returnToEditor = false
+	}
 	m.closeDeleteConfirm()
 	m.ensureEventSelectionValid()
 	return m, nil
 }
 
 func (m *Model) closeDeleteConfirm() {
+	returnToEditor := m.deleteConfirm != nil && m.deleteConfirm.returnToEditor
 	m.deleteConfirm = nil
+	if returnToEditor {
+		return
+	}
 	m.focusDetails = false
 	m.focusMain = true
 }
@@ -627,14 +638,14 @@ func (m Model) renderMainPanel(width int) string {
 	if panelHeight < 10 {
 		panelHeight = 10
 	}
+	if m.deleteConfirm != nil {
+		return m.renderDeleteConfirmMainPanel(width, panelHeight)
+	}
 	if m.eventForm != nil {
 		return m.renderEventFormMainPanel(width, panelHeight)
 	}
 	if m.todoForm != nil {
 		return m.renderTodoFormMainPanel(width, panelHeight)
-	}
-	if m.deleteConfirm != nil {
-		return m.renderDeleteConfirmMainPanel(width, panelHeight)
 	}
 
 	items := m.agendaItems()
@@ -933,13 +944,21 @@ func (m Model) renderEditorRows(rows []editorRow, cur, width, height, offsetX, o
 		if i == cur {
 			selectedLine = len(lines)
 		}
-		if i+1 == cur && editorRowKey(row) == "form-save" && i+1 < len(rows) && editorRowKey(rows[i+1]) == "form-cancel" {
-			selectedLine = len(lines)
-		}
 		if editorRowKey(row) == "form-save" && i+1 < len(rows) && editorRowKey(rows[i+1]) == "form-cancel" {
-			line, saveWidth, cancelX, cancelWidth := m.renderEditorActions(i == cur, i+1 == cur, width)
+			hasDelete := i+2 < len(rows) && editorRowKey(rows[i+2]) == "form-delete"
+			if i+1 == cur || hasDelete && i+2 == cur {
+				selectedLine = len(lines)
+			}
+			line, saveWidth, cancelX, cancelWidth, deleteX, deleteWidth := m.renderEditorActions(
+				i == cur, i+1 == cur, hasDelete && i+2 == cur, hasDelete, width,
+			)
+			hits := []editorLineHit{{row: i, width: saveWidth}, {row: i + 1, x: cancelX, width: cancelWidth}}
+			if hasDelete {
+				hits = append(hits, editorLineHit{row: i + 2, x: deleteX, width: deleteWidth})
+				i++
+			}
 			lines = append(lines, line)
-			lineHits = append(lineHits, []editorLineHit{{row: i, width: saveWidth}, {row: i + 1, x: cancelX, width: cancelWidth}})
+			lineHits = append(lineHits, hits)
 			i++
 			continue
 		}
@@ -988,10 +1007,12 @@ func (m Model) renderEditorRow(row editorRow, selected bool, width int) string {
 		prefix = " "
 	}
 	key := editorRowKey(row)
-	if key == "attendees-add" || key == "alarms-add" || key == "form-cancel" || key == "form-save" {
+	if key == "attendees-add" || key == "alarms-add" || key == "form-cancel" || key == "form-save" || key == "form-delete" {
 		buttonStyle := m.styles.PrimaryButton
 		if key == "form-cancel" {
 			buttonStyle = m.styles.SecondaryButton
+		} else if key == "form-delete" {
+			buttonStyle = m.styles.DangerButton
 		}
 		line := prefix + buttonStyle.Render(editorButtonLabel(key))
 		return editorRowStyle(m.styles, selected, width).Render(line)
@@ -1037,19 +1058,30 @@ func (m Model) renderEditorRow(row editorRow, selected bool, width int) string {
 	value := valueStyle.Render(truncate(displayValue, valueBudget))
 	return editorRowStyle(m.styles, selected, width).Render(prefix + label + sep + value)
 }
-func (m Model) renderEditorActions(saveSelected, cancelSelected bool, width int) (line string, saveWidth, cancelX, cancelWidth int) {
-	button := func(label string, style lipgloss.Style, selected bool) string {
+func (m Model) renderEditorActions(saveSelected, cancelSelected, deleteSelected, showDelete bool, width int) (
+	line string,
+	saveWidth, cancelX, cancelWidth, deleteX, deleteWidth int,
+) {
+	button := func(label string, style, focusedStyle lipgloss.Style, selected bool) string {
 		if selected {
-			style = m.styles.FocusedButton
+			style = focusedStyle
 		}
 		return style.Render(label)
 	}
-	save := button("Save", m.styles.PrimaryButton, saveSelected)
-	cancel := button("Cancel", m.styles.SecondaryButton, cancelSelected)
+	save := button("Save", m.styles.PrimaryButton, m.styles.FocusedButton, saveSelected)
+	cancel := button("Cancel", m.styles.SecondaryButton, m.styles.FocusedButton, cancelSelected)
 	saveWidth = lipgloss.Width(save)
 	cancelX = saveWidth + 2
 	cancelWidth = lipgloss.Width(cancel)
-	line = lipgloss.NewStyle().Width(width).Render(save + "  " + cancel)
+	left := save + "  " + cancel
+	if !showDelete {
+		line = lipgloss.NewStyle().Width(width).Render(left)
+		return
+	}
+	deleteButton := button("Delete", m.styles.DangerButton, m.styles.FocusedDanger, deleteSelected)
+	deleteWidth = lipgloss.Width(deleteButton)
+	deleteX = max(cancelX+cancelWidth+2, width-deleteWidth)
+	line = lipgloss.NewStyle().Width(width).Render(left + strings.Repeat(" ", deleteX-lipgloss.Width(left)) + deleteButton)
 	return
 }
 
@@ -1408,6 +1440,12 @@ func (m *Model) openEventEditorForm() tea.Cmd {
 		return nil
 	}
 	key := editorRowKey(row)
+	if key == "form-delete" {
+		if m.openDeleteConfirmForEditor() {
+			return m.deleteConfirm.form.Init()
+		}
+		return nil
+	}
 	s.activeKey = key
 	s.backup = s.snapshot()
 	s.errMsg = ""
@@ -1647,6 +1685,11 @@ func (m *Model) openTodoEditorForm() tea.Cmd {
 	case "form-save":
 		if err := m.saveTodoEditor(); err != nil {
 			s.errMsg = err.Error()
+		}
+		return nil
+	case "form-delete":
+		if m.openDeleteConfirmForEditor() {
+			return m.deleteConfirm.form.Init()
 		}
 		return nil
 	}
@@ -2146,11 +2189,15 @@ func appendEditorFormActions(rows []editorRow, mode string) []editorRow {
 	if mode == "view" {
 		return rows
 	}
-	return append(rows,
+	rows = append(rows,
 		editorSeparatorRow("Actions"),
 		editorRow{"form-save", "", ""},
 		editorRow{"form-cancel", "", ""},
 	)
+	if mode == "edit" {
+		rows = append(rows, editorRow{"form-delete", "", ""})
+	}
+	return rows
 }
 
 func editorRowKey(row editorRow) string {
@@ -2308,13 +2355,13 @@ func moveEditorActionCursor(rows []editorRow, cursor, delta int) (int, bool) {
 		return cursor, false
 	}
 	key := editorRowKey(rows[cursor])
-	if key != "form-save" && key != "form-cancel" {
+	if key != "form-save" && key != "form-cancel" && key != "form-delete" {
 		return cursor, false
 	}
 	next := moveEditorCursor(rows, cursor, delta)
 	if next >= 0 && next < len(rows) {
 		nextKey := editorRowKey(rows[next])
-		if nextKey == "form-save" || nextKey == "form-cancel" {
+		if nextKey == "form-save" || nextKey == "form-cancel" || nextKey == "form-delete" {
 			return next, true
 		}
 	}
@@ -2331,6 +2378,8 @@ func editorButtonLabel(key string) string {
 		return "Cancel"
 	case "form-save":
 		return "Save"
+	case "form-delete":
+		return "Delete"
 	default:
 		return "󰐕 Add"
 	}
@@ -3833,6 +3882,10 @@ func (m *Model) newTodoFormState(mode, targetUID string, td calendar.Todo) *todo
 		completed:     isTodoDone(td),
 		priorityLabel: todoPriorityLabel(td.Priority),
 	}
+	if mode == "edit" {
+		target := td
+		state.targetTodo = &target
+	}
 	if state.priorityLabel == "" {
 		state.priorityLabel = "mid"
 	}
@@ -4350,9 +4403,31 @@ func (m *Model) openDeleteConfirmForSelected() bool {
 	if it.IsFree {
 		return false
 	}
-	state := &deleteConfirmState{confirm: false, scope: string(calendar.DeleteRecurringOccurrence), stage: "confirm"}
-	if it.Event != nil {
-		ev := *it.Event
+	return m.openDeleteConfirm(it.Event, it.Todo, false)
+}
+
+func (m *Model) openDeleteConfirmForEditor() bool {
+	if m.eventForm != nil && m.eventForm.mode == "edit" {
+		return m.openDeleteConfirm(m.eventForm.targetEvent, nil, true)
+	}
+	if m.todoForm != nil && m.todoForm.mode == "edit" {
+		return m.openDeleteConfirm(nil, m.todoForm.targetTodo, true)
+	}
+	return false
+}
+
+func (m *Model) openDeleteConfirm(event *calendar.Event, todo *calendar.Todo, returnToEditor bool) bool {
+	if m.store == nil {
+		return false
+	}
+	state := &deleteConfirmState{
+		confirm:        false,
+		scope:          string(calendar.DeleteRecurringOccurrence),
+		stage:          "confirm",
+		returnToEditor: returnToEditor,
+	}
+	if event != nil {
+		ev := *event
 		if ev.Source == calendar.SpecialSourceBirthdays {
 			return false
 		}
@@ -4363,8 +4438,8 @@ func (m *Model) openDeleteConfirmForSelected() bool {
 			state.stage = "scope"
 		}
 		state.itemLabel = ev.Summary
-	} else if it.Todo != nil {
-		td := *it.Todo
+	} else if todo != nil {
+		td := *todo
 		state.kind = "task"
 		state.todo = &td
 		state.itemLabel = td.Summary
