@@ -116,7 +116,7 @@ func (m Model) calendarEditorChoices() []editorChoice {
 	choices := make([]editorChoice, 0, len(m.calendarOrder))
 	for _, key := range m.calendarOrder {
 		cal := m.calendarByKey(key)
-		if cal == nil || cal.Source == calendar.SpecialSourceBirthdays {
+		if cal == nil || cal.Source == calendar.SpecialSourceBirthdays || cal.ReadOnly {
 			continue
 		}
 		choices = append(choices, editorChoice{labels[key], key})

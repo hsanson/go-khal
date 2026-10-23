@@ -3,33 +3,35 @@ package calendar
 import "time"
 
 type Event struct {
-	UID          string
-	Summary      string
-	Description  string
-	Location     string
-	URL          string
-	Organizer    string
-	Attendees    []Attendee
-	UserRSVP     string
-	Availability string
-	Visibility   string
-	Recurrence   *Recurrence
-	RecurrenceID *time.Time
-	Alarms       []Alarm
-	Start        time.Time
-	End          time.Time
-	Timezone     string
-	AllDay       bool
-	Kind         string
-	Recurring    bool
-	HasAlarm     bool
-	Source       string
-	Calendar     string
-	CalendarDir  string
-	DisplayName  string
-	Color        string
-	Hidden       bool
-	FilePath     string
+	UID           string
+	Summary       string
+	Description   string
+	Location      string
+	URL           string
+	Organizer     string
+	Status        string
+	RepeatPattern string
+	Attendees     []Attendee
+	UserRSVP      string
+	Availability  string
+	Visibility    string
+	Recurrence    *Recurrence
+	RecurrenceID  *time.Time
+	Alarms        []Alarm
+	Start         time.Time
+	End           time.Time
+	Timezone      string
+	AllDay        bool
+	Kind          string
+	Recurring     bool
+	HasAlarm      bool
+	Source        string
+	Calendar      string
+	CalendarDir   string
+	DisplayName   string
+	Color         string
+	Hidden        bool
+	FilePath      string
 }
 
 type Attendee struct {
@@ -108,9 +110,11 @@ type Calendar struct {
 	Name        string
 	Path        string
 	Email       string
+	Addresses   []string
 	DisplayName string
 	Color       string
 	Hidden      bool
+	ReadOnly    bool
 }
 
 type TodoUpdate struct {

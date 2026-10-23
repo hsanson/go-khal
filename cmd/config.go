@@ -18,7 +18,6 @@ func newConfigCommand() *cobra.Command {
 		Use:   "config",
 		Short: "Manage go-khal configuration",
 	}
-	configCmd.AddCommand(newConfigInitCommand())
 	configCmd.AddCommand(newConfigAddSourceCommand())
 	configCmd.AddCommand(newConfigFromVdirsyncerCommand())
 	configCmd.AddCommand(newConfigListSourcesCommand())
@@ -28,29 +27,12 @@ func newConfigCommand() *cobra.Command {
 	return configCmd
 }
 
-func newConfigInitCommand() *cobra.Command {
-	return &cobra.Command{
-		Use:   "init",
-		Short: "Create config file if missing",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, err := config.Load(cfgPath)
-			if err != nil {
-				return err
-			}
-			if err := config.Save(cfgPath, cfg); err != nil {
-				return err
-			}
-			fmt.Printf("initialized config at %s\n", cfgPath)
-			return nil
-		},
-	}
-}
-
 func newConfigAddSourceCommand() *cobra.Command {
 	var sourceType string
 	var path string
 	var displayName string
 	var color string
+	var readOnly bool
 	var email string
 
 	cmd := &cobra.Command{
@@ -68,17 +50,26 @@ func newConfigAddSourceCommand() *cobra.Command {
 			if sourceType != "calendar" && sourceType != "addressbook" {
 				return fmt.Errorf("--type must be calendar or addressbook")
 			}
-			cfg, err := config.Load(cfgPath)
+			cfg, err := config.LoadOrDefault(cfgPath)
 			if err != nil {
 				return err
 			}
-			upsertSource(cfg, config.Source{
+			source := config.Source{
+				Name:        displayName,
 				Path:        absPath,
 				Type:        sourceType,
 				DisplayName: displayName,
 				Color:       color,
 				Email:       email,
-			})
+				ReadOnly:    readOnly,
+			}
+			if source.Name == "" {
+				source.Name = filepath.Base(absPath)
+			}
+			if email != "" {
+				source.Addresses = []string{email}
+			}
+			upsertSource(cfg, source)
 			if err := config.Save(cfgPath, cfg); err != nil {
 				return err
 			}
@@ -92,13 +83,14 @@ func newConfigAddSourceCommand() *cobra.Command {
 	cmd.Flags().StringVar(&displayName, "display-name", "", "override display name")
 	cmd.Flags().StringVar(&color, "color", "", "override color")
 	cmd.Flags().StringVar(&email, "email", "", "organizer email for calendar sources")
+	cmd.Flags().BoolVar(&readOnly, "readonly", false, "prevent writes to this calendar")
 	return cmd
 }
 
 func newConfigFromVdirsyncerCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "from-vdirsyncer [path]",
-		Short: "Generate go-khal config from vdirsyncer local storages",
+		Short: "Upsert local calendars from vdirsyncer",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			path := defaultVdirsyncerConfigPath()
@@ -113,11 +105,13 @@ func newConfigFromVdirsyncerCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			cfg, err := config.Load(cfgPath)
+			cfg, err := config.LoadOrDefault(cfgPath)
 			if err != nil {
-				cfg = config.Default()
+				return err
 			}
-			cfg.Sources = sources
+			for _, source := range sources {
+				upsertSource(cfg, source)
+			}
 			if err := config.Save(cfgPath, cfg); err != nil {
 				return err
 			}
@@ -149,11 +143,18 @@ func newConfigListSourcesCommand() *cobra.Command {
 				if src.Color != "" {
 					fmt.Printf("  color: %s\n", src.Color)
 				}
-				if src.Email != "" {
-					fmt.Printf("  email: %s\n", src.Email)
+				addresses := src.Addresses
+				if len(addresses) == 0 && src.Email != "" {
+					addresses = []string{src.Email}
+				}
+				if len(addresses) > 0 {
+					fmt.Printf("  addresses: %s\n", strings.Join(addresses, ", "))
 				}
 				if src.Hidden {
 					fmt.Println("  hidden: true")
+				}
+				if src.ReadOnly {
+					fmt.Println("  readonly: true")
 				}
 			}
 			return nil
@@ -193,6 +194,9 @@ func newConfigListCalendarsCommand() *cobra.Command {
 					fmt.Printf("  email: %s\n", cal.Email)
 				}
 				fmt.Printf("  state: %s\n", visibility)
+				if cal.ReadOnly {
+					fmt.Println("  readonly: true")
+				}
 			}
 			return nil
 		},
@@ -244,10 +248,28 @@ func newConfigSetCalendarVisibilityCommand(mode string) *cobra.Command {
 
 func upsertSource(cfg *config.Config, src config.Source) {
 	for i := range cfg.Sources {
-		if filepath.Clean(cfg.Sources[i].Path) == filepath.Clean(src.Path) {
-			cfg.Sources[i] = src
-			return
+		existing := &cfg.Sources[i]
+		if filepath.Clean(existing.Path) != filepath.Clean(src.Path) {
+			continue
 		}
+		existing.Type = src.Type
+		if src.Name != "" {
+			existing.Name = src.Name
+		}
+		if src.DisplayName != "" {
+			existing.DisplayName = src.DisplayName
+		}
+		if src.Color != "" {
+			existing.Color = src.Color
+		}
+		if src.Email != "" {
+			existing.Email = src.Email
+			existing.Addresses = append([]string(nil), src.Addresses...)
+		}
+		if src.ReadOnly {
+			existing.ReadOnly = true
+		}
+		return
 	}
 	cfg.Sources = append(cfg.Sources, src)
 }

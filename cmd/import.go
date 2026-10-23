@@ -132,7 +132,7 @@ func importCalendar(ds calendar.Dataset, requested string) (calendar.Calendar, e
 	if requested != "" {
 		var matches []calendar.Calendar
 		for _, cal := range ds.Calendars {
-			if cal.Source == calendar.SpecialSourceBirthdays {
+			if cal.Source == calendar.SpecialSourceBirthdays || cal.ReadOnly {
 				continue
 			}
 			aliases := []string{
@@ -160,7 +160,7 @@ func importCalendar(ds calendar.Dataset, requested string) (calendar.Calendar, e
 		}
 	}
 	for _, cal := range ds.Calendars {
-		if cal.Source != calendar.SpecialSourceBirthdays {
+		if cal.Source != calendar.SpecialSourceBirthdays && !cal.ReadOnly {
 			return cal, nil
 		}
 	}

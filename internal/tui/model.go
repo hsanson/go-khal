@@ -3898,7 +3898,7 @@ func (m *Model) buildTodoForm(s *todoFormState) *huh.Form {
 	labels := m.calendarOptionLabels()
 	for _, key := range m.calendarOrder {
 		cal := m.calendarByKey(key)
-		if cal == nil || cal.Source == calendar.SpecialSourceBirthdays {
+		if cal == nil || cal.Source == calendar.SpecialSourceBirthdays || cal.ReadOnly {
 			continue
 		}
 		calOptions = append(calOptions, huh.NewOption(labels[key], key))
@@ -4126,7 +4126,7 @@ func (m *Model) buildEventForm(s *eventFormState) *huh.Form {
 	labels := m.calendarOptionLabels()
 	for _, key := range m.calendarOrder {
 		cal := m.calendarByKey(key)
-		if cal == nil || cal.Source == calendar.SpecialSourceBirthdays {
+		if cal == nil || cal.Source == calendar.SpecialSourceBirthdays || cal.ReadOnly {
 			continue
 		}
 		calOptions = append(calOptions, huh.NewOption(labels[key], key))
@@ -4534,7 +4534,7 @@ func splitCalendarKey(v string) calendarKeyParts {
 func (m *Model) firstWritableCalendarKey() string {
 	for _, key := range m.calendarOrder {
 		cal := m.calendarByKey(key)
-		if cal == nil || cal.Source == calendar.SpecialSourceBirthdays {
+		if cal == nil || cal.Source == calendar.SpecialSourceBirthdays || cal.ReadOnly {
 			continue
 		}
 		return key

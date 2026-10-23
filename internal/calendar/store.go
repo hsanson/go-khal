@@ -27,11 +27,23 @@ type calendarSource struct {
 }
 
 type Store struct {
-	config *config.Config
+	config     *config.Config
+	rangeStart *time.Time
+	rangeEnd   *time.Time
 }
 
 func NewStore(cfg *config.Config) *Store {
 	return &Store{config: cfg}
+}
+
+func (s *Store) LoadRange(start, end time.Time) (Dataset, error) {
+	if !end.After(start) {
+		return Dataset{}, errors.New("range end must be after start")
+	}
+	scoped := *s
+	scoped.rangeStart = &start
+	scoped.rangeEnd = &end
+	return scoped.Load()
 }
 
 // ParseEvents decodes the distinct VEVENT masters in an iCalendar stream.
@@ -166,9 +178,11 @@ func (s *Store) resolveCalendarSource(src config.Source) calendarSource {
 			Name:        name,
 			Path:        src.Path,
 			Email:       sourceUserEmail(src),
+			Addresses:   append([]string(nil), src.Addresses...),
 			DisplayName: emptyDefault(src.DisplayName, emptyDefault(metaDisplay, name)),
 			Color:       emptyDefault(src.Color, metaColor),
 			Hidden:      src.Hidden,
+			ReadOnly:    src.ReadOnly,
 		},
 	}
 }
@@ -258,6 +272,7 @@ func (s *Store) loadICSFile(src calendarSource, filePath string) ([]Event, []Tod
 func (s *Store) componentsToEvents(comps []*ical.Component, src calendarSource, filePath string) []Event {
 	exdatesByUID := map[string][]time.Time{}
 	masterRecurrenceByUID := map[string]*Recurrence{}
+	masterRepeatPatternByUID := map[string]string{}
 	masterRSVPByUID := map[string]string{}
 	rangesByUID := map[string][]*ical.Component{}
 	for _, comp := range comps {
@@ -270,6 +285,9 @@ func (s *Store) componentsToEvents(comps []*ical.Component, src calendarSource, 
 			masterRSVPByUID[uid], _ = comp.Props.Text(propGoKhalRSVP)
 			if recurrence := propsToRecurrence(comp.Props); recurrence != nil {
 				masterRecurrenceByUID[uid] = recurrence
+			}
+			if rule := comp.Props.Get(ical.PropRecurrenceRule); rule != nil {
+				masterRepeatPatternByUID[uid] = strings.TrimSpace(rule.Value)
 			}
 			continue
 		}
@@ -310,6 +328,9 @@ func (s *Store) componentsToEvents(comps []*ical.Component, src calendarSource, 
 				events[i].Recurring = true
 				if masterRecurrenceByUID[uid] != nil {
 					events[i].Recurrence = cloneRecurrence(masterRecurrenceByUID[uid])
+				}
+				if events[i].RepeatPattern == "" {
+					events[i].RepeatPattern = masterRepeatPatternByUID[uid]
 				}
 			}
 		} else if len(rangesByUID[uid]) > 0 {
@@ -388,9 +409,17 @@ func (s *Store) componentToEvents(comp *ical.Component, src calendarSource, file
 	}
 	organizer := propEmail(comp.Props.Get(ical.PropOrganizer))
 	attendees := propsToAttendees(comp.Props)
-	userRSVP := attendeeStatusForEmail(attendees, src.calendar.Email)
+	userRSVP := attendeeStatusForEmails(attendees, src.calendar.Addresses)
+	if userRSVP == "" {
+		userRSVP = attendeeStatusForEmail(attendees, src.calendar.Email)
+	}
 	if userRSVP == "" {
 		userRSVP, _ = comp.Props.Text(propGoKhalRSVP)
+	}
+	status, _ := comp.Props.Text(ical.PropStatus)
+	repeatPattern := ""
+	if rule := comp.Props.Get(ical.PropRecurrenceRule); rule != nil {
+		repeatPattern = strings.TrimSpace(rule.Value)
 	}
 	availability := propsToAvailability(comp.Props)
 	visibility := propsToVisibility(comp.Props)
@@ -427,29 +456,31 @@ func (s *Store) componentToEvents(comp *ical.Component, src calendarSource, file
 		}
 	}
 	base := Event{
-		UID:          uid,
-		Summary:      emptyDefault(summary, "(untitled event)"),
-		Description:  desc,
-		Location:     location,
-		URL:          urlText,
-		Organizer:    organizer,
-		Attendees:    attendees,
-		UserRSVP:     userRSVP,
-		Availability: availability,
-		Visibility:   visibility,
-		Recurrence:   recurrence,
-		Alarms:       alarms,
-		AllDay:       allDay,
-		Timezone:     timezone,
-		Recurring:    recurring || recurrence != nil || forceSingle,
-		HasAlarm:     hasAlarm || len(alarms) > 0,
-		Source:       src.sourceName,
-		Calendar:     src.calendar.Name,
-		CalendarDir:  src.calendar.Path,
-		DisplayName:  src.calendar.DisplayName,
-		Color:        src.calendar.Color,
-		Hidden:       src.calendar.Hidden,
-		FilePath:     filePath,
+		UID:           uid,
+		Summary:       emptyDefault(summary, "(untitled event)"),
+		Description:   desc,
+		Location:      location,
+		URL:           urlText,
+		Organizer:     organizer,
+		Status:        status,
+		RepeatPattern: repeatPattern,
+		Attendees:     attendees,
+		UserRSVP:      userRSVP,
+		Availability:  availability,
+		Visibility:    visibility,
+		Recurrence:    recurrence,
+		Alarms:        alarms,
+		AllDay:        allDay,
+		Timezone:      timezone,
+		Recurring:     recurring || recurrence != nil || forceSingle,
+		HasAlarm:      hasAlarm || len(alarms) > 0,
+		Source:        src.sourceName,
+		Calendar:      src.calendar.Name,
+		CalendarDir:   src.calendar.Path,
+		DisplayName:   src.calendar.DisplayName,
+		Color:         src.calendar.Color,
+		Hidden:        src.calendar.Hidden,
+		FilePath:      filePath,
 	}
 
 	if !recurring || forceSingle {
@@ -465,26 +496,35 @@ func (s *Store) componentToEvents(comp *ical.Component, src calendarSource, file
 		return []Event{base}
 	}
 
-	lookbackMonths := 12
-	lookaheadMonths := 24
-	if s != nil && s.config != nil {
-		lookbackMonths = s.config.RecurrenceLookbackMonths
-		lookaheadMonths = s.config.RecurrenceLookaheadMonths
-		if lookbackMonths <= 0 {
-			lookbackMonths = 12
+	from := time.Now().In(src.location).AddDate(0, -12, 0)
+	to := time.Now().In(src.location).AddDate(0, 24, 0)
+	if s != nil && s.rangeStart != nil && s.rangeEnd != nil {
+		from = s.rangeStart.In(src.location).Add(-duration)
+		to = s.rangeEnd.In(src.location)
+	} else {
+		lookbackMonths := 12
+		lookaheadMonths := 24
+		if s != nil && s.config != nil {
+			lookbackMonths = s.config.RecurrenceLookbackMonths
+			lookaheadMonths = s.config.RecurrenceLookaheadMonths
+			if lookbackMonths <= 0 {
+				lookbackMonths = 12
+			}
+			if lookaheadMonths <= 0 {
+				lookaheadMonths = 24
+			}
 		}
-		if lookaheadMonths <= 0 {
-			lookaheadMonths = 24
+		from = time.Now().In(src.location).AddDate(0, -lookbackMonths, 0)
+		to = time.Now().In(src.location).AddDate(0, lookaheadMonths, 0)
+		if start.Before(from) {
+			from = start.AddDate(0, -1, 0)
 		}
-	}
-
-	from := time.Now().In(src.location).AddDate(0, -lookbackMonths, 0)
-	to := time.Now().In(src.location).AddDate(0, lookaheadMonths, 0)
-	if start.Before(from) {
-		from = start.AddDate(0, -1, 0)
 	}
 	occs := set.Between(from, to, true)
 	if len(occs) == 0 {
+		if s != nil && s.rangeStart != nil {
+			return nil
+		}
 		base.Start = start
 		base.End = end
 		return []Event{base}
@@ -589,6 +629,15 @@ func attendeeStatusForEmail(attendees []Attendee, email string) string {
 	for _, attendee := range attendees {
 		if sameEmail(attendee.Email, email) {
 			return attendee.Status
+		}
+	}
+	return ""
+}
+
+func attendeeStatusForEmails(attendees []Attendee, emails []string) string {
+	for _, email := range emails {
+		if status := attendeeStatusForEmail(attendees, email); status != "" {
+			return status
 		}
 	}
 	return ""
@@ -766,7 +815,7 @@ func (s *Store) loadAddressBook(path string, sourceName string) ([]Event, error)
 		if entry.IsDir() || strings.ToLower(filepath.Ext(entry.Name())) != ".vcf" {
 			continue
 		}
-		events, err := readVCardFile(filepath.Join(path, entry.Name()), sourceName, s.config)
+		events, err := readVCardFile(filepath.Join(path, entry.Name()), sourceName, s)
 		if err != nil {
 			continue
 		}
@@ -775,7 +824,7 @@ func (s *Store) loadAddressBook(path string, sourceName string) ([]Event, error)
 	return out, nil
 }
 
-func readVCardFile(path string, sourceName string, cfg *config.Config) ([]Event, error) {
+func readVCardFile(path string, sourceName string, store *Store) ([]Event, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
@@ -792,12 +841,12 @@ func readVCardFile(path string, sourceName string, cfg *config.Config) ([]Event,
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, birthdayEventsFromCard(card, sourceName, path, cfg)...)
+		out = append(out, birthdayEventsFromCard(card, sourceName, path, store)...)
 	}
 	return out, nil
 }
 
-func birthdayEventsFromCard(card vcard.Card, sourceName string, filePath string, cfg *config.Config) []Event {
+func birthdayEventsFromCard(card vcard.Card, sourceName string, filePath string, store *Store) []Event {
 	name := strings.TrimSpace(card.Value(vcard.FieldFormattedName))
 	if name == "" {
 		if n := card.Name(); n != nil {
@@ -813,17 +862,17 @@ func birthdayEventsFromCard(card vcard.Card, sourceName string, filePath string,
 
 	out := make([]Event, 0, 16)
 	for i, v := range card.Values(vcard.FieldBirthday) {
-		out = append(out, recurringAllDayFromDateValue(v, EventKindBirthday, name, sourceName, filePath, i, cfg)...)
+		out = append(out, recurringAllDayFromDateValue(v, EventKindBirthday, name, sourceName, filePath, i, store)...)
 	}
 	annValues := append([]string{}, card.Values(vcard.FieldAnniversary)...)
 	annValues = append(annValues, card.Values("X-ANNIVERSARY")...)
 	for i, v := range annValues {
-		out = append(out, recurringAllDayFromDateValue(v, EventKindAnniversary, name, sourceName, filePath, i, cfg)...)
+		out = append(out, recurringAllDayFromDateValue(v, EventKindAnniversary, name, sourceName, filePath, i, store)...)
 	}
 	return out
 }
 
-func recurringAllDayFromDateValue(raw string, kind string, contactName string, sourceName string, filePath string, index int, cfg *config.Config) []Event {
+func recurringAllDayFromDateValue(raw string, kind string, contactName string, sourceName string, filePath string, index int, store *Store) []Event {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return nil
@@ -844,7 +893,7 @@ func recurringAllDayFromDateValue(raw string, kind string, contactName string, s
 		uidPrefix = "anni"
 	}
 	uidBase := fmt.Sprintf("%s:%s:%s:%d:%02d%02d", uidPrefix, sourceName, filePath, index, t.Month(), t.Day())
-	from, to := birthdayWindow(time.Now(), cfg)
+	from, to := store.birthdayWindow(time.Now())
 	events := makeBirthdayInstances(uidBase, summary, kind, filePath, t.Month(), t.Day(), hasYear, t.Year(), from, to)
 	return events
 }
@@ -879,15 +928,18 @@ func parseVCardDate(v string) (time.Time, bool, bool) {
 	return time.Time{}, false, false
 }
 
-func birthdayWindow(now time.Time, cfg *config.Config) (time.Time, time.Time) {
+func (s *Store) birthdayWindow(now time.Time) (time.Time, time.Time) {
+	if s != nil && s.rangeStart != nil && s.rangeEnd != nil {
+		return *s.rangeStart, *s.rangeEnd
+	}
 	lookbackMonths := 12
 	lookaheadMonths := 24
-	if cfg != nil {
-		if cfg.RecurrenceLookbackMonths > 0 {
-			lookbackMonths = cfg.RecurrenceLookbackMonths
+	if s != nil && s.config != nil {
+		if s.config.RecurrenceLookbackMonths > 0 {
+			lookbackMonths = s.config.RecurrenceLookbackMonths
 		}
-		if cfg.RecurrenceLookaheadMonths > 0 {
-			lookaheadMonths = cfg.RecurrenceLookaheadMonths
+		if s.config.RecurrenceLookaheadMonths > 0 {
+			lookaheadMonths = s.config.RecurrenceLookaheadMonths
 		}
 	}
 	if lookbackMonths > 120 {
@@ -896,9 +948,7 @@ func birthdayWindow(now time.Time, cfg *config.Config) (time.Time, time.Time) {
 	if lookaheadMonths > 120 {
 		lookaheadMonths = 120
 	}
-	from := now.AddDate(0, -lookbackMonths, 0)
-	to := now.AddDate(0, lookaheadMonths, 0)
-	return from, to
+	return now.AddDate(0, -lookbackMonths, 0), now.AddDate(0, lookaheadMonths, 0)
 }
 
 func makeBirthdayInstances(uidBase, summary, kind, filePath string, month time.Month, day int, hasYear bool, originalYear int, from, to time.Time) []Event {
@@ -911,7 +961,7 @@ func makeBirthdayInstances(uidBase, summary, kind, filePath string, month time.M
 		if start.Month() != month || start.Day() != day {
 			continue
 		}
-		if start.Before(from) || start.After(to) {
+		if start.Before(from) || !start.Before(to) {
 			continue
 		}
 
@@ -937,20 +987,21 @@ func makeBirthdayInstances(uidBase, summary, kind, filePath string, month time.M
 		}
 
 		out = append(out, Event{
-			UID:         fmt.Sprintf("%s:%d", uidBase, year),
-			Summary:     eventSummary,
-			Description: desc,
-			Start:       start,
-			End:         start.Add(24 * time.Hour),
-			AllDay:      true,
-			Kind:        kind,
-			Recurring:   true,
-			Source:      SpecialSourceBirthdays,
-			Calendar:    SpecialCalendarBirthdays,
-			DisplayName: "Birthdays & Aniversaries",
-			Color:       "#d49e00",
-			Hidden:      false,
-			FilePath:    filePath,
+			UID:           fmt.Sprintf("%s:%d", uidBase, year),
+			Summary:       eventSummary,
+			Description:   desc,
+			Start:         start,
+			End:           start.Add(24 * time.Hour),
+			AllDay:        true,
+			Kind:          kind,
+			Recurring:     true,
+			RepeatPattern: "FREQ=YEARLY",
+			Source:        SpecialSourceBirthdays,
+			Calendar:      SpecialCalendarBirthdays,
+			DisplayName:   "Birthdays & Aniversaries",
+			Color:         "#d49e00",
+			Hidden:        false,
+			FilePath:      filePath,
 		})
 	}
 
@@ -1036,6 +1087,9 @@ func (s *Store) CreateTodo(sourceName, calendarName string, t Todo) error {
 func (s *Store) UpdateTodo(uid string, update TodoUpdate) error {
 	todo, err := s.FindTodo(uid)
 	if err != nil {
+		return err
+	}
+	if err := s.ensureCalendarWritable(todo.Source, todo.Calendar); err != nil {
 		return err
 	}
 
@@ -1125,6 +1179,9 @@ func (s *Store) MoveTodo(uid, sourceName, calendarName string) error {
 	if err != nil {
 		return err
 	}
+	if err := s.ensureCalendarWritable(todo.Source, todo.Calendar); err != nil {
+		return err
+	}
 	target, _, err := s.findWritableCalendar(sourceName, calendarName)
 	if err != nil {
 		return err
@@ -1183,19 +1240,21 @@ func (s *Store) EventUserRole(ev Event) EventUserRole {
 	if ev.Source == SpecialSourceBirthdays {
 		return EventUserRoleLocal
 	}
-	userEmail := s.calendarUserEmail(ev.Source, ev.Calendar)
-	if userEmail == "" {
+	userEmails := s.calendarUserEmails(ev.Source, ev.Calendar)
+	if len(userEmails) == 0 {
 		return EventUserRoleUnknown
 	}
-	if sameEmail(ev.Organizer, userEmail) {
-		return EventUserRoleOrganizer
-	}
-	for _, attendee := range ev.Attendees {
-		if sameEmail(attendee.Email, userEmail) {
-			if strings.TrimSpace(ev.Organizer) == "" {
-				return EventUserRoleLocal
+	for _, userEmail := range userEmails {
+		if sameEmail(ev.Organizer, userEmail) {
+			return EventUserRoleOrganizer
+		}
+		for _, attendee := range ev.Attendees {
+			if sameEmail(attendee.Email, userEmail) {
+				if strings.TrimSpace(ev.Organizer) == "" {
+					return EventUserRoleLocal
+				}
+				return EventUserRoleAttendee
 			}
-			return EventUserRoleAttendee
 		}
 	}
 	if strings.TrimSpace(ev.Organizer) == "" {
@@ -1290,6 +1349,9 @@ func (s *Store) DeleteTodo(uid string) error {
 	if err != nil {
 		return err
 	}
+	if err := s.ensureCalendarWritable(todo.Source, todo.Calendar); err != nil {
+		return err
+	}
 	cal, err := readCalendarFile(todo.FilePath)
 	if err != nil {
 		return err
@@ -1321,6 +1383,9 @@ func (s *Store) DeleteTodo(uid string) error {
 func (s *Store) DeleteEvent(ev Event, scope DeleteRecurringScope) error {
 	if ev.Source == SpecialSourceBirthdays {
 		return errors.New("birthday and anniversary events are generated from contacts")
+	}
+	if err := s.ensureCalendarWritable(ev.Source, ev.Calendar); err != nil {
+		return err
 	}
 	if scope == "" {
 		scope = DeleteRecurringAll
@@ -1469,6 +1534,9 @@ func (s *Store) UpdateEventScoped(ev Event, update EventUpdate, scope EditRecurr
 	if scope == "" {
 		scope = EditRecurringAll
 	}
+	if err := s.ensureCalendarWritable(ev.Source, ev.Calendar); err != nil {
+		return err
+	}
 	if s.EventUserRole(ev) == EventUserRoleAttendee {
 		return s.updateAttendeeEventScoped(ev, s.attendeeScopedEventUpdate(ev, update), scope)
 	}
@@ -1504,7 +1572,7 @@ func (s *Store) updateAttendeeEventAll(ev Event, update EventUpdate) error {
 	if err != nil {
 		return err
 	}
-	userEmail := s.calendarUserEmail(ev.Source, ev.Calendar)
+	userEmail := s.calendarUserEmailForEvent(ev)
 	updated := false
 	for _, child := range cal.Children {
 		if !eventComponentHasUID(child, ev.UID) {
@@ -1525,7 +1593,7 @@ func (s *Store) updateAttendeeEventOccurrence(ev Event, update EventUpdate) erro
 	if err != nil {
 		return err
 	}
-	userEmail := s.calendarUserEmail(ev.Source, ev.Calendar)
+	userEmail := s.calendarUserEmailForEvent(ev)
 	boundary := eventOriginalStart(ev)
 	var master *ical.Component
 	var override *ical.Component
@@ -1565,7 +1633,7 @@ func (s *Store) updateAttendeeEventFuture(ev Event, update EventUpdate) error {
 	if err != nil {
 		return err
 	}
-	userEmail := s.calendarUserEmail(ev.Source, ev.Calendar)
+	userEmail := s.calendarUserEmailForEvent(ev)
 	boundary := eventOriginalStart(ev)
 	var master *ical.Component
 	var ranged *ical.Component
@@ -1669,7 +1737,7 @@ func (s *Store) attendeeScopedEventUpdate(ev Event, update EventUpdate) EventUpd
 		Visibility:   update.Visibility,
 		Alarms:       update.Alarms,
 	}
-	userEmail := s.calendarUserEmail(ev.Source, ev.Calendar)
+	userEmail := s.calendarUserEmailForEvent(ev)
 	if update.Attendees != nil && userEmail != "" {
 		attendees := mergeAttendeeResponse(ev.Attendees, *update.Attendees, userEmail)
 		scoped.Attendees = &attendees
@@ -1702,6 +1770,9 @@ func (s *Store) MoveEvent(ev Event, sourceName, calendarName string) error {
 	}
 	if ev.UID == "" {
 		return errors.New("event uid is required")
+	}
+	if err := s.ensureCalendarWritable(ev.Source, ev.Calendar); err != nil {
+		return err
 	}
 	current, err := s.FindEvent(ev.UID)
 	if err != nil {
@@ -2712,11 +2783,31 @@ func (s *Store) findWritableCalendar(sourceName, calendarName string) (Calendar,
 			continue
 		}
 		resolved := s.resolveCalendarSource(src)
-		if calendarName == "" || resolved.calendar.Name == calendarName {
-			return resolved.calendar, time.Local, nil
+		if calendarName != "" && resolved.calendar.Name != calendarName {
+			continue
 		}
+		if src.ReadOnly {
+			return Calendar{}, nil, fmt.Errorf("calendar %s/%s is readonly", sourceName, calendarName)
+		}
+		return resolved.calendar, time.Local, nil
 	}
 	return Calendar{}, nil, fmt.Errorf("calendar %s/%s not found", sourceName, calendarName)
+}
+
+func (s *Store) ensureCalendarWritable(sourceName, calendarName string) error {
+	if s == nil || s.config == nil {
+		return errors.New("missing config")
+	}
+	for _, src := range s.config.Sources {
+		if strings.ToLower(strings.TrimSpace(src.Type)) != "calendar" || !sourceMatches(src, sourceName, calendarName) {
+			continue
+		}
+		if src.ReadOnly {
+			return fmt.Errorf("calendar %s/%s is readonly", sourceName, calendarName)
+		}
+		return nil
+	}
+	return fmt.Errorf("calendar %s/%s not found", sourceName, calendarName)
 }
 
 func (s *Store) calendarUserEmail(sourceName, calendarName string) string {
@@ -2734,19 +2825,62 @@ func (s *Store) calendarUserEmail(sourceName, calendarName string) string {
 	return ""
 }
 
+func (s *Store) calendarUserEmails(sourceName, calendarName string) []string {
+	if s == nil || s.config == nil {
+		return nil
+	}
+	for _, src := range s.config.Sources {
+		if strings.ToLower(strings.TrimSpace(src.Type)) == "calendar" && sourceMatches(src, sourceName, calendarName) {
+			return sourceUserEmails(src)
+		}
+	}
+	return nil
+}
+
+func (s *Store) calendarUserEmailForEvent(ev Event) string {
+	emails := s.calendarUserEmails(ev.Source, ev.Calendar)
+	for _, email := range emails {
+		if sameEmail(ev.Organizer, email) || attendeeStatusForEmail(ev.Attendees, email) != "" {
+			return email
+		}
+	}
+	if len(emails) > 0 {
+		return emails[0]
+	}
+	return ""
+}
+
 func sourceUserEmail(src config.Source) string {
-	if email := normalizeEmail(src.Email); email != "" {
-		return email
+	emails := sourceUserEmails(src)
+	if len(emails) > 0 {
+		return emails[0]
+	}
+	return ""
+}
+
+func sourceUserEmails(src config.Source) []string {
+	candidates := src.Addresses
+	if len(candidates) == 0 && src.Email != "" {
+		candidates = []string{src.Email}
+	}
+	out := make([]string, 0, len(candidates))
+	for _, candidate := range candidates {
+		if email := normalizeEmail(candidate); email != "" {
+			out = append(out, email)
+		}
+	}
+	if len(out) > 0 {
+		return out
 	}
 	candidate := normalizeEmail(filepath.Base(filepath.Clean(src.Path)))
 	if strings.Count(candidate, "@") != 1 {
-		return ""
+		return nil
 	}
 	parts := strings.SplitN(candidate, "@", 2)
 	if parts[0] == "" || parts[1] == "" {
-		return ""
+		return nil
 	}
-	return candidate
+	return []string{candidate}
 }
 
 func sourceID(src config.Source) string {
