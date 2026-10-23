@@ -69,11 +69,6 @@ Make sure your Go binary directory, usually `~/go/bin`, is in your `PATH`.
 
 ## Quick Start
 
-Initialize config:
-
-```bash
-go-khal config init
-```
 
 Generate config sources from local vdirsyncer storages:
 
@@ -162,6 +157,21 @@ Create a task directly in the same editor used by the interactive calendar:
 go-khal todo new
 ```
 
+## Omarchy Calendar
+
+Omarchy Calendar looks for an executable named `khal`. If the original khal is
+not installed, link go-khal under that name:
+
+```bash
+mkdir -p ~/.local/bin
+ln -s "$(command -v go-khal)" ~/.local/bin/khal
+```
+
+Ensure `~/.local/bin` is in the environment inherited by Quickshell. The
+`printformats` and JSON `list` commands implement only the argument forms used
+by [omarchy-calendar](https://github.com/derekross/omarchy-calendar), not the
+complete khal CLI.
+
 ## Screenshots
 
 ### Agenda with weekly minimap
@@ -182,51 +192,72 @@ go-khal todo new
 
 ## Configuration
 
-Default config path: `~/.config/go-khal/config.json`
+The canonical configuration is `${XDG_CONFIG_HOME:-$HOME/.config}/khal/config`,
+shared with khal and Omarchy Calendar:
 
-Example:
+```ini
+[calendars]
+[[personal]]
+path = ~/.local/share/calendars/personal
+color = '#4caf50'
+addresses = user@example.com
 
-```json
-{
-  "sources": [
-    {
-      "path": "/home/user/.local/share/calendars/personal",
-      "type": "calendar",
-      "display_name": "Personal",
-      "color": "#4caf50",
-      "email": "user@example.com"
-    },
-    {
-      "path": "/home/user/.local/share/calendars/birthdays",
-      "type": "calendar",
-      "display_name": "Birthdays",
-      "color": "#ff9800",
-      "hidden": true
-    },
-    {
-      "path": "/home/user/.local/share/contacts/personal",
-      "type": "addressbook",
-      "display_name": "Contacts"
-    }
-  ],
-  "default_view": "agenda",
-  "week_starts_on": "monday",
-  "time_format": "15:04",
-  "sidebar_width": 30,
-  "minimap_start_time": "08:00",
-  "minimap_end_time": "18:00",
-  "recurrence_lookback_months": 12,
-  "recurrence_lookahead_months": 24
-}
+[[work]]
+path = ~/.local/share/calendars/work
+readonly = true
+
+[[contacts]]
+path = ~/.local/share/contacts/personal
+type = birthdays
+
+[locale]
+firstweekday = 0
+timeformat = %H:%M
+dateformat = %Y-%m-%d
+longdateformat = %Y-%m-%d
+datetimeformat = %Y-%m-%d %H:%M
+longdatetimeformat = %Y-%m-%d %H:%M
+
+[go-khal]
+default_view = agenda
+sidebar_width = 30
+minimap_start_time = 08:00
+minimap_end_time = 18:00
+recurrence_lookback_months = 12
+recurrence_lookahead_months = 24
+hidden_calendar_paths =
 ```
+
+Supported calendar types are `calendar`, `discover`, and `birthdays`.
+`discover` expands khal-style glob paths, including `**`. Calendar `readonly`
+and `addresses` settings are honored. Unused khal sections and fields are
+ignored and preserved when go-khal updates the file.
+
+`firstweekday` accepts khal values `0` (Monday) through `6` (Sunday). Consumed
+date/time formats support `%%`, `%a`, `%A`, `%b`, `%B`, `%c`, `%d`, `%e`, `%F`,
+`%H`, `%I`, `%j`, `%m`, `%M`, `%p`, `%r`, `%R`, `%S`, `%T`, `%x`, `%X`, `%y`,
+`%Y`, `%z`, `%Z`, `%n`, and `%t`, plus supported `-`, `_`, and `0` padding
+forms. Unsupported directives produce an actionable error instead of silently
+rendering the wrong value. go-khal currently uses the host timezone and ignores
+khal's custom `local_timezone` and `default_timezone` settings.
+
+The former `~/.config/go-khal/config.json` format is deprecated and scheduled
+for removal in a future release. When the canonical khal config is absent,
+go-khal reads that JSON file without modifying it. The next config-mutating
+command creates the canonical khal config and leaves the JSON file untouched.
 
 ## Notes
 
-- Source paths must be absolute paths to folders that directly contain `.ics` or `.vcf` files.
-- go-khal does not recurse into source subfolders. Configure each concrete calendar or addressbook folder as its own source.
-- `go-khal config from-vdirsyncer` reads vdirsyncer local filesystem storages and adds each discovered concrete vdir folder as a source.
-- Calendar display name/color are read from `displayname` or `.displayname`, and `color` or `.color` when present.
-- Hidden calendars are excluded from agenda, details, editor lists, and todo listings.
-- Events and tasks are created/updated/deleted directly in source `.ics` files.
-- Address-book `.vcf` files are parsed for attendee suggestions.
+- Paths expand `~` and environment variables. Direct `calendar` and `birthdays`
+  paths name one folder; `discover` paths expand matching calendar folders.
+- `go-khal config from-vdirsyncer` upserts discovered concrete vdir folders
+  without removing unmatched khal calendars.
+- Calendar display name/color are read from `displayname` or `.displayname`,
+  and `color` or `.color` when present.
+- Hidden calendars are excluded from agenda, details, editor lists, todos, and
+  Omarchy JSON output.
+- Readonly calendars remain visible but are excluded from every write path.
+- Events and tasks are created, updated, and deleted directly in source `.ics`
+  files.
+- Birthday `.vcf` files are also used for attendee suggestions.
 - Notifications are written as display alarms.
