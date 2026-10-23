@@ -67,6 +67,12 @@ go install github.com/hsanson/go-khal@latest
 
 Make sure your Go binary directory, usually `~/go/bin`, is in your `PATH`.
 
+Print the application and build toolchain versions:
+
+```bash
+go-khal version
+```
+
 ## Quick Start
 
 

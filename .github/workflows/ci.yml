@@ -77,7 +77,7 @@ jobs:
             name="go-khal_${VERSION}_${os}_${arch}"
             bin="go-khal${ext}"
 
-            GOOS="$os" GOARCH="$arch" go build -trimpath -ldflags "-s -w" -o "dist/${bin}" .
+            GOOS="$os" GOARCH="$arch" go build -trimpath -ldflags "-s -w -X github.com/hsanson/go-khal/cmd.version=${VERSION}" -o "dist/${bin}" .
 
             if [ "$os" = "windows" ]; then
               (cd dist && zip "${name}.zip" "${bin}")

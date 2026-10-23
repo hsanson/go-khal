@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -132,5 +133,22 @@ timeformat = %I:%M %p
 	}, "\n")
 	if stdout.String() != want {
 		t.Fatalf("printformats output:\n%s\nwant:\n%s", stdout.String(), want)
+	}
+}
+
+func TestVersionCommand(t *testing.T) {
+	oldVersion := version
+	version = "v1.2.3"
+	t.Cleanup(func() { version = oldVersion })
+
+	command := newVersionCommand()
+	var stdout bytes.Buffer
+	command.SetOut(&stdout)
+	if err := command.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	want := "go-khal v1.2.3 (" + runtime.Version() + ")\n"
+	if stdout.String() != want {
+		t.Fatalf("version output = %q, want %q", stdout.String(), want)
 	}
 }
