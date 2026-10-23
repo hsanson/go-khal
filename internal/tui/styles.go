@@ -13,6 +13,7 @@ type Styles struct {
 	Container       lipgloss.Style
 	Sidebar         lipgloss.Style
 	MainPanel       lipgloss.Style
+	FocusedPanel    lipgloss.Style
 	PanelTitle      lipgloss.Style
 	CalendarItem    lipgloss.Style
 	DayHeader       lipgloss.Style
@@ -49,6 +50,7 @@ func DefaultStyles() Styles {
 		Container:       lipgloss.NewStyle().Padding(1, 1),
 		Sidebar:         lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("240")).Padding(0, 1),
 		MainPanel:       lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("240")).Padding(0, 1),
+		FocusedPanel:    lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("117")).Padding(0, 1),
 		PanelTitle:      lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("153")),
 		CalendarItem:    lipgloss.NewStyle(),
 		DayHeader:       lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("151")),

@@ -33,6 +33,10 @@ func TestMouseClickSelectsRenderedCalendarDay(t *testing.T) {
 	if got := m.selected.Format("2006-01-02"); got != "2026-10-06" {
 		t.Fatalf("clicked date = %s, want 2026-10-06", got)
 	}
+	if m.focusedPane != paneCalendar {
+		t.Fatalf("calendar click focus = %v, want Calendar", m.focusedPane)
+	}
+
 }
 
 func TestMouseCalendarHeaderNavigatesMonthsAndYears(t *testing.T) {
@@ -64,7 +68,7 @@ func TestMouseCalendarHeaderNavigatesMonthsAndYears(t *testing.T) {
 func TestMouseWheelAndUnsupportedActions(t *testing.T) {
 	data := calendar.Dataset{Calendars: []calendar.Calendar{{Source: "src", Name: "a"}, {Source: "src", Name: "b"}}}
 	m := NewModel(&config.Config{SidebarWidth: 30}, data, nil)
-	m.focusCalendarPane = true
+	m.focusedPane = paneCalendars
 
 	updated, _ := m.Update(tea.MouseMsg{Button: tea.MouseButtonWheelDown})
 	m = *modelValue(t, updated)
@@ -95,8 +99,8 @@ func TestMouseClicksCalendarAndAgendaRows(t *testing.T) {
 	key := calendarKey(cal.Source, cal.Name)
 
 	m = clickRenderedHit(t, m, mouseCalendarRow, 0, "")
-	if m.calendarVisibility[key] {
-		t.Fatal("calendar row click did not hide the calendar")
+	if m.calendarVisibility[key] || m.focusedPane != paneCalendars {
+		t.Fatal("calendar row click did not hide the calendar and focus Calendars")
 	}
 	m = clickRenderedHit(t, m, mouseCalendarRow, 0, "")
 	if !m.calendarVisibility[key] {
@@ -104,8 +108,12 @@ func TestMouseClicksCalendarAndAgendaRows(t *testing.T) {
 	}
 
 	m = clickRenderedHit(t, m, mouseAgendaItem, -1, "")
-	if m.eventForm == nil || m.eventForm.mode != "edit" {
-		t.Fatal("agenda row click did not open the event editor")
+	if m.eventForm != nil || m.focusedPane != paneAgenda {
+		t.Fatal("first agenda row click should select the event and focus Agenda")
+	}
+	m = clickRenderedHit(t, m, mouseAgendaItem, -1, "")
+	if m.focusedPane != paneDetails {
+		t.Fatal("second agenda row click should focus Details")
 	}
 }
 
@@ -446,8 +454,8 @@ func TestDeleteActionConfirmsAndDeletesTask(t *testing.T) {
 	m = clickRenderedHit(t, m, mouseTodoEditorRow, deleteRow, "")
 	m = clickRenderedHit(t, m, mouseDeleteConfirm, -1, "true")
 
-	if m.deleteConfirm != nil || m.todoForm != nil || !m.focusMain {
-		t.Fatal("confirmed deletion did not close the task form and return to the list")
+	if m.deleteConfirm != nil || m.todoForm != nil || m.focusedPane != paneAgenda {
+		t.Fatal("confirmed deletion did not close the task form and return to Agenda")
 	}
 	if _, err := store.FindTodo(todo.UID); err == nil {
 		t.Fatal("confirmed task still exists")

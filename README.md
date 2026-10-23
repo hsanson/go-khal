@@ -151,6 +151,17 @@ Common agenda and task shortcuts appear in the bottom legend. Less common
 navigation, paging, and detail-pane shortcuts appear in contextual shortcut
 help `?`.
 
+The workspace contains four panes: Calendar, Agenda/Tasks, Details, and
+Calendars. `Tab` moves clockwise between panes, and `Shift-Tab` moves
+counterclockwise. The active pane has a highlighted border.
+
+- Calendar: use `h/j/k/l` to move left/down/up/right, `Enter` to focus the
+  selected date in Agenda/Tasks, and `n` to create an item.
+- Agenda/Tasks: use `Enter` to focus Details, `e` to edit, `n` to create, and
+  `h` to return to Calendar. In Tasks mode, `Space` toggles completion.
+- Details: use `e` to edit and `n` to create.
+- Calendars: use `j/k` to select a calendar and `Space` to hide or show it.
+
 Open directly in task mode:
 
 ```bash

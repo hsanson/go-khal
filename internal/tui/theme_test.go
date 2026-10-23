@@ -72,6 +72,30 @@ func TestActionButtonsUseSharedStates(t *testing.T) {
 	}
 }
 
+func TestPaneBordersUseFocusColors(t *testing.T) {
+	palette, err := parseOmarchyPalette([]byte(testOmarchyPalette("#123456")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	theme := stylesFromOmarchyPalette(palette)
+	for _, test := range []struct {
+		name  string
+		style lipgloss.Style
+		want  string
+	}{
+		{"themed inactive", theme.styles.MainPanel, "#304860"},
+		{"themed focused", theme.styles.FocusedPanel, "#f2fcff"},
+		{"fallback inactive", DefaultStyles().MainPanel, "240"},
+		{"fallback focused", DefaultStyles().FocusedPanel, "117"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := styleBorderForeground(test.style); got != test.want {
+				t.Fatalf("border color = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
 func TestOmarchySurfacesUseTerminalDefaultBackground(t *testing.T) {
 	palette, err := parseOmarchyPalette([]byte(testOmarchyPalette("#123456")))
 	if err != nil {
@@ -82,6 +106,7 @@ func TestOmarchySurfacesUseTerminalDefaultBackground(t *testing.T) {
 		"container": theme.styles.Container,
 		"sidebar":   theme.styles.Sidebar,
 		"main":      theme.styles.MainPanel,
+		"focused":   theme.styles.FocusedPanel,
 		"overlay":   theme.styles.Overlay,
 		"help":      theme.styles.HelpOverlay,
 	} {
@@ -101,6 +126,11 @@ func styleForeground(style lipgloss.Style) string {
 
 func styleBackground(style lipgloss.Style) string {
 	color, _ := style.GetBackground().(lipgloss.Color)
+	return string(color)
+}
+
+func styleBorderForeground(style lipgloss.Style) string {
+	color, _ := style.GetBorderTopForeground().(lipgloss.Color)
 	return string(color)
 }
 

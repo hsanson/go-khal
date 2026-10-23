@@ -28,11 +28,9 @@ type Model struct {
 	calendarVisibility map[string]bool
 	calendarOrder      []string
 	weekViewportStart  time.Time
-	focusCalendarPane  bool
+	focusedPane        workspacePane
 	calendarCursor     int
 	calendarOffset     int
-	focusMain          bool
-	focusDetails       bool
 	showAllMode        bool
 	showTasksMode      bool
 	showMinimap        bool
@@ -51,7 +49,14 @@ type Model struct {
 	mouseMainY         int
 }
 
+type workspacePane uint8
+
 const (
+	paneCalendar workspacePane = iota
+	paneAgenda
+	paneDetails
+	paneCalendars
+
 	calendarKeySeparator    = "\x1f"
 	temporaryFreeAgendaMode = "temporary-free"
 )
@@ -238,7 +243,7 @@ func NewModel(cfg *config.Config, data calendar.Dataset, store *calendar.Store) 
 		weekViewportStart:  start,
 		calendarVisibility: vis,
 		calendarOrder:      order,
-		focusMain:          true,
+		focusedPane:        paneAgenda,
 		showMinimap:        true,
 		mouse:              &mouseState{},
 	}
@@ -275,8 +280,6 @@ func NewEventImportModel(cfg *config.Config, data calendar.Dataset, store *calen
 		m.eventForm.targetEvent = &target
 		m.eventForm.timingDirty = true
 	}
-	m.focusDetails = true
-	m.focusMain = false
 	m.eventForm.form.UpdateFieldPositions()
 	return m
 }
@@ -338,14 +341,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateTodoEditor(msg)
 		}
 
-		if m.focusDetails {
-			if key == "ctrl+c" {
-				return m, tea.Quit
+		if key == "tab" || key == "shift+tab" {
+			delta := 1
+			if key == "shift+tab" {
+				delta = -1
 			}
+			m.moveWorkspaceFocus(delta)
+			return m, nil
+		}
+		if key == "ctrl+c" {
+			return m, tea.Quit
+		}
+
+		switch m.focusedPane {
+		case paneDetails:
 			switch key {
 			case "esc", "q", "enter", " ":
-				m.focusDetails = false
-				m.focusMain = true
+				m.focusedPane = paneAgenda
 				m.detailScroll = 0
 			case "e":
 				if m.openEditFormForSelected() {
@@ -354,6 +366,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 					return m, m.todoForm.form.Init()
 				}
+			case "n":
+				return m, m.openNewItem()
 			case "ctrl+d":
 				if m.openDeleteConfirmForSelected() {
 					return m, m.deleteConfirm.form.Init()
@@ -366,11 +380,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 			return m, nil
-		}
-		if m.focusCalendarPane {
-			if key == "ctrl+c" {
-				return m, tea.Quit
-			}
+
+		case paneCalendars:
 			switch key {
 			case "j", "down":
 				m.moveCalendarCursor(1)
@@ -384,23 +395,46 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.ensureEventSelectionValid()
 				}
 			case "esc", "q", "h", "c":
-				m.focusCalendarPane = false
-				m.focusMain = true
+				m.focusedPane = paneAgenda
 			}
 			m.ensureCalendarCursorVisible(m.calendarPaneHeight())
 			return m, nil
-		}
-		if key == "q" || key == "esc" || key == "ctrl+c" {
-			return m, tea.Quit
-		}
-		if key == "c" {
-			m.focusCalendarPane = true
-			m.focusMain = false
-			m.ensureCalendarCursorVisible(m.calendarPaneHeight())
+
+		case paneCalendar:
+			switch key {
+			case "h", "left":
+				m.navigateToDate(m.selected.AddDate(0, 0, -1))
+			case "l", "right":
+				m.navigateToDate(m.selected.AddDate(0, 0, 1))
+			case "j", "down":
+				m.navigateToDate(m.selected.AddDate(0, 0, 7))
+			case "k", "up":
+				m.navigateToDate(m.selected.AddDate(0, 0, -7))
+			case "ctrl+k":
+				m.navigateToDate(addMonthsClamped(m.selected, -1))
+			case "ctrl+j":
+				m.navigateToDate(addMonthsClamped(m.selected, 1))
+			case "ctrl+h":
+				m.navigateToDate(addMonthsClamped(m.selected, -12))
+			case "ctrl+l":
+				m.navigateToDate(addMonthsClamped(m.selected, 12))
+			case "enter":
+				m.focusAgendaAtSelectedDate()
+			case "n":
+				return m, m.openNewItem()
+			case "esc", "q":
+				m.focusedPane = paneAgenda
+			case "c":
+				m.focusedPane = paneCalendars
+				m.ensureCalendarCursorVisible(m.calendarPaneHeight())
+			}
 			m.ensureEventSelectionValid()
 			return m, nil
 		}
 
+		if key == "q" || key == "esc" {
+			return m, tea.Quit
+		}
 		switch key {
 		case "j", "down":
 			m.moveEventCursor(1)
@@ -419,17 +453,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "ctrl+l":
 			m.navigateToDate(addMonthsClamped(m.selected, 12))
 		case "h", "left":
-			m.navigateToDate(m.selected.AddDate(0, 0, -1))
+			m.focusedPane = paneCalendar
 		case "l", "right":
 			m.navigateToDate(m.selected.AddDate(0, 0, 1))
 		case "n":
-			if m.showTasksMode {
-				m.openTodoFormNew()
-				return m, m.todoForm.form.Init()
-			}
-			m.openEventFormNew()
-			return m, m.eventForm.form.Init()
-		case "e", "enter":
+			return m, m.openNewItem()
+		case "e":
 			if m.openEditFormForSelected() {
 				if m.eventForm != nil {
 					return m, m.initCurrentEventForm()
@@ -437,6 +466,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.todoForm != nil {
 					return m, m.todoForm.form.Init()
 				}
+			}
+		case "enter":
+			if len(m.agendaItems()) > 0 {
+				m.focusedPane = paneDetails
+				m.detailScroll = 0
 			}
 		case "ctrl+d":
 			if m.openDeleteConfirmForSelected() {
@@ -452,7 +486,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if !m.showTasksMode {
 				m.showMinimap = !m.showMinimap
 			}
-		case "x", "d":
+		case " ", "x", "d":
 			if m.showTasksMode {
 				m.actionErr = m.toggleSelectedTodoDone()
 			}
@@ -472,8 +506,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.selected = now
 			m.agendaStart = dayStart(now)
 			m.weekViewportStart = calendar.StartOfWeek(now, m.weekStart())
-			m.focusMain = true
-			m.focusDetails = false
 			if m.showTasksMode {
 				m.jumpTaskCursorToToday(now)
 			} else {
@@ -485,12 +517,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.openViewForSelected() {
 				return m, nil
 			}
-		case " ":
-			if len(m.agendaItems()) > 0 {
-				m.focusDetails = true
-				m.focusMain = false
-				m.detailScroll = 0
-			}
+		case "c":
+			m.focusedPane = paneCalendars
+			m.ensureCalendarCursorVisible(m.calendarPaneHeight())
 		}
 		m.ensureEventSelectionValid()
 	}
@@ -504,6 +533,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.updateActiveTodoEditorForm(msg)
 	}
 	return m, nil
+}
+
+func (m *Model) moveWorkspaceFocus(delta int) {
+	next := (int(m.focusedPane) + delta) % 4
+	if next < 0 {
+		next += 4
+	}
+	m.focusedPane = workspacePane(next)
+	if m.focusedPane == paneCalendars {
+		m.ensureCalendarCursorVisible(m.calendarPaneHeight())
+	}
 }
 
 func (m *Model) updateDeleteConfirm(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -570,8 +610,6 @@ func (m *Model) closeDeleteConfirm() {
 	if returnToEditor {
 		return
 	}
-	m.focusDetails = false
-	m.focusMain = true
 }
 
 func (m Model) View() string {
@@ -585,17 +623,20 @@ func (m Model) View() string {
 		m.height = 42
 	}
 
-	leftWidth := m.sidebarWidth()
-	rightWidth := max(50, m.width-leftWidth-5)
-	left := m.renderLeftPanel(leftWidth)
-	m.mouseMainX = 1 + lipgloss.Width(left)
+	workspaceWidth := max(8, m.width-2)
+	leftWidth := clamp(m.sidebarWidth(), 4, workspaceWidth-4)
+	rightWidth := workspaceWidth - leftWidth
+	panelHeight := max(8, m.height-4)
+	left := m.renderLeftPanel(leftWidth, panelHeight)
+	m.mouseMainX = 1 + leftWidth
 	m.mouseMainY = 1
-	right := m.renderMainPanel(rightWidth)
+	right := m.renderMainPanel(rightWidth, panelHeight)
 
 	root := lipgloss.JoinHorizontal(lipgloss.Top, left, right)
 	content := root
 	if legend := m.shortcutsLegend(); legend != "" {
-		content = lipgloss.JoinVertical(lipgloss.Left, root, "", m.styles.Subtle.Render(legend))
+		footer := m.styles.Subtle.MaxWidth(workspaceWidth).Render(legend)
+		content = lipgloss.JoinVertical(lipgloss.Left, root, "", footer)
 	}
 	base := m.styles.Container.Render(content)
 	if m.showHelpOverlay {
@@ -605,39 +646,51 @@ func (m Model) View() string {
 	return base
 }
 
-func (m Model) renderLeftPanel(width int) string {
-	panelHeight := m.height - 6
-	if panelHeight < 8 {
-		panelHeight = 8
+func (m Model) renderPane(content string, width, height int, pane workspacePane) string {
+	style := m.styles.MainPanel
+	if m.focusedPane == pane {
+		style = m.styles.FocusedPanel
 	}
-	topHeight := panelHeight * 2 / 3
-	if topHeight < 8 {
-		topHeight = 8
+	return style.
+		Width(max(2, width-2)).
+		Height(max(1, height-2)).
+		MaxWidth(width).
+		MaxHeight(height).
+		Render(content)
+}
+
+func workspacePaneHeights(panelHeight int) (top, bottom int) {
+	top = panelHeight * 3 / 5
+	if panelHeight >= 10 {
+		top = clamp(top, 6, panelHeight-4)
+	} else {
+		top = panelHeight / 2
 	}
-	bottomHeight := panelHeight - topHeight - 1
-	if bottomHeight < 4 {
-		bottomHeight = 4
-		topHeight = panelHeight - bottomHeight - 1
-	}
+	return top, panelHeight - top
+}
+
+func (m Model) renderLeftPanel(width, panelHeight int) string {
+	topHeight, bottomHeight := workspacePaneHeights(panelHeight)
+	innerWidth := max(1, width-4)
+
+	m.addMouseHit(mouseHit{rect: mouseRect{x: 1, y: 1, width: width, height: topHeight}, kind: mouseCalendarPane})
+	m.addMouseHit(mouseHit{rect: mouseRect{x: 1, y: 1 + topHeight, width: width, height: bottomHeight}, kind: mouseCalendarsPane})
+
 	header := m.styles.PanelTitle.Render("Calendar  « ‹ › »")
 	m.addMouseHit(mouseHit{rect: mouseRect{x: 13, y: 2, width: 1, height: 1}, kind: mouseCalendarPreviousYear})
 	m.addMouseHit(mouseHit{rect: mouseRect{x: 15, y: 2, width: 1, height: 1}, kind: mouseCalendarPreviousMonth})
 	m.addMouseHit(mouseHit{rect: mouseRect{x: 17, y: 2, width: 1, height: 1}, kind: mouseCalendarNextMonth})
 	m.addMouseHit(mouseHit{rect: mouseRect{x: 19, y: 2, width: 1, height: 1}, kind: mouseCalendarNextYear})
-	weeks := renderWeekViewport(m.weekViewportStart, m.selected, filteredEvents(m.data.Events, m.calendarVisibility, true), width-2, max(3, topHeight-2), m.weekStart(), m.styles, func(x, y int, day time.Time) {
-		m.addMouseHit(mouseHit{rect: mouseRect{x: 3 + x, y: 3 + y, width: min(3, width-2-x), height: 1}, kind: mouseCalendarDay, day: day})
+	weeks := renderWeekViewport(m.weekViewportStart, m.selected, filteredEvents(m.data.Events, m.calendarVisibility, true), innerWidth, max(1, topHeight-3), m.weekStart(), m.styles, func(x, y int, day time.Time) {
+		m.addMouseHit(mouseHit{rect: mouseRect{x: 3 + x, y: 3 + y, width: min(3, innerWidth-x), height: 1}, kind: mouseCalendarDay, day: day})
 	})
-	calPane := m.renderCalendarListPane(width-2, bottomHeight, 3, 4+lipgloss.Height(weeks))
-	divider := m.styles.Subtle.Render(strings.Repeat("-", max(8, width-2)))
-	panel := lipgloss.JoinVertical(lipgloss.Left, header, weeks, divider, calPane)
-	return m.styles.Sidebar.Width(width).Height(panelHeight).Render(panel)
+	calendarPane := m.renderPane(lipgloss.JoinVertical(lipgloss.Left, header, weeks), width, topHeight, paneCalendar)
+	calendars := m.renderCalendarListPane(innerWidth, max(1, bottomHeight-2), 3, 2+topHeight)
+	calendarsPane := m.renderPane(calendars, width, bottomHeight, paneCalendars)
+	return lipgloss.JoinVertical(lipgloss.Left, calendarPane, calendarsPane)
 }
 
-func (m Model) renderMainPanel(width int) string {
-	panelHeight := m.height - 6
-	if panelHeight < 10 {
-		panelHeight = 10
-	}
+func (m Model) renderMainPanel(width, panelHeight int) string {
 	if m.deleteConfirm != nil {
 		return m.renderDeleteConfirmMainPanel(width, panelHeight)
 	}
@@ -648,31 +701,20 @@ func (m Model) renderMainPanel(width int) string {
 		return m.renderTodoFormMainPanel(width, panelHeight)
 	}
 
-	items := m.agendaItems()
-	available := panelHeight - 4
-	if available < 8 {
-		available = 8
-	}
-	topHeight := available * 3 / 5
-	if topHeight < 5 {
-		topHeight = 6
-	}
-	bottomHeight := available - topHeight - 1
-	if bottomHeight < 4 {
-		bottomHeight = 4
-		topHeight = available - bottomHeight - 1
-		if topHeight < 3 {
-			topHeight = 3
-		}
-	}
+	topHeight, bottomHeight := workspacePaneHeights(panelHeight)
+	innerWidth := max(1, width-4)
+	agendaHeight := max(1, topHeight-4)
 
-	innerWidth := width - 2
+	m.addMouseHit(mouseHit{rect: mouseRect{x: m.mouseMainX, y: m.mouseMainY, width: width, height: topHeight}, kind: mouseAgendaPane})
+	m.addMouseHit(mouseHit{rect: mouseRect{x: m.mouseMainX, y: m.mouseMainY + topHeight, width: width, height: bottomHeight}, kind: mouseDetailsPane})
+
+	items := m.agendaItems()
 	agendaWidth := innerWidth
-	minimap, showMinimap := m.minimapLayout(innerWidth, topHeight)
+	minimap, showMinimap := m.minimapLayout(innerWidth, agendaHeight)
 	if showMinimap {
 		agendaWidth -= minimap.width + minimapGap
 	}
-	rendered := renderAgendaFromItems(items, agendaWidth, topHeight, m.cfg.TimeFormat, m.styles, m.eventCursor, m.eventListOffset, true)
+	rendered := renderAgendaFromItems(items, agendaWidth, agendaHeight, m.cfg.TimeFormat, m.styles, m.eventCursor, m.eventListOffset, true)
 	for _, line := range rendered.ItemLines {
 		m.addMouseHit(mouseHit{
 			rect:  mouseRect{x: m.mouseMainX + 2, y: m.mouseMainY + 3 + line.Y, width: agendaWidth, height: 1},
@@ -680,12 +722,11 @@ func (m Model) renderMainPanel(width int) string {
 			index: line.Index,
 		})
 	}
-	top := lipgloss.NewStyle().Width(agendaWidth).Height(topHeight).MaxHeight(topHeight).Render(rendered.Text)
+	top := lipgloss.NewStyle().Width(agendaWidth).Height(agendaHeight).MaxHeight(agendaHeight).Render(rendered.Text)
 	if showMinimap {
 		minimapView := m.renderMinimap(minimap, m.mouseMainX+2+agendaWidth+minimapGap, m.mouseMainY+3)
 		top = lipgloss.JoinHorizontal(lipgloss.Top, top, strings.Repeat(" ", minimapGap), minimapView)
 	}
-	detail := m.renderEventDetailsPane(innerWidth, bottomHeight)
 	header := m.styles.PanelTitle.Render(fmt.Sprintf("Agenda from %s", m.agendaStart.Format("Mon Jan 2, 2006")))
 	if m.showTasksMode {
 		header = m.styles.PanelTitle.Render("Tasks")
@@ -700,14 +741,21 @@ func (m Model) renderMainPanel(width int) string {
 	if strings.TrimSpace(m.actionErr) != "" {
 		header = lipgloss.JoinVertical(lipgloss.Left, header, m.styles.Error.Render("Error: "+m.actionErr))
 	}
-	separator := m.styles.Subtle.Render(strings.Repeat("-", max(10, width-2)))
-	content := lipgloss.JoinVertical(lipgloss.Left, header, "", top, separator, detail)
-	return m.styles.MainPanel.Width(width).Height(panelHeight).Render(content)
+	agenda := m.renderPane(lipgloss.JoinVertical(lipgloss.Left, header, "", top), width, topHeight, paneAgenda)
+
+	detailBody := m.renderEventDetailsPane(innerWidth, max(1, bottomHeight-3))
+	details := m.renderPane(
+		lipgloss.JoinVertical(lipgloss.Left, m.styles.PanelTitle.Render("Details"), detailBody),
+		width,
+		bottomHeight,
+		paneDetails,
+	)
+	return lipgloss.JoinVertical(lipgloss.Left, agenda, details)
 }
 
 func (m Model) renderEventFormMainPanel(width, panelHeight int) string {
 	if m.eventForm == nil {
-		return m.styles.MainPanel.Width(width).Height(panelHeight).Render("")
+		return m.renderPane("", width, panelHeight, m.focusedPane)
 	}
 	header := m.styles.PanelTitle.Render("Event")
 	if m.eventForm.mode == "edit" {
@@ -716,12 +764,12 @@ func (m Model) renderEventFormMainPanel(width, panelHeight int) string {
 	if label := eventEditScopeLabel(m.eventForm.editScope); m.eventForm.mode == "edit" && label != "" {
 		header = lipgloss.JoinHorizontal(lipgloss.Left, header, m.styles.Subtle.Render("  ["+label+"]"))
 	}
-	body := m.renderEventEditorList(width-2, panelHeight-2)
+	body := m.renderEventEditorList(max(1, width-4), max(1, panelHeight-4))
 	if strings.TrimSpace(m.eventForm.errMsg) != "" {
 		body = lipgloss.JoinVertical(lipgloss.Left, m.styles.Error.Render("Error: "+m.eventForm.errMsg), "", body)
 	}
 	content := lipgloss.JoinVertical(lipgloss.Left, header, "", body)
-	panel := m.styles.MainPanel.Width(width).Height(panelHeight).Render(content)
+	panel := m.renderPane(content, width, panelHeight, m.focusedPane)
 	if m.eventForm.attendeeManager != nil {
 		modal, hits := m.renderAttendeeManager(min(78, max(36, width-8)), max(9, min(panelHeight-4, (panelHeight*2)/3)))
 		modal, hits = addDialogActions(modal, hits, m.eventForm.dialogFocus, m.styles)
@@ -774,18 +822,18 @@ func (m Model) renderEventFormMainPanel(width, panelHeight int) string {
 
 func (m Model) renderTodoFormMainPanel(width, panelHeight int) string {
 	if m.todoForm == nil {
-		return m.styles.MainPanel.Width(width).Height(panelHeight).Render("")
+		return m.renderPane("", width, panelHeight, m.focusedPane)
 	}
 	header := m.styles.PanelTitle.Render("Task")
 	if m.todoForm.mode == "edit" {
 		header = m.styles.PanelTitle.Render("Edit Task")
 	}
-	body := m.renderTodoEditorList(width-2, panelHeight-2)
+	body := m.renderTodoEditorList(max(1, width-4), max(1, panelHeight-4))
 	if strings.TrimSpace(m.todoForm.errMsg) != "" {
 		body = lipgloss.JoinVertical(lipgloss.Left, m.styles.Error.Render("Error: "+m.todoForm.errMsg), "", body)
 	}
 	content := lipgloss.JoinVertical(lipgloss.Left, header, "", body)
-	panel := m.styles.MainPanel.Width(width).Height(panelHeight).Render(content)
+	panel := m.renderPane(content, width, panelHeight, m.focusedPane)
 	if m.todoForm.choicePicker != nil {
 		modal, hits := m.todoForm.choicePicker.render(m.styles)
 		modal, hits = addDialogActions(modal, hits, m.todoForm.dialogFocus, m.styles)
@@ -815,7 +863,7 @@ func (m Model) renderTodoFormMainPanel(width, panelHeight int) string {
 
 func (m Model) renderDeleteConfirmMainPanel(width, panelHeight int) string {
 	if m.deleteConfirm == nil {
-		return m.styles.MainPanel.Width(width).Height(panelHeight).Render("")
+		return m.renderPane("", width, panelHeight, m.focusedPane)
 	}
 	header := m.styles.PanelTitle.Render("Confirm Delete")
 	formView, hits := deleteWorkflowView(m.deleteConfirm, m.styles)
@@ -826,7 +874,7 @@ func (m Model) renderDeleteConfirmMainPanel(width, panelHeight int) string {
 	}
 	m.addOffsetMouseHits(hits, m.mouseMainX+2, hitY)
 	content := lipgloss.JoinVertical(lipgloss.Left, header, "", formView)
-	return m.styles.MainPanel.Width(width).Height(panelHeight).Render(content)
+	return m.renderPane(content, width, panelHeight, m.focusedPane)
 }
 
 func centeredOverlayBox(modal string, width int, styles Styles) string {
@@ -1215,8 +1263,6 @@ func (m *Model) updateEventEditor(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		switch msg.String() {
 		case "esc", "q":
 			m.eventForm = nil
-			m.focusDetails = false
-			m.focusMain = true
 		case "e":
 			view := m.eventForm
 			m.eventForm = nil
@@ -1305,7 +1351,7 @@ func (m *Model) updateEventEditor(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		switch msg.String() {
 		case "esc", "ctrl+c":
-			s.cancelActive()
+			m.cancelActiveEventEditor()
 			return m, nil
 		}
 		return m, m.updateActiveEventEditorForm(msg)
@@ -1349,8 +1395,6 @@ func (m *Model) updateTodoEditor(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		switch msg.String() {
 		case "esc", "q":
 			m.todoForm = nil
-			m.focusDetails = false
-			m.focusMain = true
 		case "e":
 			view := m.todoForm
 			m.todoForm = nil
@@ -1501,7 +1545,7 @@ func (m *Model) updateActiveEventEditorForm(msg tea.Msg) tea.Cmd {
 		s.activeForm = fm
 	}
 	if s.activeForm.State == huh.StateAborted {
-		s.cancelActive()
+		m.cancelActiveEventEditor()
 		return nil
 	}
 	if s.activeForm.State == huh.StateCompleted {
@@ -1521,6 +1565,18 @@ func (m *Model) updateActiveEventEditorForm(msg tea.Msg) tea.Cmd {
 		return nil
 	}
 	return cmd
+}
+
+func (m *Model) cancelActiveEventEditor() {
+	s := m.eventForm
+	if s == nil {
+		return
+	}
+	if s.activeKey == "edit-scope" {
+		m.closeEventEditor()
+		return
+	}
+	s.cancelActive()
 }
 
 type editorChoice struct {
@@ -2630,7 +2686,7 @@ func (m Model) renderEventDetailsFor(ev calendar.Event, width, height int) strin
 	if len(ev.Alarms) > 0 {
 		meta = append(meta, "", m.styles.detailLine("󰀠", "Notifications", formatAlarms(ev.Alarms), width))
 	}
-	return m.renderGroupedDetails("Details", meta, "", width, height)
+	return m.renderGroupedDetails(meta, "", width, height)
 }
 
 func (m Model) renderTodoDetailsFor(todo calendar.Todo, mode string, width, height int) string {
@@ -2671,26 +2727,19 @@ func (m Model) renderTodoDetailsFor(todo calendar.Todo, mode string, width, heig
 		}
 		meta = append(meta, m.styles.detailLine("", "Priority", priorityLabel, width))
 	}
-	return m.renderGroupedDetails("Details", meta, todo.Description, width, height)
+	return m.renderGroupedDetails(meta, todo.Description, width, height)
 }
 
-func (m Model) renderGroupedDetails(title string, meta []string, description string, width, height int) string {
-	width = max(10, width)
+func (m Model) renderGroupedDetails(meta []string, description string, width, height int) string {
+	width = max(1, width)
 	height = max(1, height)
-	header := m.styles.Subtle.Render(title)
-	bodyHeight := max(0, height-1)
-	if bodyHeight == 0 {
-		return lipgloss.NewStyle().Width(width).Height(height).Render(header)
-	}
-
 	meta = compactBlankLines(meta)
 	descLines := detailDescriptionLines(m.styles, description, width)
 	if len(descLines) > 0 {
 		meta = compactBlankLines(append(meta, append([]string{""}, descLines...)...))
 	}
-	metaView := renderScrolledLines(meta, m.detailScroll, bodyHeight)
-	block := lipgloss.JoinVertical(lipgloss.Left, header, metaView)
-	return lipgloss.NewStyle().Width(width).Height(height).MaxHeight(height).Render(block)
+	body := renderScrolledLines(meta, m.detailScroll, height)
+	return lipgloss.NewStyle().Width(width).Height(height).MaxHeight(height).Render(body)
 }
 
 func (styles Styles) detailLine(glyph, label, value string, width int) string {
@@ -2861,7 +2910,8 @@ func (m Model) renderCalendarListPane(width, height, offsetX, offsetY int) strin
 		height = 3
 	}
 	if len(m.calendarOrder) == 0 {
-		return lipgloss.NewStyle().Width(width).Height(height).Render(m.styles.Subtle.Render("No calendars"))
+		content := lipgloss.JoinVertical(lipgloss.Left, m.styles.PanelTitle.Render("Calendars"), m.styles.Subtle.Render("No calendars"))
+		return lipgloss.NewStyle().Width(width).Height(height).Render(content)
 	}
 	start := m.calendarOffset
 	if start < 0 {
@@ -2883,7 +2933,7 @@ func (m Model) renderCalendarListPane(width, height, offsetX, offsetY int) strin
 			continue
 		}
 		prefix := "  "
-		if m.focusCalendarPane && i == m.calendarCursor {
+		if m.focusedPane == paneCalendars && i == m.calendarCursor {
 			prefix = "> "
 		}
 		stateIcon := ""
@@ -2934,19 +2984,9 @@ func (m *Model) scrollForSelection() {
 }
 
 func (m Model) monthListHeightBudget() int {
-	if m.height <= 0 {
-		return 30
-	}
-	panelHeight := m.height - 6
-	if panelHeight < 8 {
-		panelHeight = 8
-	}
-	topHeight := panelHeight * 2 / 3
-	budget := topHeight - 2
-	if budget < 8 {
-		budget = 8
-	}
-	return budget
+	panelHeight := max(8, m.height-4)
+	topHeight, _ := workspacePaneHeights(panelHeight)
+	return max(1, topHeight-3)
 }
 
 func (m Model) visibleWeekCapacity(top time.Time) int {
@@ -3017,6 +3057,20 @@ func (m *Model) navigateToDate(date time.Time) {
 	m.scrollForSelection()
 }
 
+func (m *Model) focusAgendaAtSelectedDate() {
+	m.temporaryFreeStart = time.Time{}
+	m.agendaStart = dayStart(m.selected)
+	m.eventListOffset = 0
+	if m.showTasksMode {
+		m.jumpTaskCursorToDate(m.selected)
+	} else {
+		m.eventCursor = 0
+	}
+	m.focusedPane = paneAgenda
+	m.detailScroll = 0
+	m.ensureEventSelectionValid()
+}
+
 func (m *Model) selectMinimapEvent(eventIndex int, day time.Time) {
 	if eventIndex < 0 || eventIndex >= len(m.data.Events) {
 		return
@@ -3024,9 +3078,7 @@ func (m *Model) selectMinimapEvent(eventIndex int, day time.Time) {
 	target := &m.data.Events[eventIndex]
 	clickedDay := dayStart(day)
 	m.navigateToDate(clickedDay)
-	m.focusCalendarPane = false
-	m.focusDetails = false
-	m.focusMain = true
+	m.focusedPane = paneAgenda
 	m.detailScroll = 0
 	for i, item := range m.agendaItems() {
 		if item.Event != nil && item.Day.Equal(clickedDay) && sameEventOccurrence(item.Event, target) {
@@ -3040,9 +3092,7 @@ func (m *Model) selectMinimapEvent(eventIndex int, day time.Time) {
 func (m *Model) selectMinimapHour(start time.Time) {
 	m.navigateToDate(start)
 	m.temporaryFreeStart = start
-	m.focusCalendarPane = false
-	m.focusDetails = false
-	m.focusMain = true
+	m.focusedPane = paneAgenda
 	m.detailScroll = 0
 	for i, item := range m.agendaItems() {
 		if item.Mode == temporaryFreeAgendaMode {
@@ -3249,16 +3299,18 @@ func (m Model) shortcutsLegend() string {
 	if m.eventForm != nil || m.todoForm != nil {
 		return "[esc/q] Cancel  [ctrl+s] Save  [j/k] Next / Prev  [h/l/←/→] Change  [enter] Edit  [?] Help"
 	}
-	if m.focusCalendarPane {
-		return "[esc/q] Back  [j/k] Next / Previous  [enter/spc] Hide/Show  [?] Help"
-	}
-	if m.focusDetails {
-		return "[esc/q] Back  [j/k] Scroll  [enter/spc] Back  [e] Edit  [ctrl-d] Delete  [?] Help"
+	switch m.focusedPane {
+	case paneCalendar:
+		return "[esc/q] Back  [h/l] Day  [j/k] Week  [enter] Agenda  [n] New  [tab/s-tab] Pane  [?] Help"
+	case paneCalendars:
+		return "[esc/q] Back  [j/k] Calendar  [enter/spc] Hide/Show  [tab/s-tab] Pane  [?] Help"
+	case paneDetails:
+		return "[esc/q] Back  [j/k] Scroll  [e] Edit  [n] New  [tab/s-tab] Pane  [?] Help"
 	}
 	if m.showTasksMode {
-		return "[esc/q] Exit  [j/k] Task  [h/l] Day  [ctrl+k/j] Month  [ctrl+h/l] Year  [enter] Open  [n] New  [x] Done/Undone  [?] Help"
+		return "[esc/q] Exit  [j/k] Task  [h] Calendar  [enter] Details  [n] New  [spc] Done/Undone  [tab/s-tab] Pane  [?] Help"
 	}
-	return "[esc/q] Exit  [j/k] Event  [h/l] Day  [ctrl+k/j] Month  [ctrl+h/l] Year  [t] Today  [enter] Open  [n] New  [m] Tasks  [?] Help"
+	return "[esc/q] Exit  [j/k] Event  [h] Calendar  [enter] Details  [e] Edit  [n] New  [tab/s-tab] Pane  [?] Help"
 }
 
 func (m Model) helpLines() []string {
@@ -3287,30 +3339,48 @@ func (m Model) helpLines() []string {
 			"?           Toggle help",
 		}
 	}
-	if m.focusCalendarPane {
-		back := "events"
+	switch m.focusedPane {
+	case paneCalendar:
+		item := "event"
 		if m.showTasksMode {
-			back = "tasks"
+			item = "task"
 		}
-		return []string{
-			"esc, q      Back to " + back,
-			"ctrl+c      Exit",
-			"j/k         Next / previous calendar",
-			"↑/↓         Next / previous calendar",
-			"enter, spc  Hide/show calendar",
-			"c, h        Back to " + back,
-			"?           Toggle help",
-		}
-	}
-	if m.focusDetails {
 		return []string{
 			"esc, q      Back to list",
 			"ctrl+c      Exit",
-			"j/k         Scroll down/up",
-			"↑/↓         Scroll down/up",
+			"h/l, ←/→    Previous / next day",
+			"j/k, ↑/↓    Previous / next week",
+			"ctrl+k/j    Previous / next month",
+			"ctrl+h/l    Previous / next year",
+			"enter       Focus Agenda/Tasks at date",
+			"n           New " + item,
+			"c           Focus Calendars",
+			"tab         Next pane",
+			"shift+tab   Previous pane",
+			"?           Toggle help",
+		}
+	case paneCalendars:
+		return []string{
+			"esc, q      Back to list",
+			"ctrl+c      Exit",
+			"j/k, ↑/↓    Next / previous calendar",
+			"enter, spc  Hide/show calendar",
+			"c, h        Back to list",
+			"tab         Next pane",
+			"shift+tab   Previous pane",
+			"?           Toggle help",
+		}
+	case paneDetails:
+		return []string{
+			"esc, q      Back to list",
+			"ctrl+c      Exit",
+			"j/k, ↑/↓    Scroll down/up",
 			"enter, spc  Back to list",
 			"e           Edit selected item",
+			"n           New item",
 			"ctrl+d      Delete selected item",
+			"tab         Next pane",
+			"shift+tab   Previous pane",
 			"?           Toggle help",
 		}
 	}
@@ -3318,45 +3388,49 @@ func (m Model) helpLines() []string {
 		return []string{
 			"esc, q      Exit",
 			"ctrl+c      Exit",
-			"j/k         Next / previous task",
-			"↑/↓         Next / previous task",
+			"j/k, ↑/↓    Next / previous task",
 			"ctrl+f/b    Page down / page up",
-			"h/l, ←/→    Previous / next day",
+			"h, ←        Focus Calendar",
+			"l, →        Next day",
 			"ctrl+k/j    Previous / next month",
 			"ctrl+h/l    Previous / next year",
 			"t           Jump to today",
-			"enter, e    Open task editor",
-			"v           Open read-only details",
+			"enter       Focus Details",
+			"e           Edit selected task",
+			"v           Open read-only view",
 			"n           New task",
-			"x, d        Toggle done status",
+			"spc, x, d   Toggle done status",
 			"p           Cycle task priority",
 			"f           Show/hide completed",
 			"m           Open events",
 			"ctrl+d      Delete selected task",
-			"c           Open calendars pane",
-			"spc         Focus details",
+			"c           Focus Calendars",
+			"tab         Next pane",
+			"shift+tab   Previous pane",
 			"?           Toggle help",
 		}
 	}
 	return []string{
 		"esc, q      Exit",
 		"ctrl+c      Exit",
-		"j/k         Next / previous event",
-		"↑/↓         Next / previous event",
+		"j/k, ↑/↓    Next / previous event",
 		"ctrl+f/b    Page down / page up",
-		"h/l, ←/→    Previous / next day",
+		"h, ←        Focus Calendar",
+		"l, →        Next day",
 		"ctrl+k/j    Previous / next month",
 		"ctrl+h/l    Previous / next year",
 		"t           Today",
-		"enter, e    Open event editor",
-		"v           Open read-only details",
+		"enter       Focus Details",
+		"e           Edit selected event",
+		"v           Open read-only view",
 		"n           New event",
 		"m           Open tasks",
 		"ctrl+d      Delete selected event",
-		"c           Open calendars pane",
+		"c           Focus Calendars",
 		"f           Show/hide free and declined",
 		"g           Show/hide minimap",
-		"spc         Focus details",
+		"tab         Next pane",
+		"shift+tab   Previous pane",
 		"?           Toggle help",
 	}
 }
@@ -3380,16 +3454,9 @@ func (m Model) renderHelpOverlay(width, height int) string {
 }
 
 func (m Model) calendarPaneHeight() int {
-	panelHeight := m.height - 6
-	if panelHeight < 8 {
-		panelHeight = 8
-	}
-	topHeight := panelHeight * 2 / 3
-	bottom := panelHeight - topHeight - 1
-	if bottom < 4 {
-		bottom = 4
-	}
-	return bottom
+	panelHeight := max(8, m.height-4)
+	_, bottomHeight := workspacePaneHeights(panelHeight)
+	return max(1, bottomHeight-2)
 }
 
 func (m *Model) ensureEventSelectionValid() {
@@ -3562,6 +3629,27 @@ func (m *Model) jumpTaskCursorToToday(now time.Time) {
 	m.ensureEventCursorVisible()
 }
 
+func (m *Model) jumpTaskCursorToDate(date time.Time) {
+	target := -1
+	for i, item := range m.agendaItems() {
+		if item.Todo == nil {
+			continue
+		}
+		at := item.Todo.Due
+		if at == nil {
+			at = item.Todo.Start
+		}
+		if at != nil && !dayStart(*at).Before(dayStart(date)) {
+			target = i
+			break
+		}
+	}
+	if target >= 0 {
+		m.eventCursor = target
+		m.ensureEventCursorVisible()
+	}
+}
+
 func (m *Model) selectedTodo() (calendar.Todo, bool) {
 	if !m.showTasksMode {
 		return calendar.Todo{}, false
@@ -3652,6 +3740,15 @@ func (m *Model) updateSelectedTodo(uid string, update calendar.TodoUpdate) strin
 	return ""
 }
 
+func (m *Model) openNewItem() tea.Cmd {
+	if m.showTasksMode {
+		m.openTodoFormNew()
+		return m.todoForm.form.Init()
+	}
+	m.openEventFormNew()
+	return m.eventForm.form.Init()
+}
+
 func (m *Model) openEventFormNew() {
 	start, end := m.defaultCreationRange()
 	m.openEventFormNewAt(start, end, false)
@@ -3687,8 +3784,6 @@ func (m *Model) openEventFormNewAt(start, end time.Time, allDay bool) {
 		Source:   splitCalendarKey(defaultKey).source,
 		Calendar: splitCalendarKey(defaultKey).name,
 	})
-	m.focusDetails = true
-	m.focusMain = false
 	m.detailScroll = 0
 	m.eventForm.form.UpdateFieldPositions()
 }
@@ -3704,8 +3799,6 @@ func (m *Model) openTodoFormEditSelected() bool {
 	}
 	td := *it.Todo
 	m.todoForm = m.newTodoFormState("edit", td.UID, td)
-	m.focusDetails = true
-	m.focusMain = false
 	m.detailScroll = 0
 	m.todoForm.form.UpdateFieldPositions()
 	return true
@@ -3713,15 +3806,15 @@ func (m *Model) openTodoFormEditSelected() bool {
 
 func (m *Model) openTodoFormNew() {
 	defaultKey := m.firstWritableCalendarKey()
+	due := m.defaultCreationStart()
 	td := calendar.Todo{
 		Summary:  "",
 		Source:   splitCalendarKey(defaultKey).source,
 		Calendar: splitCalendarKey(defaultKey).name,
+		Due:      &due,
 		Priority: 5,
 	}
 	m.todoForm = m.newTodoFormState("create", "", td)
-	m.focusDetails = true
-	m.focusMain = false
 	m.detailScroll = 0
 	m.todoForm.form.UpdateFieldPositions()
 }
@@ -3737,8 +3830,6 @@ func (m *Model) openTodoFormNewWith(td calendar.Todo) {
 		td.Priority = 5
 	}
 	m.todoForm = m.newTodoFormState("create", "", td)
-	m.focusDetails = true
-	m.focusMain = false
 	m.detailScroll = 0
 	m.todoForm.form.UpdateFieldPositions()
 }
@@ -3749,20 +3840,34 @@ func (m Model) defaultCreationRange() (time.Time, time.Time) {
 }
 
 func (m Model) defaultCreationStart() time.Time {
-	items := m.agendaItems()
-	if len(items) > 0 && m.eventCursor >= 0 && m.eventCursor < len(items) {
-		it := items[m.eventCursor]
-		if !it.Start.IsZero() {
-			return it.Start
-		}
-		if !it.Day.IsZero() {
-			return dayStart(it.Day)
+	if m.focusedPane != paneCalendar {
+		items := m.agendaItems()
+		if len(items) > 0 && m.eventCursor >= 0 && m.eventCursor < len(items) {
+			it := items[m.eventCursor]
+			switch {
+			case it.Event != nil && !it.Event.AllDay && !it.Event.Start.IsZero():
+				return it.Event.Start
+			case it.Event != nil:
+				return creationTimeOnDay(it.Day)
+			case it.Todo != nil && it.Todo.Due != nil:
+				return *it.Todo.Due
+			case it.Todo != nil && it.Todo.Start != nil:
+				return *it.Todo.Start
+			case it.IsFree && !it.Start.IsZero():
+				return it.Start
+			}
 		}
 	}
-	if !m.selected.IsZero() {
-		return dayStart(m.selected)
+	return creationTimeOnDay(m.selected)
+}
+
+func creationTimeOnDay(day time.Time) time.Time {
+	now := time.Now().Truncate(time.Minute)
+	if day.IsZero() {
+		return now
 	}
-	return time.Now().Truncate(time.Minute)
+	now = now.In(day.Location())
+	return time.Date(day.Year(), day.Month(), day.Day(), now.Hour(), now.Minute(), 0, 0, day.Location())
 }
 
 func (m *Model) openEditFormForSelected() bool {
@@ -3794,15 +3899,11 @@ func (m *Model) openViewForSelected() bool {
 	}
 	if it.Event != nil {
 		m.eventForm = m.newEventFormState("view", it.Event.UID, *it.Event)
-		m.focusDetails = true
-		m.focusMain = false
 		m.detailScroll = 0
 		return true
 	}
 	if it.Todo != nil {
 		m.todoForm = m.newTodoFormState("view", it.Todo.UID, *it.Todo)
-		m.focusDetails = true
-		m.focusMain = false
 		m.detailScroll = 0
 		return true
 	}
@@ -3826,8 +3927,6 @@ func (m *Model) openEventFormEdit(event *calendar.Event) bool {
 		return false
 	}
 	m.eventForm = m.newEventFormState("edit", event.UID, *event)
-	m.focusDetails = true
-	m.focusMain = false
 	m.detailScroll = 0
 	m.eventForm.form.UpdateFieldPositions()
 	if event.Recurring {
@@ -4448,8 +4547,6 @@ func (m *Model) openDeleteConfirm(event *calendar.Event, todo *calendar.Todo, re
 	}
 	state.form = m.buildDeleteConfirmForm(state).WithKeyMap(deleteConfirmFormKeyMap(state))
 	m.deleteConfirm = state
-	m.focusDetails = true
-	m.focusMain = false
 	m.detailScroll = 0
 	m.deleteConfirm.form.UpdateFieldPositions()
 	return true
@@ -5272,19 +5369,9 @@ func filteredTodos(todos []calendar.Todo, vis map[string]bool) []calendar.Todo {
 }
 
 func (m Model) eventListLines() int {
-	panelHeight := m.height - 6
-	if panelHeight < 10 {
-		panelHeight = 10
-	}
-	available := panelHeight - 4
-	if available < 8 {
-		available = 8
-	}
-	topHeight := available * 3 / 5
-	if topHeight < 6 {
-		topHeight = 6
-	}
-	return topHeight
+	panelHeight := max(8, m.height-4)
+	topHeight, _ := workspacePaneHeights(panelHeight)
+	return max(1, topHeight-4)
 }
 
 func (m Model) eventPageStep() int {
@@ -5296,12 +5383,9 @@ func (m Model) eventPageStep() int {
 }
 
 func (m Model) mainInnerWidth() int {
-	leftWidth := m.sidebarWidth()
-	rightWidth := max(50, m.width-leftWidth-5)
-	if rightWidth < 8 {
-		return 8
-	}
-	return rightWidth - 2
+	workspaceWidth := max(8, m.width-2)
+	leftWidth := clamp(m.sidebarWidth(), 4, workspaceWidth-4)
+	return max(1, workspaceWidth-leftWidth-4)
 }
 
 func wrapLine(s string, maxLen int) []string {

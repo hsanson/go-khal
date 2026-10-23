@@ -177,8 +177,6 @@ func (m *Model) saveEventEditor() error {
 
 func (m *Model) closeEventEditor() {
 	m.eventForm = nil
-	m.focusDetails = false
-	m.focusMain = true
 }
 
 func (m *Model) saveTodoEditor() error {
@@ -192,8 +190,6 @@ func (m *Model) saveTodoEditor() error {
 
 func (m *Model) closeTodoEditor() {
 	m.todoForm = nil
-	m.focusDetails = false
-	m.focusMain = true
 }
 
 func eventFormTimezone(ev calendar.Event, mode string) (timezone string, local bool) {

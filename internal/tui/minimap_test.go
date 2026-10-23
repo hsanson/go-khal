@@ -121,15 +121,14 @@ func TestMinimapMouseNavigatesAndStagesEventCreation(t *testing.T) {
 		}
 		clickedDay := day.AddDate(0, 0, 1)
 		m := newModel([]calendar.Event{event})
-		m.focusCalendarPane = true
-		m.focusMain = false
+		m.focusedPane = paneCalendars
 		m = clickRenderedMinimapHit(t, m, mouseMinimapEvent, 0, clickedDay)
 
 		if m.eventForm != nil {
 			t.Fatal("event minimap click opened the event editor")
 		}
-		if !dayStart(m.selected).Equal(clickedDay) || !m.focusMain || m.focusCalendarPane || m.focusDetails {
-			t.Fatalf("event minimap click selected date/focus = %v/%v/%v/%v", m.selected, m.focusMain, m.focusCalendarPane, m.focusDetails)
+		if !dayStart(m.selected).Equal(clickedDay) || m.focusedPane != paneAgenda {
+			t.Fatalf("event minimap click selected date/focus = %v/%v, want %v/Agenda", m.selected, m.focusedPane, clickedDay)
 		}
 		item := m.agendaItems()[m.eventCursor]
 		if item.Event == nil || item.Event.UID != event.UID || !item.Day.Equal(clickedDay) {

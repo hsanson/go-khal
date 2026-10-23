@@ -7,6 +7,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/hsanson/go-khal/internal/calendar"
 	"github.com/hsanson/go-khal/internal/config"
 )
@@ -112,7 +113,7 @@ func TestReadOnlyTaskViewReturnsToListWithQ(t *testing.T) {
 
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
 	m = *updated.(*Model)
-	if m.todoForm != nil || !m.focusMain {
+	if m.todoForm != nil || m.focusedPane != paneAgenda {
 		t.Fatal("q did not return from task view to the task list")
 	}
 
@@ -343,14 +344,19 @@ func TestNewEventDefaultsToSelectedAgendaItemTime(t *testing.T) {
 	}
 }
 
-func TestNewTaskScheduleDefaultsEmpty(t *testing.T) {
+func TestNewTaskDueDefaultsToSelectedTaskTime(t *testing.T) {
+	due := time.Date(2026, time.July, 3, 11, 30, 0, 0, time.Local)
 	cal := calendar.Calendar{Source: "src", Name: "cal"}
-	m := NewModel(&config.Config{SidebarWidth: 30}, calendar.Dataset{Calendars: []calendar.Calendar{cal}}, nil)
+	todo := calendar.Todo{UID: "selected", Source: cal.Source, Calendar: cal.Name, Due: &due}
+	m := NewTaskModeModel(&config.Config{SidebarWidth: 30}, calendar.Dataset{Calendars: []calendar.Calendar{cal}, Todos: []calendar.Todo{todo}}, nil)
 
 	m.openTodoFormNew()
 
-	if m.todoForm.startDate != "" || m.todoForm.startTime != "" || m.todoForm.dueDate != "" || m.todoForm.dueTime != "" {
-		t.Fatalf("new task schedule is not empty: %+v", m.todoForm)
+	if m.todoForm.dueDate != "2026-07-03" || m.todoForm.dueTime != "11:30" {
+		t.Fatalf("new task due = %s %s, want selected task time", m.todoForm.dueDate, m.todoForm.dueTime)
+	}
+	if m.todoForm.startDate != "" || m.todoForm.startTime != "" {
+		t.Fatalf("new task start = %s %s, want unset", m.todoForm.startDate, m.todoForm.startTime)
 	}
 }
 
@@ -498,12 +504,12 @@ func TestTaskDateNavigationPreservesListPosition(t *testing.T) {
 		key  tea.KeyMsg
 		want string
 	}{
-		{tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'h'}}, "2025-01-30"},
-		{tea.KeyMsg{Type: tea.KeyRight}, "2025-01-31"},
-		{tea.KeyMsg{Type: tea.KeyCtrlJ}, "2025-02-28"},
-		{tea.KeyMsg{Type: tea.KeyCtrlK}, "2025-01-28"},
-		{tea.KeyMsg{Type: tea.KeyCtrlL}, "2026-01-28"},
-		{tea.KeyMsg{Type: tea.KeyCtrlH}, "2025-01-28"},
+		{tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}}, "2025-02-01"},
+		{tea.KeyMsg{Type: tea.KeyRight}, "2025-02-02"},
+		{tea.KeyMsg{Type: tea.KeyCtrlJ}, "2025-03-02"},
+		{tea.KeyMsg{Type: tea.KeyCtrlK}, "2025-02-02"},
+		{tea.KeyMsg{Type: tea.KeyCtrlL}, "2026-02-02"},
+		{tea.KeyMsg{Type: tea.KeyCtrlH}, "2025-02-02"},
 	} {
 		updated, _ := m.Update(step.key)
 		m = updated.(Model)
@@ -534,11 +540,11 @@ func TestTaskModeShowAllControlsCompletedTasks(t *testing.T) {
 	}
 }
 
-func TestCalendarPaneQAndEscReturnToMainList(t *testing.T) {
+func TestCalendarsPaneQAndEscReturnToAgenda(t *testing.T) {
 	cal := calendar.Calendar{Source: "src", Name: "cal"}
 	for _, key := range []string{"q", "esc"} {
 		m := NewModel(&config.Config{SidebarWidth: 30}, calendar.Dataset{Calendars: []calendar.Calendar{cal}}, nil)
-		m.focusCalendarPane = true
+		m.focusedPane = paneCalendars
 
 		msg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(key)}
 		if key == "esc" {
@@ -548,51 +554,50 @@ func TestCalendarPaneQAndEscReturnToMainList(t *testing.T) {
 		next := updated.(Model)
 
 		if cmd != nil {
-			t.Fatalf("%s in calendar pane should not quit or run a command", key)
+			t.Fatalf("%s in Calendars should not quit or run a command", key)
 		}
-		if next.focusCalendarPane {
-			t.Fatalf("%s should close calendar pane focus", key)
-		}
-		if !next.focusMain {
-			t.Fatalf("%s should return focus to main list", key)
+		if next.focusedPane != paneAgenda {
+			t.Fatalf("%s focus = %v, want Agenda", key, next.focusedPane)
 		}
 	}
 }
-func TestEnterOpensSelectedEventEditor(t *testing.T) {
+func TestEnterFocusesSelectedEventDetails(t *testing.T) {
 	now := time.Now()
 	cal := calendar.Calendar{Source: "src", Name: "cal"}
 	event := calendar.Event{UID: "event", Summary: "Event", Source: "src", Calendar: "cal", Start: now.Add(time.Hour), End: now.Add(2 * time.Hour)}
 	m := NewModel(&config.Config{SidebarWidth: 30}, calendar.Dataset{Calendars: []calendar.Calendar{cal}, Events: []calendar.Event{event}}, nil)
 
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	if updated.(Model).eventForm == nil || updated.(Model).eventForm.mode != "edit" {
-		t.Fatal("enter should open selected event editor")
+	next := updated.(Model)
+	if next.focusedPane != paneDetails || next.eventForm != nil {
+		t.Fatal("enter should focus event details without opening the editor")
 	}
 }
 
-func TestEnterOpensSelectedTaskEditor(t *testing.T) {
+func TestEnterFocusesSelectedTaskDetails(t *testing.T) {
 	now := time.Now()
 	cal := calendar.Calendar{Source: "src", Name: "cal"}
 	todo := calendar.Todo{UID: "task", Summary: "Task", Source: "src", Calendar: "cal", Due: &now}
 	m := NewTaskModeModel(&config.Config{SidebarWidth: 30}, calendar.Dataset{Calendars: []calendar.Calendar{cal}, Todos: []calendar.Todo{todo}}, nil)
 
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	if updated.(Model).todoForm == nil || updated.(Model).todoForm.mode != "edit" {
-		t.Fatal("enter should open selected task editor")
+	next := updated.(Model)
+	if next.focusedPane != paneDetails || next.todoForm != nil {
+		t.Fatal("enter should focus task details without opening the editor")
 	}
 }
 
-func TestCalendarPaneQReturnsToItemList(t *testing.T) {
+func TestCalendarsShortcutQReturnsToAgenda(t *testing.T) {
 	cal := calendar.Calendar{Source: "src", Name: "cal"}
 	m := NewModel(&config.Config{SidebarWidth: 30}, calendar.Dataset{Calendars: []calendar.Calendar{cal}}, nil)
 
 	opened, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
 	closed, cmd := opened.(Model).Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
 	if cmd != nil {
-		t.Fatal("q in calendar pane should not quit")
+		t.Fatal("q in Calendars should not quit")
 	}
-	if closed.(Model).focusCalendarPane {
-		t.Fatal("q should return focus to item list")
+	if closed.(Model).focusedPane != paneAgenda {
+		t.Fatal("q should return focus to Agenda")
 	}
 }
 
@@ -937,17 +942,181 @@ func TestTaskShortcutsToggleDoneAndCyclePriority(t *testing.T) {
 	now := time.Now()
 	cal := calendar.Calendar{Source: "src", Name: "cal"}
 	todo := calendar.Todo{UID: "task", Summary: "Task", Source: "src", Calendar: "cal", Due: &now, Status: "NEEDS-ACTION", Priority: 5}
-	m := NewTaskModeModel(&config.Config{SidebarWidth: 30}, calendar.Dataset{Calendars: []calendar.Calendar{cal}, Todos: []calendar.Todo{todo}}, nil)
-
-	doneModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
-	done := doneModel.(Model)
-	if !isTodoDone(done.data.Todos[0]) {
-		t.Fatal("x should mark selected task done")
+	for _, key := range []rune{' ', 'x', 'd'} {
+		m := NewTaskModeModel(&config.Config{SidebarWidth: 30}, calendar.Dataset{Calendars: []calendar.Calendar{cal}, Todos: []calendar.Todo{todo}}, nil)
+		doneModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{key}})
+		done := doneModel.(Model)
+		if !isTodoDone(done.data.Todos[0]) {
+			t.Fatalf("%q should mark selected task done", key)
+		}
 	}
 
-	m = NewTaskModeModel(&config.Config{SidebarWidth: 30}, calendar.Dataset{Calendars: []calendar.Calendar{cal}, Todos: []calendar.Todo{todo}}, nil)
+	m := NewTaskModeModel(&config.Config{SidebarWidth: 30}, calendar.Dataset{Calendars: []calendar.Calendar{cal}, Todos: []calendar.Todo{todo}}, nil)
 	priorityModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}})
 	if got := priorityModel.(Model).data.Todos[0].Priority; got != 9 {
 		t.Fatalf("p should cycle mid priority to low, got %d", got)
+	}
+}
+
+func TestWorkspacePaneNavigation(t *testing.T) {
+	m := NewModel(&config.Config{SidebarWidth: 30}, calendar.Dataset{}, nil)
+	if m.focusedPane != paneAgenda {
+		t.Fatalf("initial focus = %v, want Agenda", m.focusedPane)
+	}
+
+	for _, want := range []workspacePane{paneDetails, paneCalendars, paneCalendar, paneAgenda} {
+		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyTab})
+		m = updated.(Model)
+		if m.focusedPane != want {
+			t.Fatalf("tab focus = %v, want %v", m.focusedPane, want)
+		}
+	}
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyShiftTab})
+	if got := updated.(Model).focusedPane; got != paneCalendar {
+		t.Fatalf("shift-tab focus = %v, want Calendar", got)
+	}
+}
+
+func TestCalendarNavigationAndAgendaFocus(t *testing.T) {
+	selected := time.Date(2026, time.October, 8, 0, 0, 0, 0, time.Local)
+	m := NewModel(&config.Config{SidebarWidth: 30}, calendar.Dataset{}, nil)
+	m.selected = selected
+	m.agendaStart = selected
+	m.focusedPane = paneCalendar
+
+	for _, step := range []struct {
+		key  tea.KeyMsg
+		want string
+	}{
+		{tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'h'}}, "2026-10-07"},
+		{tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}}, "2026-10-14"},
+		{tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}}, "2026-10-07"},
+		{tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}}, "2026-10-08"},
+	} {
+		updated, _ := m.Update(step.key)
+		m = updated.(Model)
+		if got := m.selected.Format("2006-01-02"); got != step.want {
+			t.Fatalf("%s selected %s, want %s", step.key.String(), got, step.want)
+		}
+	}
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(Model)
+	if m.focusedPane != paneAgenda {
+		t.Fatalf("enter focus = %v, want Agenda", m.focusedPane)
+	}
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'h'}})
+	if got := updated.(Model).focusedPane; got != paneCalendar {
+		t.Fatalf("h focus = %v, want Calendar", got)
+	}
+
+}
+
+func TestCalendarEnterSelectsFirstTaskOnOrAfterDate(t *testing.T) {
+	before := time.Date(2026, time.October, 6, 9, 0, 0, 0, time.Local)
+	after := time.Date(2026, time.October, 9, 9, 0, 0, 0, time.Local)
+	cal := calendar.Calendar{Source: "src", Name: "cal"}
+	m := NewTaskModeModel(&config.Config{SidebarWidth: 30}, calendar.Dataset{
+		Calendars: []calendar.Calendar{cal},
+		Todos: []calendar.Todo{
+			{UID: "before", Source: cal.Source, Calendar: cal.Name, Due: &before},
+			{UID: "after", Source: cal.Source, Calendar: cal.Name, Due: &after},
+		},
+	}, nil)
+	m.selected = time.Date(2026, time.October, 8, 0, 0, 0, 0, time.Local)
+	m.focusedPane = paneCalendar
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	next := updated.(Model)
+	item := next.agendaItems()[next.eventCursor]
+	if next.focusedPane != paneAgenda || item.Todo == nil || item.Todo.UID != "after" {
+		t.Fatalf("calendar enter focus/item = %v/%#v, want Agenda/after", next.focusedPane, item)
+	}
+}
+
+func TestFormReturnsToOriginatingPane(t *testing.T) {
+	cal := calendar.Calendar{Source: "src", Name: "cal"}
+	m := NewModel(&config.Config{SidebarWidth: 30}, calendar.Dataset{Calendars: []calendar.Calendar{cal}}, nil)
+	m.focusedPane = paneDetails
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	m = *modelValue(t, updated)
+	if m.eventForm == nil {
+		t.Fatal("n did not open the event form")
+	}
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = *modelValue(t, updated)
+	if m.eventForm != nil || m.focusedPane != paneDetails {
+		t.Fatalf("cancel returned form/focus = %v/%v, want nil/Details", m.eventForm != nil, m.focusedPane)
+	}
+}
+
+func TestCancellingRecurringEditScopeReturnsToOriginatingPane(t *testing.T) {
+	now := time.Now()
+	cal := calendar.Calendar{Source: "src", Name: "cal"}
+	event := calendar.Event{
+		UID: "recurring", Source: cal.Source, Calendar: cal.Name,
+		Summary: "Recurring", Start: now, End: now.Add(time.Hour), Recurring: true,
+	}
+	m := NewModel(&config.Config{SidebarWidth: 30}, calendar.Dataset{
+		Calendars: []calendar.Calendar{cal},
+		Events:    []calendar.Event{event},
+	}, nil)
+	m.focusedPane = paneDetails
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+	m = *modelValue(t, updated)
+	if m.eventForm == nil || m.eventForm.activeKey != "edit-scope" {
+		t.Fatal("e did not open the recurring event edit-scope dialog")
+	}
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = *modelValue(t, updated)
+	if m.eventForm != nil || m.focusedPane != paneDetails {
+		t.Fatalf("cancel returned form/focus = %v/%v, want nil/Details", m.eventForm != nil, m.focusedPane)
+	}
+}
+
+func TestViewRendersFourPanesWithinTerminal(t *testing.T) {
+	m := NewModel(&config.Config{SidebarWidth: 30}, calendar.Dataset{}, nil)
+	m.width = 100
+	m.height = 40
+	view := m.View()
+
+	for _, title := range []string{"Calendar", "Calendars", "Agenda from", "Details"} {
+		if !strings.Contains(view, title) {
+			t.Fatalf("view is missing %q", title)
+		}
+	}
+	if got := strings.Count(view, "╭"); got != 4 {
+		t.Fatalf("top border count = %d, want 4", got)
+	}
+	if got := lipgloss.Width(view); got != m.width {
+		t.Fatalf("view width = %d, want %d", got, m.width)
+	}
+	if got := lipgloss.Height(view); got != m.height {
+		t.Fatalf("view height = %d, want %d", got, m.height)
+	}
+}
+
+func TestCalendarsAndDetailsPanesStayAligned(t *testing.T) {
+	for _, height := range []int{16, 25, 40} {
+		m := NewModel(&config.Config{SidebarWidth: 30}, calendar.Dataset{}, nil)
+		m.width = 100
+		m.height = height
+
+		topBorders := 0
+		bottomBorders := 0
+		for _, line := range strings.Split(m.View(), "\n") {
+			if strings.Count(line, "╭") == 2 {
+				topBorders++
+			}
+			if strings.Count(line, "╰") == 2 {
+				bottomBorders++
+			}
+		}
+		if topBorders != 2 || bottomBorders != 2 {
+			t.Fatalf("height %d has %d aligned top and %d aligned bottom borders, want 2 each", height, topBorders, bottomBorders)
+		}
 	}
 }

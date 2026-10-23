@@ -9,7 +9,11 @@ import (
 type mouseTarget uint8
 
 const (
-	mouseCalendarDay mouseTarget = iota + 1
+	mouseCalendarPane mouseTarget = iota + 1
+	mouseCalendarsPane
+	mouseAgendaPane
+	mouseDetailsPane
+	mouseCalendarDay
 	mouseCalendarPreviousYear
 	mouseCalendarPreviousMonth
 	mouseCalendarNextMonth
@@ -109,24 +113,33 @@ func (m Model) updateMouse(event tea.MouseEvent) (tea.Model, tea.Cmd) {
 	}
 
 	switch hit.kind {
+	case mouseCalendarPane:
+		m.focusedPane = paneCalendar
+	case mouseCalendarsPane:
+		m.focusedPane = paneCalendars
+	case mouseAgendaPane:
+		m.focusedPane = paneAgenda
+	case mouseDetailsPane:
+		m.focusedPane = paneDetails
 	case mouseCalendarDay:
-		m.temporaryFreeStart = time.Time{}
-		m.selected = dayStart(hit.day)
-		m.agendaStart = m.selected
-		m.eventCursor = 0
-		m.eventListOffset = 0
-		m.scrollForSelection()
+		m.navigateToDate(hit.day)
+		m.focusedPane = paneCalendar
 		m.ensureEventSelectionValid()
 	case mouseCalendarPreviousYear:
+		m.focusedPane = paneCalendar
 		m.navigateToDate(addMonthsClamped(m.selected, -12))
 	case mouseCalendarPreviousMonth:
+		m.focusedPane = paneCalendar
 		m.navigateToDate(addMonthsClamped(m.selected, -1))
 	case mouseCalendarNextMonth:
+		m.focusedPane = paneCalendar
 		m.navigateToDate(addMonthsClamped(m.selected, 1))
 	case mouseCalendarNextYear:
+		m.focusedPane = paneCalendar
 		m.navigateToDate(addMonthsClamped(m.selected, 12))
 	case mouseCalendarRow:
 		if hit.index >= 0 && hit.index < len(m.calendarOrder) {
+			m.focusedPane = paneCalendars
 			m.temporaryFreeStart = time.Time{}
 			m.calendarCursor = hit.index
 			key := m.calendarOrder[hit.index]
@@ -135,7 +148,7 @@ func (m Model) updateMouse(event tea.MouseEvent) (tea.Model, tea.Cmd) {
 		}
 	case mouseAgendaItem:
 		items := m.agendaItems()
-		if hit.index < 0 || hit.index >= len(items) || (items[hit.index].Event == nil && items[hit.index].Todo == nil) {
+		if hit.index < 0 || hit.index >= len(items) {
 			break
 		}
 		selectedIndex := hit.index
@@ -144,7 +157,14 @@ func (m Model) updateMouse(event tea.MouseEvent) (tea.Model, tea.Cmd) {
 			m.temporaryFreeStart = time.Time{}
 			selectedIndex = -1
 			for i, item := range m.agendaItems() {
-				if target.Event != nil && item.Day.Equal(target.Day) && sameEventOccurrence(item.Event, target.Event) {
+				matches := target.Event != nil && item.Day.Equal(target.Day) && sameEventOccurrence(item.Event, target.Event)
+				if target.Todo != nil && item.Todo != nil {
+					matches = target.Todo.UID == item.Todo.UID
+				}
+				if target.IsFree && item.IsFree {
+					matches = target.Day.Equal(item.Day) && target.Start.Equal(item.Start) && target.End.Equal(item.End)
+				}
+				if matches {
 					selectedIndex = i
 					break
 				}
@@ -153,15 +173,13 @@ func (m Model) updateMouse(event tea.MouseEvent) (tea.Model, tea.Cmd) {
 				break
 			}
 		}
+		showDetails := m.focusedPane == paneAgenda && m.eventCursor == selectedIndex
 		m.eventCursor = selectedIndex
 		m.ensureEventSelectionValid()
-		if m.openEditFormForSelected() {
-			if m.eventForm != nil {
-				return m, m.initCurrentEventForm()
-			}
-			if m.todoForm != nil {
-				return m, m.todoForm.form.Init()
-			}
+		m.focusedPane = paneAgenda
+		if showDetails {
+			m.focusedPane = paneDetails
+			m.detailScroll = 0
 		}
 	case mouseMinimapEvent:
 		m.selectMinimapEvent(hit.index, hit.day)

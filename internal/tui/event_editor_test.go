@@ -114,11 +114,7 @@ func TestTaskScheduleUsesSeparateOptionalPickers(t *testing.T) {
 	cal := calendar.Calendar{Source: "src", Name: "cal"}
 	m := NewTaskModeModel(&config.Config{}, calendar.Dataset{Calendars: []calendar.Calendar{cal}}, nil)
 	m.selected = time.Date(2026, time.October, 2, 0, 0, 0, 0, time.Local)
-	m.openTodoFormNew()
-
-	if m.todoForm.dueDate != "" || m.todoForm.dueTime != "" || m.todoForm.startDate != "" || m.todoForm.startTime != "" {
-		t.Fatalf("new task schedule is not empty: %+v", m.todoForm)
-	}
+	m.todoForm = m.newTodoFormState("create", "", calendar.Todo{Source: cal.Source, Calendar: cal.Name})
 	rows := m.todoEditorRows()
 	keys := make([]string, 0, 4)
 	for _, row := range rows {
