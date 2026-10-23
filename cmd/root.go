@@ -29,6 +29,8 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&cfgPath, "config", config.DefaultPath(), "path to config file")
 	rootCmd.AddCommand(newTUICommand())
 	rootCmd.AddCommand(newAgendaCommand())
+	rootCmd.AddCommand(newListCommand())
+	rootCmd.AddCommand(newPrintFormatsCommand())
 	rootCmd.AddCommand(newImportCommand())
 	rootCmd.AddCommand(newTodoCommand())
 	rootCmd.AddCommand(newConfigCommand())
