@@ -13,6 +13,7 @@ const (
 	mouseCalendarsPane
 	mouseAgendaPane
 	mouseDetailsPane
+	mouseVideoCall
 	mouseCalendarDay
 	mouseCalendarPreviousYear
 	mouseCalendarPreviousMonth
@@ -121,6 +122,9 @@ func (m Model) updateMouse(event tea.MouseEvent) (tea.Model, tea.Cmd) {
 		m.focusedPane = paneAgenda
 	case mouseDetailsPane:
 		m.focusedPane = paneDetails
+	case mouseVideoCall:
+		m.actionErr = ""
+		return m, openVideoCall(hit.value)
 	case mouseCalendarDay:
 		m.navigateToDate(hit.day)
 		m.focusedPane = paneCalendar
@@ -189,7 +193,7 @@ func (m Model) updateMouse(event tea.MouseEvent) (tea.Model, tea.Cmd) {
 		startHour, _ := m.cfg.MinimapHours()
 		m.selectMinimapHour(time.Date(hit.day.Year(), hit.day.Month(), hit.day.Day(), startHour, 0, 0, 0, hit.day.Location()))
 	case mouseEventEditorRow:
-		if m.eventForm == nil || m.eventForm.mode == "view" {
+		if m.eventForm == nil {
 			break
 		}
 		rows := m.eventEditorRows()
@@ -202,7 +206,7 @@ func (m Model) updateMouse(event tea.MouseEvent) (tea.Model, tea.Cmd) {
 		}
 		return m, m.openEventEditorForm()
 	case mouseTodoEditorRow:
-		if m.todoForm == nil || m.todoForm.mode == "view" {
+		if m.todoForm == nil {
 			break
 		}
 		rows := m.todoEditorRows()

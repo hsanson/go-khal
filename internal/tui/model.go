@@ -301,6 +301,13 @@ func (m *Model) applyTheme(theme themeStyles) {
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case videoCallOpenedMsg:
+		if msg.err != nil {
+			m.actionErr = msg.err.Error()
+		} else {
+			m.actionErr = ""
+		}
+		return m, nil
 	case themeStylesMsg:
 		m.applyTheme(msg.theme)
 		return m, m.themeMonitor.wait()
@@ -378,6 +385,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.detailScroll > 0 {
 					m.detailScroll--
 				}
+			case "v":
+				return m, m.openSelectedVideoCall()
 			}
 			return m, nil
 
@@ -514,9 +523,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.detailScroll = 0
 		case "v":
-			if m.openViewForSelected() {
-				return m, nil
-			}
+			return m, m.openSelectedVideoCall()
 		case "c":
 			m.focusedPane = paneCalendars
 			m.ensureCalendarCursorVisible(m.calendarPaneHeight())
@@ -957,7 +964,7 @@ func (m Model) renderEventEditorList(width, height int) string {
 	if strings.TrimSpace(m.eventForm.errMsg) != "" {
 		offsetY += 2
 	}
-	return m.renderEditorRows(rows, cur, width, height, m.mouseMainX+2, offsetY, mouseEventEditorRow, m.eventForm.mode != "view")
+	return m.renderEditorRows(rows, cur, width, height, m.mouseMainX+2, offsetY, mouseEventEditorRow, true)
 }
 
 func (m Model) renderTodoEditorList(width, height int) string {
@@ -970,7 +977,7 @@ func (m Model) renderTodoEditorList(width, height int) string {
 	if strings.TrimSpace(m.todoForm.errMsg) != "" {
 		offsetY += 2
 	}
-	return m.renderEditorRows(rows, cur, width, height, m.mouseMainX+2, offsetY, mouseTodoEditorRow, m.todoForm.mode != "view")
+	return m.renderEditorRows(rows, cur, width, height, m.mouseMainX+2, offsetY, mouseTodoEditorRow, true)
 }
 
 type editorLineHit struct {
@@ -1171,9 +1178,7 @@ func (m Model) eventEditorRows() []editorRow {
 		editorSeparatorRow("󰥔 Time"),
 		{"all-day", "All-day", yesNo(s.allDay)},
 	}
-	if s.mode != "view" {
-		rows = append(rows[:11], append([]editorRow{{"attendees-add", "", ""}}, rows[11:]...)...)
-	}
+	rows = append(rows[:11], append([]editorRow{{"attendees-add", "", ""}}, rows[11:]...)...)
 	timeKey := "time"
 	timezoneKey := "timezone"
 	if s.allDay {
@@ -1211,9 +1216,7 @@ func (m Model) eventEditorRows() []editorRow {
 		editorSeparatorRow("󰀠 Notifications"),
 		editorRow{"alarms", "Notifications", emptyDefault(s.alarms, "-")},
 	)
-	if s.mode != "view" {
-		rows = append(rows, editorRow{"alarms-add", "", ""})
-	}
+	rows = append(rows, editorRow{"alarms-add", "", ""})
 	return appendEditorFormActions(rows, s.mode)
 }
 
@@ -1259,24 +1262,6 @@ func (m Model) todoEditorRows() []editorRow {
 
 func (m *Model) updateEventEditor(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	s := m.eventForm
-	if s.mode == "view" {
-		switch msg.String() {
-		case "esc", "q":
-			m.eventForm = nil
-		case "e":
-			view := m.eventForm
-			m.eventForm = nil
-			if m.openEventFormEditSelected() {
-				return m, m.initCurrentEventForm()
-			}
-			m.eventForm = view
-		case "j", "down", "tab":
-			s.cursor = moveEditorCursor(m.eventEditorRows(), s.cursor, 1)
-		case "k", "up", "shift+tab":
-			s.cursor = moveEditorCursor(m.eventEditorRows(), s.cursor, -1)
-		}
-		return m, nil
-	}
 	if handled, cmd := m.updateEventDialogFocus(msg); handled {
 		return m, cmd
 	}
@@ -1391,24 +1376,6 @@ func (m *Model) updateEventEditor(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m *Model) updateTodoEditor(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	s := m.todoForm
-	if s.mode == "view" {
-		switch msg.String() {
-		case "esc", "q":
-			m.todoForm = nil
-		case "e":
-			view := m.todoForm
-			m.todoForm = nil
-			if m.openTodoFormEditSelected() {
-				return m, m.todoForm.form.Init()
-			}
-			m.todoForm = view
-		case "j", "down", "tab":
-			s.cursor = moveEditorCursor(m.todoEditorRows(), s.cursor, 1)
-		case "k", "up", "shift+tab":
-			s.cursor = moveEditorCursor(m.todoEditorRows(), s.cursor, -1)
-		}
-		return m, nil
-	}
 	if handled, cmd := m.updateTodoDialogFocus(msg); handled {
 		return m, cmd
 	}
@@ -2242,9 +2209,6 @@ func activeFormValue(form *huh.Form) any {
 const editorDisabledSuffix = ":disabled"
 
 func appendEditorFormActions(rows []editorRow, mode string) []editorRow {
-	if mode == "view" {
-		return rows
-	}
 	rows = append(rows,
 		editorSeparatorRow("Actions"),
 		editorRow{"form-save", "", ""},
@@ -2625,13 +2589,6 @@ func attendeeIsOptional(attendee calendar.Attendee) bool {
 }
 
 func (m Model) renderEventDetailsPane(width, height int) string {
-	if m.eventForm != nil {
-		return lipgloss.NewStyle().Width(width).Height(height).MaxHeight(height).Render(m.renderEventEditorList(width, height))
-	}
-	if m.todoForm != nil {
-		return lipgloss.NewStyle().Width(width).Height(height).MaxHeight(height).Render(m.renderTodoEditorList(width, height))
-	}
-
 	items := m.agendaItems()
 	if len(items) == 0 || m.eventCursor < 0 || m.eventCursor >= len(items) {
 		return lipgloss.NewStyle().Width(width).Height(height).Render(m.styles.Subtle.Render("No item selected"))
@@ -2651,10 +2608,15 @@ func (m Model) renderEventDetailsPane(width, height int) string {
 }
 
 func (m Model) renderEventDetailsFor(ev calendar.Event, width, height int) string {
-	meta := []string{
-		m.styles.detailLine("󰉢", "Title", ev.Summary, width),
+	calendarName := strings.TrimSpace(ev.DisplayName)
+	if calendarName == "" {
+		calendarName = m.calendarDisplayName(calendarKey(ev.Source, ev.Calendar))
 	}
-	meta = append(meta, m.styles.detailLine("", "RSVP", eventRSVPDisplayValue(eventRSVPValue(ev)), width))
+	meta := []string{
+		m.styles.detailLine("󰉢", "Title", emptyDefault(ev.Summary, "(untitled event)"), width),
+		m.styles.detailLine("", "Calendar", calendarName, width),
+		m.styles.detailLine("", "RSVP", eventRSVPDisplayValue(eventRSVPValue(ev)), width),
+	}
 	if ev.Organizer != "" {
 		meta = append(meta, m.styles.detailLine("", "Organizer", ev.Organizer, width))
 	}
@@ -2663,30 +2625,47 @@ func (m Model) renderEventDetailsFor(ev calendar.Event, width, height int) strin
 			meta = append(meta, m.styles.detailLine("", "Role", role, width))
 		}
 	}
-	if ev.Location != "" || ev.URL != "" {
-		meta = append(meta, "")
-	}
-	if ev.Location != "" {
-		meta = append(meta, m.styles.detailLine("", "Location", ev.Location, width))
-	}
-	if ev.URL != "" {
+
+	meta = append(meta, "", m.styles.detailLine("", "Location", emptyDefault(ev.Location, "-"), width))
+	if _, isVideoCall := videoCallProvider(strings.TrimSpace(ev.URL)); ev.URL != "" && !isVideoCall {
 		meta = append(meta, m.styles.detailLine("", "URL", ev.URL, width))
 	}
-	if len(ev.Attendees) > 0 {
-		meta = append(meta, "", m.styles.detailLine("", "Attendees", fmt.Sprintf("%d total", len(ev.Attendees)), width))
-		meta = append(meta, detailAttendeeLines(m.styles, ev.Attendees, width, 5)...)
+	calls := videoCallsForEvent(ev)
+	callLines := make([]videoCallLine, 0, len(calls))
+	for _, call := range calls {
+		callLines = append(callLines, videoCallLine{line: len(meta), url: call.url})
+		meta = append(meta, m.styles.detailLine("󰕧", call.provider, call.url, width))
 	}
-	meta = append(meta, "", m.styles.detailLine("󰥔", "All-day", yesNo(ev.AllDay), width))
-	meta = append(meta, m.styles.detailLine("", "When", ev.Start.Format("2006-01-02 15:04")+" - "+ev.End.Format("2006-01-02 15:04"), width))
+
+	meta = append(meta, "", m.styles.detailLine("", "Attendees", fmt.Sprintf("%d total", len(ev.Attendees)), width))
+	meta = append(meta, detailAttendeeLines(m.styles, ev.Attendees, width, len(ev.Attendees))...)
+
+	timezone, _ := eventFormTimezone(ev, "details")
+	meta = append(meta,
+		"",
+		m.styles.detailLine("󰥔", "All-day", yesNo(ev.AllDay), width),
+		m.styles.detailLine("", "When", ev.Start.Format("2006-01-02 15:04")+" - "+ev.End.Format("2006-01-02 15:04"), width),
+		m.styles.detailLine("", "Timezone", timezone, width),
+		"",
+		m.styles.detailLine("󰛐", "Availability", eventAvailabilityDisplay(ev.Availability), width),
+		m.styles.detailLine("", "Visibility", eventVisibilityDisplay(ev.Visibility), width),
+	)
+
+	repeat := "none"
 	if ev.Recurrence != nil {
-		meta = append(meta, "", m.styles.detailLine("󰑖", "Repeat", formatRecurrence(ev.Recurrence), width))
+		repeat = formatRecurrence(ev.Recurrence)
 	} else if ev.Recurring {
-		meta = append(meta, "", m.styles.detailLine("󰑖", "Repeat", "yes", width))
+		repeat = "yes"
 	}
-	if len(ev.Alarms) > 0 {
-		meta = append(meta, "", m.styles.detailLine("󰀠", "Notifications", formatAlarms(ev.Alarms), width))
-	}
-	return m.renderGroupedDetails(meta, "", width, height)
+	meta = append(meta,
+		"",
+		m.styles.detailLine("󰑖", "Repeat", repeat, width),
+		"",
+		m.styles.detailLine("󰀠", "Notifications", emptyDefault(formatAlarms(ev.Alarms), "-"), width),
+	)
+
+	m.addVideoCallMouseHits(callLines, width, height)
+	return m.renderGroupedDetails(meta, ev.Description, width, height)
 }
 
 func (m Model) renderTodoDetailsFor(todo calendar.Todo, mode string, width, height int) string {
@@ -2709,25 +2688,39 @@ func (m Model) renderTodoDetailsFor(todo calendar.Todo, mode string, width, heig
 			when = "due " + todo.Due.Format("2006-01-02 15:04")
 		}
 	}
+	calendarName := strings.TrimSpace(todo.DisplayName)
+	if calendarName == "" {
+		calendarName = m.calendarDisplayName(calendarKey(todo.Source, todo.Calendar))
+	}
 	meta := []string{
-		m.styles.detailLine("󰉢", "Title", todo.Summary, width),
+		m.styles.detailLine("󰉢", "Title", emptyDefault(todo.Summary, "(untitled task)"), width),
+		m.styles.detailLine("", "Calendar", calendarName, width),
+		"",
+		m.styles.detailLine("", "Location", emptyDefault(todo.Location, "-"), width),
+		"",
+		m.styles.detailLine("󰥔", "When", when, width),
+		m.styles.detailLine("", "Start", detailTime(todo.Start), width),
+		m.styles.detailLine("", "Due", detailTime(todo.Due), width),
+		"",
+		m.styles.detailLine("󰄬", "Status", strings.ToLower(status), width),
+		m.styles.detailLine("", "Completed", yesNo(isTodoDone(todo)), width),
 	}
-	if strings.TrimSpace(todo.Location) != "" {
-		meta = append(meta, "", m.styles.detailLine("", "Location", todo.Location, width))
-	}
-	meta = append(meta, "", m.styles.detailLine("󰥔", "When", when, width))
-	meta = append(meta, "", m.styles.detailLine("󰄬", "Status", strings.ToLower(status), width))
 	if todo.Percent > 0 {
 		meta = append(meta, m.styles.detailLine("", "Progress", fmt.Sprintf("%d%%", todo.Percent), width))
 	}
-	if todo.Priority > 0 {
-		priorityLabel := todoPriorityLabel(todo.Priority)
-		if strings.EqualFold(priorityLabel, "high") {
-			priorityLabel = m.styles.HighPriority.Render(priorityLabel)
-		}
-		meta = append(meta, m.styles.detailLine("", "Priority", priorityLabel, width))
+	priorityLabel := emptyDefault(todoPriorityLabel(todo.Priority), "mid")
+	if strings.EqualFold(priorityLabel, "high") {
+		priorityLabel = m.styles.HighPriority.Render(priorityLabel)
 	}
+	meta = append(meta, m.styles.detailLine("", "Priority", priorityLabel, width))
 	return m.renderGroupedDetails(meta, todo.Description, width, height)
+}
+
+func detailTime(value *time.Time) string {
+	if value == nil {
+		return "-"
+	}
+	return value.Format("2006-01-02 15:04")
 }
 
 func (m Model) renderGroupedDetails(meta []string, description string, width, height int) string {
@@ -2774,7 +2767,7 @@ func detailAttendeeLines(styles Styles, attendees []calendar.Attendee, width, li
 func detailDescriptionLines(styles Styles, description string, width int) []string {
 	description = strings.TrimSpace(description)
 	if description == "" {
-		return nil
+		return []string{styles.detailLine("󰦨", "Description", "-", width)}
 	}
 	lines := []string{styles.detailLine("󰦨", "Description", "", width)}
 	for _, raw := range strings.Split(description, "\n") {
@@ -3293,9 +3286,6 @@ func (m Model) shortcutsLegend() string {
 	if (m.eventForm != nil && m.eventForm.hasActiveDialog()) || (m.todoForm != nil && m.todoForm.activeForm != nil) {
 		return ""
 	}
-	if (m.eventForm != nil && m.eventForm.mode == "view") || (m.todoForm != nil && m.todoForm.mode == "view") {
-		return "[esc/q] Back  [j/k] Next / Previous  [e] Edit  [?] Help"
-	}
 	if m.eventForm != nil || m.todoForm != nil {
 		return "[esc/q] Cancel  [ctrl+s] Save  [j/k] Next / Prev  [h/l/←/→] Change  [enter] Edit  [?] Help"
 	}
@@ -3305,26 +3295,23 @@ func (m Model) shortcutsLegend() string {
 	case paneCalendars:
 		return "[esc/q] Back  [j/k] Calendar  [enter/spc] Hide/Show  [tab/s-tab] Pane  [?] Help"
 	case paneDetails:
-		return "[esc/q] Back  [j/k] Scroll  [e] Edit  [n] New  [tab/s-tab] Pane  [?] Help"
+		join := ""
+		if m.hasSelectedVideoCall() {
+			join = "  [v] Join"
+		}
+		return "[esc/q] Back  [j/k] Scroll" + join + "  [e] Edit  [n] New  [tab/s-tab] Pane  [?] Help"
 	}
 	if m.showTasksMode {
 		return "[esc/q] Exit  [j/k] Task  [h] Calendar  [enter] Details  [n] New  [spc] Done/Undone  [tab/s-tab] Pane  [?] Help"
 	}
-	return "[esc/q] Exit  [j/k] Event  [h] Calendar  [enter] Details  [e] Edit  [n] New  [tab/s-tab] Pane  [?] Help"
+	join := ""
+	if m.hasSelectedVideoCall() {
+		join = "  [v] Join"
+	}
+	return "[esc/q] Exit  [j/k] Event  [h] Calendar  [enter] Details  [e] Edit" + join + "  [n] New  [tab/s-tab] Pane  [?] Help"
 }
 
 func (m Model) helpLines() []string {
-	if (m.eventForm != nil && m.eventForm.mode == "view") || (m.todoForm != nil && m.todoForm.mode == "view") {
-		return []string{
-			"esc, q      Back to list",
-			"j/k         Next / previous field",
-			"↑/↓         Next / previous field",
-			"tab         Next field",
-			"shift+tab   Previous field",
-			"e           Edit item",
-			"?           Toggle help",
-		}
-	}
 	if m.eventForm != nil || m.todoForm != nil {
 		return []string{
 			"esc, q      Cancel editor",
@@ -3371,18 +3358,23 @@ func (m Model) helpLines() []string {
 			"?           Toggle help",
 		}
 	case paneDetails:
-		return []string{
+		lines := []string{
 			"esc, q      Back to list",
 			"ctrl+c      Exit",
 			"j/k, ↑/↓    Scroll down/up",
 			"enter, spc  Back to list",
+		}
+		if m.hasSelectedVideoCall() {
+			lines = append(lines, "v           Join video call")
+		}
+		return append(lines,
 			"e           Edit selected item",
 			"n           New item",
 			"ctrl+d      Delete selected item",
 			"tab         Next pane",
 			"shift+tab   Previous pane",
 			"?           Toggle help",
-		}
+		)
 	}
 	if m.showTasksMode {
 		return []string{
@@ -3397,7 +3389,6 @@ func (m Model) helpLines() []string {
 			"t           Jump to today",
 			"enter       Focus Details",
 			"e           Edit selected task",
-			"v           Open read-only view",
 			"n           New task",
 			"spc, x, d   Toggle done status",
 			"p           Cycle task priority",
@@ -3410,7 +3401,7 @@ func (m Model) helpLines() []string {
 			"?           Toggle help",
 		}
 	}
-	return []string{
+	lines := []string{
 		"esc, q      Exit",
 		"ctrl+c      Exit",
 		"j/k, ↑/↓    Next / previous event",
@@ -3422,7 +3413,11 @@ func (m Model) helpLines() []string {
 		"t           Today",
 		"enter       Focus Details",
 		"e           Edit selected event",
-		"v           Open read-only view",
+	}
+	if m.hasSelectedVideoCall() {
+		lines = append(lines, "v           Join video call")
+	}
+	return append(lines,
 		"n           New event",
 		"m           Open tasks",
 		"ctrl+d      Delete selected event",
@@ -3432,7 +3427,7 @@ func (m Model) helpLines() []string {
 		"tab         Next pane",
 		"shift+tab   Previous pane",
 		"?           Toggle help",
-	}
+	)
 }
 
 func (m Model) renderHelpOverlay(width, height int) string {
@@ -3884,28 +3879,6 @@ func (m *Model) openEditFormForSelected() bool {
 	}
 	if it.Todo != nil {
 		return m.openTodoFormEditSelected()
-	}
-	return false
-}
-
-func (m *Model) openViewForSelected() bool {
-	items := m.agendaItems()
-	if len(items) == 0 || m.eventCursor < 0 || m.eventCursor >= len(items) {
-		return false
-	}
-	it := items[m.eventCursor]
-	if it.IsFree {
-		return false
-	}
-	if it.Event != nil {
-		m.eventForm = m.newEventFormState("view", it.Event.UID, *it.Event)
-		m.detailScroll = 0
-		return true
-	}
-	if it.Todo != nil {
-		m.todoForm = m.newTodoFormState("view", it.Todo.UID, *it.Todo)
-		m.detailScroll = 0
-		return true
 	}
 	return false
 }

@@ -16,6 +16,7 @@ without issues but cannot guarantee there won't be issues with other calendars.
 ## Features
 
 - Keyboard- and mouse-driven terminal calendar with months list, agenda, details pane, and calendar toggles
+- Google Meet, Microsoft Teams, and Zoom links open through the operating system's default app
 - Minimap with a weekly overview: click events to jump to them, or click empty time to stage a one-hour slot for `n`
 - Separate agenda and task modes, agenda page movement, and show-all mode
 - Event and task create/edit/delete support from the interactive calendar, with
@@ -157,9 +158,12 @@ counterclockwise. The active pane has a highlighted border.
 
 - Calendar: use `h/j/k/l` to move left/down/up/right, `Enter` to focus the
   selected date in Agenda/Tasks, and `n` to create an item.
-- Agenda/Tasks: use `Enter` to focus Details, `e` to edit, `n` to create, and
-  `h` to return to Calendar. In Tasks mode, `Space` toggles completion.
-- Details: use `e` to edit and `n` to create.
+- Agenda: use `Enter` to focus Details, `e` to edit, `n` to create, and `h`
+  to return to Calendar. When the selected event contains a Google Meet,
+  Microsoft Teams, or Zoom link, use `v` to join it. In Tasks mode, `Space`
+  toggles completion.
+- Details: use `j/k` to scroll, `e` to edit, and `n` to create. Video-call
+  rows can be clicked to join; `v` joins the first call shown.
 - Calendars: use `j/k` to select a calendar and `Space` to hide or show it.
 
 Open directly in task mode:

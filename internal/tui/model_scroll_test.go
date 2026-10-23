@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
@@ -52,17 +53,83 @@ func TestEventDetailsShowRSVP(t *testing.T) {
 	}
 }
 
-func TestEventDetailsDoNotShowDescription(t *testing.T) {
+func TestEventDetailsShowReadOnlyFields(t *testing.T) {
 	m := NewModel(&config.Config{}, calendar.Dataset{}, nil)
-	ev := calendar.Event{Summary: "Test", Description: "private notes"}
+	ev := calendar.Event{
+		Summary:      "Planning",
+		Description:  "private notes",
+		DisplayName:  "Personal",
+		Organizer:    "organizer@example.test",
+		Availability: "free",
+		Visibility:   "private",
+		Timezone:     "Europe/Berlin",
+		URL:          "https://meet.google.com/abc-defg-hij",
+	}
 
-	got := m.renderEventDetailsFor(ev, 80, 20)
-	if strings.Contains(got, "Description") || strings.Contains(got, "private notes") {
-		t.Fatalf("event details unexpectedly show description:\n%s", got)
+	got := m.renderEventDetailsFor(ev, 100, 100)
+	for _, value := range []string{
+		"Calendar", "Personal", "Organizer", "organizer@example.test",
+		"Availability", "Visibility", "Timezone", "Description", "private notes",
+		"Google Meet", ev.URL,
+	} {
+		if !strings.Contains(got, value) {
+			t.Fatalf("event details do not contain %q:\n%s", value, got)
+		}
+	}
+	if count := strings.Count(got, ev.URL); count != 1 {
+		t.Fatalf("video URL rendered %d times, want once:\n%s", count, got)
 	}
 }
 
-func TestVOpensReadOnlyEventView(t *testing.T) {
+func TestTodoDetailsShowReadOnlyFields(t *testing.T) {
+	start := time.Date(2026, time.October, 23, 9, 0, 0, 0, time.UTC)
+	due := start.Add(2 * time.Hour)
+	m := NewModel(&config.Config{}, calendar.Dataset{}, nil)
+	todo := calendar.Todo{
+		Summary: "Prepare notes", Description: "Draft agenda", DisplayName: "Work",
+		Status: "IN-PROCESS", Percent: 50, Priority: 1, Start: &start, Due: &due,
+	}
+
+	got := m.renderTodoDetailsFor(todo, "todo-range", 100, 100)
+	for _, value := range []string{
+		"Calendar", "Work", "Start", "Due", "Status", "Completed",
+		"Progress", "50%", "Priority", "Description", "Draft agenda",
+	} {
+		if !strings.Contains(got, value) {
+			t.Fatalf("task details do not contain %q:\n%s", value, got)
+		}
+	}
+}
+
+func TestVJoinsSelectedVideoCall(t *testing.T) {
+	now := time.Now()
+	cal := calendar.Calendar{Source: "local", Name: "personal"}
+	ev := calendar.Event{
+		UID: "event", Summary: "Event", Source: cal.Source, Calendar: cal.Name,
+		Start: now, End: now.Add(time.Hour), URL: "https://meet.google.com/abc-defg-hij",
+	}
+	m := NewModel(&config.Config{}, calendar.Dataset{Calendars: []calendar.Calendar{cal}, Events: []calendar.Event{ev}}, nil)
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'v'}})
+	next := updated.(Model)
+	if cmd == nil {
+		t.Fatal("v in Agenda did not return a video-call command")
+	}
+	if next.eventForm != nil {
+		t.Fatal("v opened the obsolete read-only event form")
+	}
+	if !strings.Contains(strings.Join(next.helpLines(), "\n"), "Join video call") {
+		t.Fatal("Agenda help does not show v for an event with a video call")
+	}
+
+	next.focusedPane = paneDetails
+	_, cmd = next.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'v'}})
+	if cmd == nil {
+		t.Fatal("v in Details did not return a video-call command")
+	}
+}
+
+func TestVDoesNothingWithoutVideoCall(t *testing.T) {
 	now := time.Now()
 	cal := calendar.Calendar{Source: "local", Name: "personal"}
 	ev := calendar.Event{
@@ -71,58 +138,21 @@ func TestVOpensReadOnlyEventView(t *testing.T) {
 	}
 	m := NewModel(&config.Config{}, calendar.Dataset{Calendars: []calendar.Calendar{cal}, Events: []calendar.Event{ev}}, nil)
 
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'v'}})
-	m = updated.(Model)
-	if m.eventForm == nil || m.eventForm.mode != "view" {
-		t.Fatalf("v did not open the read-only event view: %#v", m.eventForm)
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'v'}})
+	next := updated.(Model)
+	if cmd != nil || next.eventForm != nil {
+		t.Fatal("v should do nothing when the selected event has no video call")
 	}
-	for _, row := range m.eventEditorRows() {
-		if row.key == "attendees-add" || row.key == "alarms-add" {
-			t.Fatalf("read-only view contains add button %q", row.key)
-		}
-	}
-
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	m = *updated.(*Model)
-	if m.eventForm.activeForm != nil {
-		t.Fatal("Enter made a field editable in read-only view")
-	}
-
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
-	m = *updated.(*Model)
-	if m.eventForm == nil || m.eventForm.mode != "edit" {
-		t.Fatal("e did not open the Edit Event form")
+	if strings.Contains(strings.Join(next.helpLines(), "\n"), "Join video call") {
+		t.Fatal("Agenda help shows v for an event without a video call")
 	}
 }
 
-func TestReadOnlyTaskViewReturnsToListWithQ(t *testing.T) {
-	now := time.Now()
-	due := now.Add(time.Hour)
-	cal := calendar.Calendar{Source: "local", Name: "personal"}
-	todo := calendar.Todo{
-		UID: "task", Summary: "Task", Source: cal.Source, Calendar: cal.Name,
-		Start: &now, Due: &due,
-	}
-	m := NewTaskModeModel(&config.Config{}, calendar.Dataset{Calendars: []calendar.Calendar{cal}, Todos: []calendar.Todo{todo}}, nil)
-
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'v'}})
-	m = updated.(Model)
-	if m.todoForm == nil || m.todoForm.mode != "view" {
-		t.Fatal("v did not open the read-only task view")
-	}
-
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
-	m = *updated.(*Model)
-	if m.todoForm != nil || m.focusedPane != paneAgenda {
-		t.Fatal("q did not return from task view to the task list")
-	}
-
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'v'}})
-	m = updated.(Model)
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
-	m = *updated.(*Model)
-	if m.todoForm == nil || m.todoForm.mode != "edit" {
-		t.Fatal("e did not open the Edit Task form")
+func TestVideoCallLaunchFailureSetsActionError(t *testing.T) {
+	m := NewModel(&config.Config{}, calendar.Dataset{}, nil)
+	updated, _ := m.Update(videoCallOpenedMsg{err: errors.New("launcher failed")})
+	if got := updated.(Model).actionErr; got != "launcher failed" {
+		t.Fatalf("action error = %q, want launcher failure", got)
 	}
 }
 

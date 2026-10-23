@@ -117,6 +117,36 @@ func TestMouseClicksCalendarAndAgendaRows(t *testing.T) {
 	}
 }
 
+func TestMouseClickJoinsVideoCallFromUnfocusedDetails(t *testing.T) {
+	start := dayStart(time.Now()).Add(12 * time.Hour)
+	callURL := "https://acme.zoom.us/j/123456789"
+	cal := calendar.Calendar{Source: "src", Name: "cal"}
+	event := calendar.Event{
+		UID: "event", Summary: "Event", Source: cal.Source, Calendar: cal.Name,
+		Start: start, End: start.Add(time.Hour), URL: callURL,
+	}
+	m := NewModel(&config.Config{SidebarWidth: 30}, calendar.Dataset{
+		Calendars: []calendar.Calendar{cal},
+		Events:    []calendar.Event{event},
+	}, nil)
+	m.width = 120
+	m.height = 40
+	_ = m.View()
+
+	hit := renderedHit(t, m, mouseVideoCall, -1, callURL)
+	updated, cmd := m.Update(tea.MouseMsg{
+		X: hit.rect.x, Y: hit.rect.y,
+		Action: tea.MouseActionPress, Button: tea.MouseButtonLeft,
+	})
+	next := *modelValue(t, updated)
+	if cmd == nil {
+		t.Fatal("clicking the video-call row did not return an open command")
+	}
+	if next.focusedPane != paneAgenda {
+		t.Fatal("clicking the video-call row should join immediately without first focusing Details")
+	}
+}
+
 func TestMouseStagesChoiceUntilApply(t *testing.T) {
 	calendars := []calendar.Calendar{{Source: "src", Name: "a"}, {Source: "src", Name: "b"}}
 	m := NewModel(&config.Config{SidebarWidth: 30}, calendar.Dataset{Calendars: calendars}, nil)
