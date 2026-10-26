@@ -6,7 +6,9 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
+	"time"
 
+	"github.com/atotto/clipboard"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/hsanson/go-khal/internal/calendar"
 )
@@ -16,13 +18,51 @@ type videoCall struct {
 	url      string
 }
 
-type videoCallLine struct {
-	line int
-	url  string
+const (
+	googleMeetProvider = "Google Meet"
+	copyStatusDuration = 2 * time.Second
+)
+
+type detailActionHit struct {
+	line  int
+	x     int
+	width int
+	kind  mouseTarget
+	value string
 }
 
-type videoCallOpenedMsg struct {
+type urlOpenedMsg struct {
 	err error
+}
+
+type videoCallCopiedMsg struct {
+	id  uint64
+	url string
+	err error
+}
+
+type videoCallCopyStatusExpiredMsg struct {
+	id uint64
+}
+
+type locationCopiedMsg struct {
+	id    uint64
+	value string
+	err   error
+}
+
+type locationCopyStatusExpiredMsg struct {
+	id uint64
+}
+
+type urlFieldCopiedMsg struct {
+	id    uint64
+	value string
+	err   error
+}
+
+type urlFieldCopyStatusExpiredMsg struct {
+	id uint64
 }
 
 func (m Model) selectedVideoCalls() []videoCall {
@@ -47,25 +87,25 @@ func (m *Model) openSelectedVideoCall() tea.Cmd {
 		return nil
 	}
 	m.actionErr = ""
-	return openVideoCall(calls[0].url)
+	return openURL(calls[0].url, "video call")
 }
 
-func (m Model) addVideoCallMouseHits(lines []videoCallLine, width, height int) {
+func (m Model) addDetailActionMouseHits(hits []detailActionHit, width, height int) {
 	topHeight, _ := workspacePaneHeights(max(8, m.height-4))
-	for _, line := range lines {
-		y := line.line - m.detailScroll
-		if y < 0 || y >= height {
+	for _, hit := range hits {
+		y := hit.line - m.detailScroll
+		if y < 0 || y >= height || hit.x >= width {
 			continue
 		}
 		m.addMouseHit(mouseHit{
 			rect: mouseRect{
-				x:      m.mouseMainX + 2,
+				x:      m.mouseMainX + 2 + hit.x,
 				y:      m.mouseMainY + topHeight + 2 + y,
-				width:  width,
+				width:  min(hit.width, width-hit.x),
 				height: 1,
 			},
-			kind:  mouseVideoCall,
-			value: line.url,
+			kind:  hit.kind,
+			value: hit.value,
 		})
 	}
 }
@@ -74,40 +114,67 @@ func videoCallsForEvent(event calendar.Event) []videoCall {
 	var calls []videoCall
 	var seen map[string]struct{}
 	for _, text := range []string{event.URL, event.Location, event.Description} {
-		forEachHTTPSURL(text, func(rawURL string) {
+		forEachWebURL(text, func(rawURL string) bool {
 			provider, ok := videoCallProvider(rawURL)
 			if !ok {
-				return
+				return true
 			}
 			if seen == nil {
 				seen = make(map[string]struct{})
 			}
 			if _, ok := seen[rawURL]; ok {
-				return
+				return true
 			}
 			seen[rawURL] = struct{}{}
 			calls = append(calls, videoCall{provider: provider, url: rawURL})
+			return true
 		})
 	}
 	return calls
 }
 
-func forEachHTTPSURL(text string, visit func(string)) {
-	const prefix = "https://"
-	for start := 0; start+len(prefix) <= len(text); {
-		if !strings.EqualFold(text[start:start+len(prefix)], prefix) {
+func forEachWebURL(text string, visit func(string) bool) {
+	for start := 0; start < len(text); {
+		prefixLength := webURLPrefixLength(text[start:])
+		if prefixLength == 0 {
 			start++
 			continue
 		}
-		end := start + len(prefix)
+		end := start + prefixLength
 		for end < len(text) && !urlBoundary(text[end]) {
 			end++
 		}
-		if rawURL := trimURLPunctuation(text[start:end]); len(rawURL) > len(prefix) {
-			visit(rawURL)
+		rawURL := trimURLPunctuation(text[start:end])
+		if len(rawURL) > prefixLength && !visit(rawURL) {
+			return
 		}
 		start = end
 	}
+}
+
+func webURLPrefixLength(text string) int {
+	switch {
+	case len(text) >= len("https://") && strings.EqualFold(text[:len("https://")], "https://"):
+		return len("https://")
+	case len(text) >= len("http://") && strings.EqualFold(text[:len("http://")], "http://"):
+		return len("http://")
+	default:
+		return 0
+	}
+}
+
+func firstWebURL(text string) string {
+	var first string
+	forEachWebURL(text, func(rawURL string) bool {
+		parsed, err := url.Parse(rawURL)
+		if err != nil || parsed.User != nil || parsed.Hostname() == "" ||
+			!strings.EqualFold(parsed.Scheme, "http") && !strings.EqualFold(parsed.Scheme, "https") {
+			return true
+		}
+		first = rawURL
+		return false
+	})
+	return first
 }
 
 func urlBoundary(char byte) bool {
@@ -150,7 +217,7 @@ func videoCallProvider(rawURL string) (string, bool) {
 	path := parsed.EscapedPath()
 	switch {
 	case host == "meet.google.com" && googleMeetPath(path):
-		return "Google Meet", true
+		return googleMeetProvider, true
 	case host == "teams.microsoft.com" && strings.HasPrefix(path, "/l/meetup-join/") && len(path) > len("/l/meetup-join/"):
 		return "Teams", true
 	case zoomHost(host) && zoomMeetingPath(path):
@@ -197,7 +264,7 @@ func zoomMeetingPath(path string) bool {
 	return true
 }
 
-func openVideoCall(rawURL string) tea.Cmd {
+func openURL(rawURL, target string) tea.Cmd {
 	return func() tea.Msg {
 		var command *exec.Cmd
 		switch runtime.GOOS {
@@ -208,11 +275,32 @@ func openVideoCall(rawURL string) tea.Cmd {
 		case "windows":
 			command = exec.Command("rundll32", "url.dll,FileProtocolHandler", rawURL)
 		default:
-			return videoCallOpenedMsg{err: fmt.Errorf("open video call: unsupported platform %s", runtime.GOOS)}
+			return urlOpenedMsg{err: fmt.Errorf("open %s: unsupported platform %s", target, runtime.GOOS)}
 		}
 		if err := command.Run(); err != nil {
-			return videoCallOpenedMsg{err: fmt.Errorf("open video call: %w", err)}
+			return urlOpenedMsg{err: fmt.Errorf("open %s: %w", target, err)}
 		}
-		return videoCallOpenedMsg{}
+		return urlOpenedMsg{}
+	}
+}
+
+func copyVideoCall(rawURL string, id uint64) tea.Cmd {
+	return func() tea.Msg {
+		err := clipboard.WriteAll(rawURL)
+		return videoCallCopiedMsg{id: id, url: rawURL, err: err}
+	}
+}
+
+func copyLocation(value string, id uint64) tea.Cmd {
+	return func() tea.Msg {
+		err := clipboard.WriteAll(value)
+		return locationCopiedMsg{id: id, value: value, err: err}
+	}
+}
+
+func copyURLField(value string, id uint64) tea.Cmd {
+	return func() tea.Msg {
+		err := clipboard.WriteAll(value)
+		return urlFieldCopiedMsg{id: id, value: value, err: err}
 	}
 }

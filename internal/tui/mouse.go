@@ -14,6 +14,11 @@ const (
 	mouseAgendaPane
 	mouseDetailsPane
 	mouseVideoCall
+	mouseVideoCallCopy
+	mouseLocationOpen
+	mouseLocationCopy
+	mouseEventURLOpen
+	mouseEventURLCopy
 	mouseCalendarDay
 	mouseCalendarPreviousYear
 	mouseCalendarPreviousMonth
@@ -124,7 +129,31 @@ func (m Model) updateMouse(event tea.MouseEvent) (tea.Model, tea.Cmd) {
 		m.focusedPane = paneDetails
 	case mouseVideoCall:
 		m.actionErr = ""
-		return m, openVideoCall(hit.value)
+		return m, openURL(hit.value, "video call")
+	case mouseVideoCallCopy:
+		m.actionErr = ""
+		m.videoCallCopyURL = ""
+		m.videoCallCopyFailed = false
+		m.videoCallCopyStatusID++
+		return m, copyVideoCall(hit.value, m.videoCallCopyStatusID)
+	case mouseLocationOpen:
+		m.actionErr = ""
+		return m, openURL(hit.value, "location")
+	case mouseLocationCopy:
+		m.actionErr = ""
+		m.locationCopyValue = ""
+		m.locationCopyFailed = false
+		m.locationCopyStatusID++
+		return m, copyLocation(hit.value, m.locationCopyStatusID)
+	case mouseEventURLOpen:
+		m.actionErr = ""
+		return m, openURL(hit.value, "URL")
+	case mouseEventURLCopy:
+		m.actionErr = ""
+		m.urlFieldCopyValue = ""
+		m.urlFieldCopyFailed = false
+		m.urlFieldCopyStatusID++
+		return m, copyURLField(hit.value, m.urlFieldCopyStatusID)
 	case mouseCalendarDay:
 		m.navigateToDate(hit.day)
 		m.focusedPane = paneCalendar

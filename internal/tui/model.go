@@ -11,42 +11,52 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/huh"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/hsanson/go-khal/internal/calendar"
 	"github.com/hsanson/go-khal/internal/config"
 )
 
 type Model struct {
-	store              *calendar.Store
-	cfg                *config.Config
-	data               calendar.Dataset
-	styles             Styles
-	formTheme          *huh.Theme
-	themeMonitor       *themeMonitor
-	selected           time.Time
-	width              int
-	height             int
-	calendarVisibility map[string]bool
-	calendarOrder      []string
-	weekViewportStart  time.Time
-	focusedPane        workspacePane
-	calendarCursor     int
-	calendarOffset     int
-	showAllMode        bool
-	showTasksMode      bool
-	showMinimap        bool
-	agendaStart        time.Time
-	eventCursor        int
-	eventListOffset    int
-	temporaryFreeStart time.Time
-	detailScroll       int
-	eventForm          *eventFormState
-	todoForm           *todoFormState
-	deleteConfirm      *deleteConfirmState
-	showHelpOverlay    bool
-	actionErr          string
-	mouse              *mouseState
-	mouseMainX         int
-	mouseMainY         int
+	store                 *calendar.Store
+	cfg                   *config.Config
+	data                  calendar.Dataset
+	styles                Styles
+	formTheme             *huh.Theme
+	themeMonitor          *themeMonitor
+	selected              time.Time
+	width                 int
+	height                int
+	calendarVisibility    map[string]bool
+	calendarOrder         []string
+	weekViewportStart     time.Time
+	focusedPane           workspacePane
+	calendarCursor        int
+	calendarOffset        int
+	showAllMode           bool
+	showTasksMode         bool
+	showMinimap           bool
+	agendaStart           time.Time
+	eventCursor           int
+	eventListOffset       int
+	temporaryFreeStart    time.Time
+	detailScroll          int
+	eventForm             *eventFormState
+	todoForm              *todoFormState
+	deleteConfirm         *deleteConfirmState
+	showHelpOverlay       bool
+	actionErr             string
+	videoCallCopyURL      string
+	videoCallCopyFailed   bool
+	videoCallCopyStatusID uint64
+	locationCopyValue     string
+	locationCopyFailed    bool
+	locationCopyStatusID  uint64
+	urlFieldCopyValue     string
+	urlFieldCopyFailed    bool
+	urlFieldCopyStatusID  uint64
+	mouse                 *mouseState
+	mouseMainX            int
+	mouseMainY            int
 }
 
 type workspacePane uint8
@@ -301,11 +311,65 @@ func (m *Model) applyTheme(theme themeStyles) {
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
-	case videoCallOpenedMsg:
+	case urlOpenedMsg:
 		if msg.err != nil {
 			m.actionErr = msg.err.Error()
 		} else {
 			m.actionErr = ""
+		}
+		return m, nil
+	case videoCallCopiedMsg:
+		if msg.id != m.videoCallCopyStatusID {
+			return m, nil
+		}
+		m.videoCallCopyURL = msg.url
+		m.videoCallCopyFailed = msg.err != nil
+		if msg.err != nil {
+			return m, nil
+		}
+		return m, tea.Tick(copyStatusDuration, func(time.Time) tea.Msg {
+			return videoCallCopyStatusExpiredMsg{id: msg.id}
+		})
+	case videoCallCopyStatusExpiredMsg:
+		if msg.id == m.videoCallCopyStatusID {
+			m.videoCallCopyURL = ""
+			m.videoCallCopyFailed = false
+		}
+		return m, nil
+	case locationCopiedMsg:
+		if msg.id != m.locationCopyStatusID {
+			return m, nil
+		}
+		m.locationCopyValue = msg.value
+		m.locationCopyFailed = msg.err != nil
+		if msg.err != nil {
+			return m, nil
+		}
+		return m, tea.Tick(copyStatusDuration, func(time.Time) tea.Msg {
+			return locationCopyStatusExpiredMsg{id: msg.id}
+		})
+	case locationCopyStatusExpiredMsg:
+		if msg.id == m.locationCopyStatusID {
+			m.locationCopyValue = ""
+			m.locationCopyFailed = false
+		}
+		return m, nil
+	case urlFieldCopiedMsg:
+		if msg.id != m.urlFieldCopyStatusID {
+			return m, nil
+		}
+		m.urlFieldCopyValue = msg.value
+		m.urlFieldCopyFailed = msg.err != nil
+		if msg.err != nil {
+			return m, nil
+		}
+		return m, tea.Tick(copyStatusDuration, func(time.Time) tea.Msg {
+			return urlFieldCopyStatusExpiredMsg{id: msg.id}
+		})
+	case urlFieldCopyStatusExpiredMsg:
+		if msg.id == m.urlFieldCopyStatusID {
+			m.urlFieldCopyValue = ""
+			m.urlFieldCopyFailed = false
 		}
 		return m, nil
 	case themeStylesMsg:
@@ -2626,15 +2690,20 @@ func (m Model) renderEventDetailsFor(ev calendar.Event, width, height int) strin
 		}
 	}
 
-	meta = append(meta, "", m.styles.detailLine("", "Location", emptyDefault(ev.Location, "-"), width))
-	if _, isVideoCall := videoCallProvider(strings.TrimSpace(ev.URL)); ev.URL != "" && !isVideoCall {
-		meta = append(meta, m.styles.detailLine("", "URL", ev.URL, width))
+	meta = append(meta, "")
+	locationLines, actionHits := m.locationDetailLines(ev.Location, width, len(meta))
+	meta = append(meta, locationLines...)
+	if strings.TrimSpace(ev.URL) != "" {
+		meta = append(meta, "")
+		urlLines, hits := m.urlDetailLines(ev.URL, width, len(meta))
+		meta = append(meta, urlLines...)
+		actionHits = append(actionHits, hits...)
 	}
 	calls := videoCallsForEvent(ev)
-	callLines := make([]videoCallLine, 0, len(calls))
 	for _, call := range calls {
-		callLines = append(callLines, videoCallLine{line: len(meta), url: call.url})
-		meta = append(meta, m.styles.detailLine("󰕧", call.provider, call.url, width))
+		lines, hits := m.videoCallDetailLines(call, width, len(meta))
+		meta = append(meta, lines...)
+		actionHits = append(actionHits, hits...)
 	}
 
 	meta = append(meta, "", m.styles.detailLine("", "Attendees", fmt.Sprintf("%d total", len(ev.Attendees)), width))
@@ -2664,7 +2733,7 @@ func (m Model) renderEventDetailsFor(ev calendar.Event, width, height int) strin
 		m.styles.detailLine("󰀠", "Notifications", emptyDefault(formatAlarms(ev.Alarms), "-"), width),
 	)
 
-	m.addVideoCallMouseHits(callLines, width, height)
+	m.addDetailActionMouseHits(actionHits, width, height)
 	return m.renderGroupedDetails(meta, ev.Description, width, height)
 }
 
@@ -2735,18 +2804,148 @@ func (m Model) renderGroupedDetails(meta []string, description string, width, he
 	return lipgloss.NewStyle().Width(width).Height(height).MaxHeight(height).Render(body)
 }
 
-func (styles Styles) detailLine(glyph, label, value string, width int) string {
-	iconWidth := 2
-	labelWidth := 13
+func (styles Styles) detailPrefix(glyph, label string) string {
+	const (
+		iconWidth  = 2
+		labelWidth = 13
+	)
 	icon := strings.Repeat(" ", iconWidth)
 	if glyph != "" {
 		icon = styles.Accent.Render(glyph)
 		icon += strings.Repeat(" ", max(0, iconWidth-lipgloss.Width(icon)))
 	}
-	labelText := padRight(label, labelWidth)
-	prefix := icon + " " + styles.Accent.Render(labelText) + styles.Disabled.Render(": ")
+	return icon + " " + styles.Accent.Render(padRight(label, labelWidth)) + styles.Disabled.Render(": ")
+}
+
+func (styles Styles) detailLine(glyph, label, value string, width int) string {
+	prefix := styles.detailPrefix(glyph, label)
 	valueBudget := max(1, width-lipgloss.Width(prefix))
 	return prefix + styles.Value.Render(truncate(value, valueBudget))
+}
+
+const detailActionGap = "  "
+
+func (m Model) locationDetailLines(location string, width, firstLine int) ([]string, []detailActionHit) {
+	return m.webLinkDetailLines(
+		"", "Location", " Open", location, emptyDefault(location, "-"),
+		m.locationCopyValue == location, m.locationCopyFailed,
+		mouseLocationOpen, mouseLocationCopy, width, firstLine,
+	)
+}
+
+func (m Model) urlDetailLines(value string, width, firstLine int) ([]string, []detailActionHit) {
+	return m.webLinkDetailLines(
+		"", "URL", " Open", value, value,
+		m.urlFieldCopyValue == value, m.urlFieldCopyFailed,
+		mouseEventURLOpen, mouseEventURLCopy, width, firstLine,
+	)
+}
+
+func (m Model) webLinkDetailLines(
+	glyph, label, openLabel, value, displayValue string,
+	copied, copyFailed bool,
+	openKind, copyKind mouseTarget,
+	width, firstLine int,
+) ([]string, []detailActionHit) {
+	width = max(1, width)
+	valueLine := ansi.Truncate(m.styles.detailLine(glyph, label, displayValue, width), width, "")
+	targetURL := firstWebURL(value)
+	if targetURL == "" {
+		return []string{valueLine}, nil
+	}
+
+	openButton := m.styles.PrimaryButton.Render(openLabel)
+	copyLabel := " Copy"
+	copyStyle := m.styles.SecondaryButton
+	if copied {
+		if copyFailed {
+			copyLabel = " Copy Failed"
+			copyStyle = m.styles.DangerButton
+		} else {
+			copyLabel = " Copied"
+		}
+	}
+	copyButton := copyStyle.Render(copyLabel)
+	openWidth := lipgloss.Width(openButton)
+	copyWidth := lipgloss.Width(copyButton)
+	gapWidth := lipgloss.Width(detailActionGap)
+	controlsWidth := openWidth + gapWidth + copyWidth
+	preferredX := lipgloss.Width(m.styles.detailPrefix(glyph, label))
+	available := width - preferredX
+	hit := func(line, x, hitWidth int, kind mouseTarget, hitValue string) detailActionHit {
+		return detailActionHit{line: line, x: x, width: hitWidth, kind: kind, value: hitValue}
+	}
+
+	if controlsWidth <= available {
+		controls := strings.Repeat(" ", preferredX) + openButton + detailActionGap + copyButton
+		return []string{valueLine, controls}, []detailActionHit{
+			hit(firstLine+1, preferredX, openWidth, openKind, targetURL),
+			hit(firstLine+1, preferredX+openWidth+gapWidth, copyWidth, copyKind, value),
+		}
+	}
+
+	x := preferredX
+	if max(openWidth, copyWidth) > available {
+		x = 0
+	}
+	indent := strings.Repeat(" ", x)
+	return []string{valueLine, indent + openButton, indent + copyButton}, []detailActionHit{
+		hit(firstLine+1, x, openWidth, openKind, targetURL),
+		hit(firstLine+2, x, copyWidth, copyKind, value),
+	}
+}
+
+func (m Model) videoCallDetailLines(call videoCall, width, firstLine int) ([]string, []detailActionHit) {
+	width = max(1, width)
+	if call.provider != googleMeetProvider {
+		return []string{m.styles.detailLine("󰕧", call.provider, call.url, width)}, []detailActionHit{{
+			line: firstLine, width: width, kind: mouseVideoCall, value: call.url,
+		}}
+	}
+
+	prefix := m.styles.detailPrefix("󰕧", call.provider)
+	join := m.styles.PrimaryButton.Render(" Join")
+	copyLabel := " Copy"
+	copyStyle := m.styles.SecondaryButton
+	if m.videoCallCopyURL == call.url {
+		if m.videoCallCopyFailed {
+			copyLabel = " Copy Failed"
+			copyStyle = m.styles.DangerButton
+		} else {
+			copyLabel = " Copied"
+		}
+	}
+	copyButton := copyStyle.Render(copyLabel)
+	controls := join + detailActionGap + copyButton
+	joinWidth := lipgloss.Width(join)
+	copyWidth := lipgloss.Width(copyButton)
+	controlsWidth := joinWidth + lipgloss.Width(detailActionGap) + copyWidth
+	hit := func(line, x, hitWidth int, kind mouseTarget) detailActionHit {
+		return detailActionHit{line: line, x: x, width: hitWidth, kind: kind, value: call.url}
+	}
+
+	prefixWidth := lipgloss.Width(prefix)
+	if prefixWidth+controlsWidth <= width {
+		return []string{prefix + controls}, []detailActionHit{
+			hit(firstLine, prefixWidth, joinWidth, mouseVideoCall),
+			hit(firstLine, prefixWidth+joinWidth+lipgloss.Width(detailActionGap), copyWidth, mouseVideoCallCopy),
+		}
+	}
+
+	providerLine := prefix
+	if prefixWidth > width {
+		providerLine = m.styles.Accent.Render(truncate(call.provider, width))
+	}
+	if controlsWidth <= width {
+		return []string{providerLine, controls}, []detailActionHit{
+			hit(firstLine+1, 0, joinWidth, mouseVideoCall),
+			hit(firstLine+1, joinWidth+lipgloss.Width(detailActionGap), copyWidth, mouseVideoCallCopy),
+		}
+	}
+	return []string{providerLine, join, copyButton}, []detailActionHit{
+		hit(firstLine+1, 0, joinWidth, mouseVideoCall),
+		hit(firstLine+2, 0, copyWidth, mouseVideoCallCopy),
+	}
 }
 
 func detailAttendeeLines(styles Styles, attendees []calendar.Attendee, width, limit int) []string {

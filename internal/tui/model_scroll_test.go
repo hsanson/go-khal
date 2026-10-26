@@ -9,6 +9,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/hsanson/go-khal/internal/calendar"
 	"github.com/hsanson/go-khal/internal/config"
 )
@@ -70,14 +71,88 @@ func TestEventDetailsShowReadOnlyFields(t *testing.T) {
 	for _, value := range []string{
 		"Calendar", "Personal", "Organizer", "organizer@example.test",
 		"Availability", "Visibility", "Timezone", "Description", "private notes",
-		"Google Meet", ev.URL,
+		googleMeetProvider, " Join", " Copy", "", "URL", " Open", ev.URL,
 	} {
 		if !strings.Contains(got, value) {
 			t.Fatalf("event details do not contain %q:\n%s", value, got)
 		}
 	}
 	if count := strings.Count(got, ev.URL); count != 1 {
-		t.Fatalf("video URL rendered %d times, want once:\n%s", count, got)
+		t.Fatalf("video-call URL rendered %d times, want once in URL section:\n%s", count, got)
+	}
+}
+
+func TestEventDetailsPreserveDescriptionLinksAndOtherProviders(t *testing.T) {
+	meet := "https://meet.google.com/abc-defg-hij"
+	zoom := "https://acme.zoom.us/j/123456789"
+	m := NewModel(&config.Config{}, calendar.Dataset{}, nil)
+	got := m.renderEventDetailsFor(calendar.Event{
+		URL:         zoom,
+		Description: "Use this room when needed: " + meet,
+	}, 100, 100)
+
+	if count := strings.Count(got, meet); count != 1 {
+		t.Fatalf("description Meet URL rendered %d times, want once:\n%s", count, got)
+	}
+	if !strings.Contains(got, zoom) {
+		t.Fatalf("non-Google video URL was replaced:\n%s", got)
+	}
+	if !strings.Contains(got, " Join") || !strings.Contains(got, " Copy") {
+		t.Fatalf("Google Meet controls missing:\n%s", got)
+	}
+}
+
+func TestEventDetailsLocationActionsPreserveLocationAndVideoCall(t *testing.T) {
+	const meet = "https://meet.google.com/abc-defg-hij"
+	location := "Join online at " + meet
+	m := NewModel(&config.Config{}, calendar.Dataset{}, nil)
+
+	got := m.renderEventDetailsFor(calendar.Event{Location: location}, 100, 100)
+	for _, value := range []string{location, " Open", googleMeetProvider, " Join"} {
+		if !strings.Contains(got, value) {
+			t.Fatalf("event details do not contain %q:\n%s", value, got)
+		}
+	}
+
+	for _, location := range []string{"", "Room 4"} {
+		got := m.renderEventDetailsFor(calendar.Event{Location: location}, 100, 100)
+		if strings.Contains(got, " Open") {
+			t.Fatalf("Location %q rendered actions without a web URL:\n%s", location, got)
+		}
+	}
+}
+
+func TestEventDetailsURLSectionLayoutAndVisibility(t *testing.T) {
+	const value = "Primary https://example.test/one. Backup http://example.test/two"
+	m := NewModel(&config.Config{}, calendar.Dataset{}, nil)
+	got := ansi.Strip(m.renderEventDetailsFor(calendar.Event{Location: "Room 4", URL: value}, 100, 100))
+	lines := strings.Split(got, "\n")
+	locationLine, urlLine := -1, -1
+	for i, line := range lines {
+		if strings.Contains(line, "Location") {
+			locationLine = i
+		}
+		if strings.Contains(line, "") && strings.Contains(line, "URL") {
+			urlLine = i
+		}
+	}
+	if locationLine < 0 || urlLine != locationLine+2 || strings.TrimSpace(lines[locationLine+1]) != "" {
+		t.Fatalf("URL section is not blank-separated from Location:\n%s", got)
+	}
+	if !strings.Contains(lines[urlLine], value) || urlLine+1 >= len(lines) ||
+		!strings.Contains(lines[urlLine+1], " Open") || !strings.Contains(lines[urlLine+1], " Copy") {
+		t.Fatalf("URL content and controls are not on consecutive aligned rows:\n%s", got)
+	}
+
+	for _, value := range []string{"", "   "} {
+		got := m.renderEventDetailsFor(calendar.Event{URL: value}, 100, 100)
+		if strings.Contains(got, "") {
+			t.Fatalf("blank URL %q rendered a URL section:\n%s", value, got)
+		}
+	}
+	got = m.renderEventDetailsFor(calendar.Event{URL: "ftp://example.test/file"}, 100, 100)
+	if !strings.Contains(got, "ftp://example.test/file") || strings.Contains(got, " Open") {
+		t.Fatalf("non-web URL field did not render as content without actions:\n%s", got)
 	}
 }
 
@@ -150,9 +225,116 @@ func TestVDoesNothingWithoutVideoCall(t *testing.T) {
 
 func TestVideoCallLaunchFailureSetsActionError(t *testing.T) {
 	m := NewModel(&config.Config{}, calendar.Dataset{}, nil)
-	updated, _ := m.Update(videoCallOpenedMsg{err: errors.New("launcher failed")})
+	updated, _ := m.Update(urlOpenedMsg{err: errors.New("launcher failed")})
 	if got := updated.(Model).actionErr; got != "launcher failed" {
 		t.Fatalf("action error = %q, want launcher failure", got)
+	}
+}
+
+func TestVideoCallCopyFeedback(t *testing.T) {
+	const callURL = "https://meet.google.com/abc-defg-hij"
+	m := NewModel(&config.Config{}, calendar.Dataset{}, nil)
+	m.videoCallCopyStatusID = 1
+
+	updated, cmd := m.Update(videoCallCopiedMsg{id: 1, url: callURL})
+	next := updated.(Model)
+	if cmd == nil || !strings.Contains(next.renderEventDetailsFor(calendar.Event{URL: callURL}, 100, 100), " Copied") {
+		t.Fatal("successful copy did not update the activated Copy button")
+	}
+	if strings.Contains(next.View(), "Copied Google Meet URL") {
+		t.Fatal("successful copy still rendered feedback in the Agenda header")
+	}
+
+	updated, _ = next.Update(videoCallCopyStatusExpiredMsg{id: next.videoCallCopyStatusID})
+	next = updated.(Model)
+	if strings.Contains(next.renderEventDetailsFor(calendar.Event{URL: callURL}, 100, 100), " Copied") {
+		t.Fatal("Copied button label remained visible after expiry")
+	}
+
+	next.videoCallCopyStatusID++
+	updated, cmd = next.Update(videoCallCopiedMsg{
+		id: next.videoCallCopyStatusID, url: callURL, err: errors.New("clipboard unavailable"),
+	})
+	next = updated.(Model)
+	if cmd != nil || !strings.Contains(next.renderEventDetailsFor(calendar.Event{URL: callURL}, 100, 100), " Copy Failed") {
+		t.Fatal("copy failure did not update the activated Copy button")
+	}
+
+	const otherURL = "https://meet.google.com/xyz-abcd-efg"
+	updated, _ = next.Update(videoCallCopiedMsg{id: 1, url: otherURL})
+	next = updated.(Model)
+	if !strings.Contains(next.renderEventDetailsFor(calendar.Event{URL: callURL}, 100, 100), " Copy Failed") {
+		t.Fatal("stale copy completion replaced newer failure feedback")
+	}
+	otherLines, _ := next.videoCallDetailLines(videoCall{provider: googleMeetProvider, url: otherURL}, 100, 0)
+	if other := strings.Join(otherLines, "\n"); !strings.Contains(other, " Copy") || strings.Contains(other, "Copy Failed") {
+		t.Fatalf("copy feedback leaked to another Google Meet row:\n%s", other)
+	}
+
+	updated, _ = next.Update(videoCallCopyStatusExpiredMsg{id: 1})
+	next = updated.(Model)
+	if !strings.Contains(next.renderEventDetailsFor(calendar.Event{URL: callURL}, 100, 100), " Copy Failed") {
+		t.Fatal("stale success expiry cleared newer failure feedback")
+	}
+}
+
+func TestLocationCopyFeedback(t *testing.T) {
+	const location = "Room https://maps.example.test/place"
+	m := NewModel(&config.Config{}, calendar.Dataset{}, nil)
+	m.locationCopyStatusID = 1
+
+	updated, cmd := m.Update(locationCopiedMsg{id: 1, value: location})
+	next := updated.(Model)
+	lines, _ := next.locationDetailLines(location, 100, 0)
+	if cmd == nil || !strings.Contains(strings.Join(lines, "\n"), " Copied") {
+		t.Fatal("successful Location copy did not update the activated Copy button")
+	}
+
+	updated, _ = next.Update(locationCopyStatusExpiredMsg{id: 1})
+	next = updated.(Model)
+	lines, _ = next.locationDetailLines(location, 100, 0)
+	if strings.Contains(strings.Join(lines, "\n"), " Copied") {
+		t.Fatal("Location Copied label remained visible after expiry")
+	}
+
+	next.locationCopyStatusID++
+	updated, cmd = next.Update(locationCopiedMsg{
+		id: next.locationCopyStatusID, value: location, err: errors.New("clipboard unavailable"),
+	})
+	next = updated.(Model)
+	lines, _ = next.locationDetailLines(location, 100, 0)
+	if cmd != nil || !strings.Contains(strings.Join(lines, "\n"), " Copy Failed") {
+		t.Fatal("Location copy failure did not update the activated Copy button")
+	}
+}
+
+func TestURLFieldCopyFeedback(t *testing.T) {
+	const value = "Primary https://example.test/place"
+	m := NewModel(&config.Config{}, calendar.Dataset{}, nil)
+	m.urlFieldCopyStatusID = 1
+
+	updated, cmd := m.Update(urlFieldCopiedMsg{id: 1, value: value})
+	next := updated.(Model)
+	lines, _ := next.urlDetailLines(value, 100, 0)
+	if cmd == nil || !strings.Contains(strings.Join(lines, "\n"), " Copied") {
+		t.Fatal("successful URL-field copy did not update the activated Copy button")
+	}
+
+	updated, _ = next.Update(urlFieldCopyStatusExpiredMsg{id: 1})
+	next = updated.(Model)
+	lines, _ = next.urlDetailLines(value, 100, 0)
+	if strings.Contains(strings.Join(lines, "\n"), " Copied") {
+		t.Fatal("URL-field Copied label remained visible after expiry")
+	}
+
+	next.urlFieldCopyStatusID++
+	updated, cmd = next.Update(urlFieldCopiedMsg{
+		id: next.urlFieldCopyStatusID, value: value, err: errors.New("clipboard unavailable"),
+	})
+	next = updated.(Model)
+	lines, _ = next.urlDetailLines(value, 100, 0)
+	if cmd != nil || !strings.Contains(strings.Join(lines, "\n"), " Copy Failed") {
+		t.Fatal("URL-field copy failure did not update the activated Copy button")
 	}
 }
 

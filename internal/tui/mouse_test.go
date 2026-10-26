@@ -147,6 +147,107 @@ func TestMouseClickJoinsVideoCallFromUnfocusedDetails(t *testing.T) {
 	}
 }
 
+func TestGoogleMeetMouseTargetsOnlyVisibleControls(t *testing.T) {
+	start := dayStart(time.Now()).Add(12 * time.Hour)
+	callURL := "https://meet.google.com/abc-defg-hij?authuser=1"
+	cal := calendar.Calendar{Source: "src", Name: "cal"}
+	event := calendar.Event{
+		UID: "event", Summary: "Event", Source: cal.Source, Calendar: cal.Name,
+		Start: start, End: start.Add(time.Hour), URL: callURL,
+	}
+	m := NewModel(&config.Config{SidebarWidth: 30}, calendar.Dataset{
+		Calendars: []calendar.Calendar{cal},
+		Events:    []calendar.Event{event},
+	}, nil)
+	m.width = 120
+	m.height = 40
+	_ = m.View()
+
+	join := renderedHit(t, m, mouseVideoCall, -1, callURL)
+	copy := renderedHit(t, m, mouseVideoCallCopy, -1, callURL)
+	if join.rect.y != copy.rect.y || join.rect.x+join.rect.width > copy.rect.x {
+		t.Fatalf("inline control rectangles overlap or use different rows: join=%+v copy=%+v", join.rect, copy.rect)
+	}
+	labelHit, ok := m.mouse.at(join.rect.x-1, join.rect.y)
+	if !ok || labelHit.kind != mouseDetailsPane {
+		t.Fatalf("provider label resolves to %+v, want inert Details pane", labelHit)
+	}
+
+	for _, hit := range []mouseHit{join, copy} {
+		_, cmd := m.Update(tea.MouseMsg{
+			X: hit.rect.x, Y: hit.rect.y,
+			Action: tea.MouseActionPress, Button: tea.MouseButtonLeft,
+		})
+		if cmd == nil {
+			t.Fatalf("control %v did not return an action", hit.kind)
+		}
+	}
+}
+
+func TestLocationMouseTargetsOpenFirstURLAndCopyAllContent(t *testing.T) {
+	start := dayStart(time.Now()).Add(12 * time.Hour)
+	location := "Primary https://maps.example.test/one. Backup http://maps.example.test/two"
+	cal := calendar.Calendar{Source: "src", Name: "cal"}
+	event := calendar.Event{
+		UID: "event", Summary: "Event", Source: cal.Source, Calendar: cal.Name,
+		Start: start, End: start.Add(time.Hour), Location: location,
+	}
+	m := NewModel(&config.Config{SidebarWidth: 30}, calendar.Dataset{
+		Calendars: []calendar.Calendar{cal},
+		Events:    []calendar.Event{event},
+	}, nil)
+	m.width = 120
+	m.height = 40
+	_ = m.View()
+
+	open := renderedHit(t, m, mouseLocationOpen, -1, "https://maps.example.test/one")
+	copy := renderedHit(t, m, mouseLocationCopy, -1, location)
+	if open.rect.y != copy.rect.y || open.rect.x+open.rect.width > copy.rect.x {
+		t.Fatalf("Location control rectangles overlap or use different rows: open=%+v copy=%+v", open.rect, copy.rect)
+	}
+	for _, hit := range []mouseHit{open, copy} {
+		_, cmd := m.Update(tea.MouseMsg{
+			X: hit.rect.x, Y: hit.rect.y,
+			Action: tea.MouseActionPress, Button: tea.MouseButtonLeft,
+		})
+		if cmd == nil {
+			t.Fatalf("Location control %v did not return an action", hit.kind)
+		}
+	}
+}
+
+func TestURLFieldMouseTargetsOpenFirstURLAndCopyAllContent(t *testing.T) {
+	start := dayStart(time.Now()).Add(12 * time.Hour)
+	value := "Primary https://example.test/one. Backup http://example.test/two"
+	cal := calendar.Calendar{Source: "src", Name: "cal"}
+	event := calendar.Event{
+		UID: "event", Summary: "Event", Source: cal.Source, Calendar: cal.Name,
+		Start: start, End: start.Add(time.Hour), URL: value,
+	}
+	m := NewModel(&config.Config{SidebarWidth: 30}, calendar.Dataset{
+		Calendars: []calendar.Calendar{cal},
+		Events:    []calendar.Event{event},
+	}, nil)
+	m.width = 120
+	m.height = 40
+	_ = m.View()
+
+	open := renderedHit(t, m, mouseEventURLOpen, -1, "https://example.test/one")
+	copy := renderedHit(t, m, mouseEventURLCopy, -1, value)
+	if open.rect.y != copy.rect.y || open.rect.x+open.rect.width > copy.rect.x {
+		t.Fatalf("URL control rectangles overlap or use different rows: open=%+v copy=%+v", open.rect, copy.rect)
+	}
+	for _, hit := range []mouseHit{open, copy} {
+		_, cmd := m.Update(tea.MouseMsg{
+			X: hit.rect.x, Y: hit.rect.y,
+			Action: tea.MouseActionPress, Button: tea.MouseButtonLeft,
+		})
+		if cmd == nil {
+			t.Fatalf("URL control %v did not return an action", hit.kind)
+		}
+	}
+}
+
 func TestMouseStagesChoiceUntilApply(t *testing.T) {
 	calendars := []calendar.Calendar{{Source: "src", Name: "a"}, {Source: "src", Name: "b"}}
 	m := NewModel(&config.Config{SidebarWidth: 30}, calendar.Dataset{Calendars: calendars}, nil)
