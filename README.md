@@ -47,13 +47,13 @@ Requirements:
 Download the archive for your platform from the [GitHub releases page](https://github.com/hsanson/go-khal/releases).
 
 Release artifacts are named by version, OS, and CPU architecture, for example
-`go-khal_v0.6.0_linux_amd64.tar.gz`, `go-khal_v0.6.0_darwin_arm64.tar.gz`, and
-`go-khal_v0.6.0_windows_amd64.zip`.
+`go-khal_v0.7.0_linux_amd64.tar.gz`, `go-khal_v0.7.0_darwin_arm64.tar.gz`, and
+`go-khal_v0.7.0_windows_amd64.zip`.
 
 Linux x86_64 example:
 
 ```bash
-export VERSION=0.6.0
+export VERSION=0.7.0
 curl -LO "https://github.com/hsanson/go-khal/releases/download/v${VERSION}/go-khal_v${VERSION}_linux_amd64.tar.gz"
 curl -LO "https://github.com/hsanson/go-khal/releases/download/v${VERSION}/SHA256SUMS"
 sha256sum -c SHA256SUMS --ignore-missing
