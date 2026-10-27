@@ -2796,10 +2796,10 @@ func (m Model) renderGroupedDetails(meta []string, description string, width, he
 	width = max(1, width)
 	height = max(1, height)
 	meta = compactBlankLines(meta)
-	descLines := detailDescriptionLines(m.styles, description, width)
-	if len(descLines) > 0 {
-		meta = compactBlankLines(append(meta, append([]string{""}, descLines...)...))
+	if len(meta) > 0 {
+		meta = append(meta, "")
 	}
+	meta = append(meta, detailDescriptionLines(m.styles, description, width)...)
 	body := renderScrolledLines(meta, m.detailScroll, height)
 	return lipgloss.NewStyle().Width(width).Height(height).MaxHeight(height).Render(body)
 }
@@ -2968,12 +2968,17 @@ func detailDescriptionLines(styles Styles, description string, width int) []stri
 	if description == "" {
 		return []string{styles.detailLine("󰦨", "Description", "-", width)}
 	}
-	lines := []string{styles.detailLine("󰦨", "Description", "", width)}
-	for _, raw := range strings.Split(description, "\n") {
-		wrapped := wrapLine(raw, max(10, width-4))
-		for _, line := range wrapped {
-			lines = append(lines, strings.Repeat(" ", 3)+truncate(line, max(10, width-4)))
-		}
+
+	width = max(1, width)
+	indent := "   "
+	if width <= len(indent) {
+		indent = indent[:width-1]
+	}
+	wrapped := strings.Split(ansi.Wrap(description, width-len(indent), ""), "\n")
+	lines := make([]string, 1, len(wrapped)+1)
+	lines[0] = styles.detailLine("󰦨", "Description", "", width)
+	for _, line := range wrapped {
+		lines = append(lines, indent+line)
 	}
 	return lines
 }
@@ -5558,24 +5563,4 @@ func (m Model) mainInnerWidth() int {
 	workspaceWidth := max(8, m.width-2)
 	leftWidth := clamp(m.sidebarWidth(), 4, workspaceWidth-4)
 	return max(1, workspaceWidth-leftWidth-4)
-}
-
-func wrapLine(s string, maxLen int) []string {
-	if maxLen < 1 {
-		return []string{s}
-	}
-	r := []rune(s)
-	if len(r) <= maxLen {
-		return []string{s}
-	}
-	out := make([]string, 0, (len(r)/maxLen)+1)
-	for len(r) > 0 {
-		take := maxLen
-		if len(r) < take {
-			take = len(r)
-		}
-		out = append(out, string(r[:take]))
-		r = r[take:]
-	}
-	return out
 }

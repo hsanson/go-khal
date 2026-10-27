@@ -16,7 +16,7 @@ without issues but cannot guarantee there won't be issues with other calendars.
 
 ## Features
 
-- Keyboard- and mouse-driven terminal calendar with months list, agenda, details pane, and calendar toggles
+- Keyboard- and mouse-driven terminal calendar with months list, agenda, details pane, and calendar toggles; complete event and task descriptions wrap in Details and remain available through scrolling
 - Google Meet links provide Join and Copy controls; Microsoft Teams and Zoom links open through the operating system's default app
 - Event Location and URL fields containing web links provide Open and Copy controls while preserving their original text
 - Minimap with a weekly overview: click events to jump to them, or click empty time to stage a one-hour slot for `n`

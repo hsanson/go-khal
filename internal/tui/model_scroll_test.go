@@ -82,6 +82,31 @@ func TestEventDetailsShowReadOnlyFields(t *testing.T) {
 	}
 }
 
+func TestDetailsDescriptionWrapsCompleteText(t *testing.T) {
+	m := NewModel(&config.Config{}, calendar.Dataset{}, nil)
+	got := strings.Split(ansi.Strip(m.renderGroupedDetails(nil,
+		"alpha beta gamma delta\n\n\nabcdefghijklmnopqrs\n界界界界界界界界界",
+		20, 20,
+	)), "\n")
+	for i := range got {
+		got[i] = strings.TrimRight(got[i], " ")
+	}
+
+	want := []string{
+		"   alpha beta gamma",
+		"   delta",
+		"",
+		"",
+		"   abcdefghijklmnopq",
+		"   rs",
+		"   界界界界界界界界",
+		"   界",
+	}
+	if !reflect.DeepEqual(got[1:1+len(want)], want) {
+		t.Fatalf("description lines:\n got: %#v\nwant: %#v", got[1:1+len(want)], want)
+	}
+}
+
 func TestEventDetailsPreserveDescriptionLinksAndOtherProviders(t *testing.T) {
 	meet := "https://meet.google.com/abc-defg-hij"
 	zoom := "https://acme.zoom.us/j/123456789"
