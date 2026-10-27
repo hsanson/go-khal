@@ -361,6 +361,32 @@ func TestRecurringDeleteUsesScopeThenConfirmation(t *testing.T) {
 	}
 }
 
+func TestDeleteConfirmationShowsOnlySelectedActionAsFocused(t *testing.T) {
+	styles := Styles{
+		Title:           lipgloss.NewStyle(),
+		SecondaryButton: lipgloss.NewStyle().Padding(0, 1),
+		FocusedButton:   lipgloss.NewStyle().Padding(0, 2),
+		DangerButton:    lipgloss.NewStyle().Padding(0, 3),
+		FocusedDanger:   lipgloss.NewStyle().Padding(0, 4),
+	}
+	for _, test := range []struct {
+		name    string
+		confirm bool
+		want    string
+	}{
+		{"No", false, styles.FocusedButton.Render("No") + "  " + styles.SecondaryButton.Render("Yes")},
+		{"Yes", true, styles.SecondaryButton.Render("No") + "  " + styles.FocusedDanger.Render("Yes")},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got, _ := deleteWorkflowView(&deleteConfirmState{kind: "event", confirm: test.confirm}, styles)
+			buttons := strings.Split(got, "\n")[3]
+			if buttons != test.want {
+				t.Fatalf("buttons = %q, want %q", buttons, test.want)
+			}
+		})
+	}
+}
+
 func TestEventRSVPUsesCalendarOwnerInsteadOfCombiningAttendees(t *testing.T) {
 	ev := calendar.Event{
 		UserRSVP: "no",

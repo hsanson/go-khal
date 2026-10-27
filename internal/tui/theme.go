@@ -183,7 +183,7 @@ func stylesFromOmarchyPalette(p omarchyPalette) themeStyles {
 		TimeCursor:      lipgloss.NewStyle().Background(color("selection")).Foreground(color("bright_foreground")).Bold(true),
 		PrimaryButton:   lipgloss.NewStyle().Foreground(color("foreground")).Background(color("lighter_background")).Bold(true).Padding(0, 1),
 		SecondaryButton: lipgloss.NewStyle().Foreground(color("foreground")).Background(color("lighter_background")).Bold(true).Padding(0, 1),
-		FocusedButton:   lipgloss.NewStyle().Foreground(color("dark_foreground")).Background(color("darker_background")).Bold(true).Padding(0, 1),
+		FocusedButton:   lipgloss.NewStyle().Foreground(color("darker_background")).Background(color("active_tab_background")).Bold(true).Padding(0, 1),
 		DangerButton:    lipgloss.NewStyle().Foreground(color("bright_red")).Background(color("lighter_background")).Bold(true).Padding(0, 1),
 		FocusedDanger:   lipgloss.NewStyle().Foreground(color("darker_background")).Background(color("bright_red")).Bold(true).Padding(0, 1),
 	}
@@ -213,7 +213,7 @@ func formThemeFromOmarchyPalette(p omarchyPalette) *huh.Theme {
 	theme.Focused.SelectedPrefix = theme.Focused.SelectedPrefix.Foreground(color("bright_green"))
 	theme.Focused.UnselectedOption = theme.Focused.UnselectedOption.Foreground(color("foreground"))
 	theme.Focused.UnselectedPrefix = theme.Focused.UnselectedPrefix.Foreground(color("muted"))
-	theme.Focused.FocusedButton = theme.Focused.FocusedButton.Foreground(color("dark_foreground")).Background(color("darker_background")).Bold(true)
+	theme.Focused.FocusedButton = theme.Focused.FocusedButton.Foreground(color("darker_background")).Background(color("active_tab_background")).Bold(true)
 	theme.Focused.BlurredButton = theme.Focused.BlurredButton.Foreground(color("foreground")).Background(color("lighter_background"))
 	theme.Focused.Next = theme.Focused.FocusedButton
 	theme.Focused.TextInput.Cursor = theme.Focused.TextInput.Cursor.Foreground(color("bright_yellow"))

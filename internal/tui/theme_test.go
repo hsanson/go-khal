@@ -49,14 +49,14 @@ func TestActionButtonsUseSharedStates(t *testing.T) {
 	}{
 		{"themed primary", theme.styles.PrimaryButton, "#d6e2ee", "#1b2d40"},
 		{"themed secondary", theme.styles.SecondaryButton, "#d6e2ee", "#1b2d40"},
-		{"themed focused", theme.styles.FocusedButton, "#4d86b0", "#0b1216"},
+		{"themed focused", theme.styles.FocusedButton, "#0b1216", "#6fb8e3"},
 		{"themed danger", theme.styles.DangerButton, "#73a6cb", "#1b2d40"},
 		{"themed focused danger", theme.styles.FocusedDanger, "#0b1216", "#73a6cb"},
 		{"themed form blurred", theme.formTheme.Focused.BlurredButton, "#d6e2ee", "#1b2d40"},
-		{"themed form focused", theme.formTheme.Focused.FocusedButton, "#4d86b0", "#0b1216"},
+		{"themed form focused", theme.formTheme.Focused.FocusedButton, "#0b1216", "#6fb8e3"},
 		{"fallback primary", DefaultStyles().PrimaryButton, "230", "238"},
 		{"fallback secondary", DefaultStyles().SecondaryButton, "230", "238"},
-		{"fallback focused", DefaultStyles().FocusedButton, "67", "233"},
+		{"fallback focused", DefaultStyles().FocusedButton, "230", "117"},
 		{"fallback danger", DefaultStyles().DangerButton, "196", "238"},
 		{"fallback focused danger", DefaultStyles().FocusedDanger, "233", "196"},
 	}

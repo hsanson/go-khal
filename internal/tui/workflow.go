@@ -49,7 +49,7 @@ func deleteWorkflowView(state *deleteConfirmState, styles Styles) (string, []mou
 	if !state.confirm {
 		noStyle = styles.FocusedButton
 	}
-	yesStyle := styles.DangerButton
+	yesStyle := styles.SecondaryButton
 	if state.confirm {
 		yesStyle = styles.FocusedDanger
 	}

@@ -70,7 +70,7 @@ func DefaultStyles() Styles {
 		TimeCursor:      lipgloss.NewStyle().Reverse(true).Bold(true),
 		PrimaryButton:   lipgloss.NewStyle().Foreground(lipgloss.Color("230")).Background(lipgloss.Color("238")).Bold(true).Padding(0, 1),
 		SecondaryButton: lipgloss.NewStyle().Foreground(lipgloss.Color("230")).Background(lipgloss.Color("238")).Bold(true).Padding(0, 1),
-		FocusedButton:   lipgloss.NewStyle().Foreground(lipgloss.Color("67")).Background(lipgloss.Color("233")).Bold(true).Padding(0, 1),
+		FocusedButton:   lipgloss.NewStyle().Foreground(lipgloss.Color("230")).Background(lipgloss.Color("117")).Bold(true).Padding(0, 1),
 		DangerButton:    lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Background(lipgloss.Color("238")).Bold(true).Padding(0, 1),
 		FocusedDanger:   lipgloss.NewStyle().Foreground(lipgloss.Color("233")).Background(lipgloss.Color("196")).Bold(true).Padding(0, 1),
 	}
